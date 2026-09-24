@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Hind Siliguri', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Print specific styles for high resolution A4 printing */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 6mm;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Hide UI elements during print */
+  .no-print,
+  nav,
+  aside,
+  header,
+  footer,
+  button,
+  .print-hide {
+    display: none !important;
+  }
+
+  /* Force display of print container */
+  .printable-area {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .marksheet-page {
+    page-break-after: always !important;
+    break-after: page !important;
+    margin: 0 auto !important;
+    padding: 4mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 275mm !important;
+  }
+
+  .marksheet-page:last-child {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  /* Table borders in print */
+  table, th, td {
+    border-color: #000000 !important;
+  }
+}

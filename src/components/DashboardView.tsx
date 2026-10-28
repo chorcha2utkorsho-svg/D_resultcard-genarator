@@ -13,9 +13,18 @@ import {
   Award,
   ArrowRight,
   TrendingUp,
+  MessageSquare,
+  CalendarCheck,
+  CalendarDays,
+  FileSpreadsheet,
+  BookMarked,
+  CreditCard,
+  Receipt,
+  ShieldAlert,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
+import { DashboardWidget } from './DashboardWidget';
 import { toBengaliNumber } from '../utils/bengali';
 
 interface DashboardViewProps {
@@ -34,6 +43,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
     notes,
     exportDatabaseBackup,
     selectedYear,
+    smsLogs,
+    feeInvoices,
+    feeReceipts,
   } = useSchool();
 
   const totalStudents = students.length;
@@ -41,8 +53,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
   const totalSyllabi = syllabi.length;
   const totalNotes = notes.length;
   const totalQuestionPapers = questionPapers.length;
+  const totalDueAmount = feeInvoices.reduce((sum, inv) => sum + (inv.dueAmount || 0), 0);
 
   const quickActions = [
+    {
+      id: 'defaulters',
+      title: 'ফি খেলাপি তালিকা (৩০+ দিন বকেয়া)',
+      desc: 'দীর্ঘমেয়াদী বকেয়া ঋণ পর্যবেক্ষণ, খেলাপি নোটিশ এসএমএস ও ঋণ রিকভারি খতিয়ান',
+      icon: ShieldAlert,
+      color: 'bg-rose-700 text-white',
+      badge: '৩০+ দিন খেলাপি',
+    },
+    {
+      id: 'daily_report',
+      title: 'দৈনিক ফি আদায় ও বকেয়া খতিয়ান',
+      desc: 'আজকের মোট ফি আদায়, নগদ ও অনলাইন জমার হিসাব, খাতভিত্তিক আয় ও এ৪ সমাপনী প্রিন্ট',
+      icon: Receipt,
+      color: 'bg-teal-700 text-white',
+      badge: 'দৈনিক রিপোর্ট ও ক্যাশ',
+    },
+    {
+      id: 'fees',
+      title: 'বকেয়া ও ফি আদায় (মানি রিসিট ও ডিউ স্লিপ)',
+      desc: 'শিক্ষার্থীদের বকেয়া তথ্য, তাৎক্ষণিক পেমেন্ট কর্তন, অফিশিয়াল মানি রিসিট ও ডিউ স্লিপ প্রিন্ট',
+      icon: CreditCard,
+      color: 'bg-emerald-600 text-white',
+      badge: 'বকেয়া ও মানি রিসিট',
+    },
+    {
+      id: 'subjects',
+      title: 'বিষয় ব্যবস্থাপনা',
+      desc: 'শ্রেণি অনুযায়ী বিষয় যোগ, সম্পাদনা, পূর্ণমান ও ২০% মাসিক পরীক্ষা নির্ধারণ',
+      icon: BookMarked,
+      color: 'bg-blue-600 text-white',
+      badge: 'ডায়নামিক সিঙ্ক',
+    },
     {
       id: 'marks_entry',
       title: 'মার্ক এন্ট্রি ফরম',
@@ -53,11 +98,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
     },
     {
       id: 'results',
-      title: 'রেজাল্ট কার্ড প্রিন্ট',
-      desc: 'একক বা একসাথে সকল শিক্ষার্থীর মূল ফলাফল কার্ড প্রিন্ট করুন',
+      title: 'রেজাল্ট কার্ড ও পারফরম্যান্স চার্ট',
+      desc: 'একক বা সকল কার্ড প্রিন্ট এবং ড্যাশবোর্ড চার্টে বিষয়ভিত্তিক পারফরম্যান্স বিশ্লেষণ',
       icon: Printer,
       color: 'bg-emerald-600 text-white',
-      badge: 'সংযুক্ত অফিসিয়াল ফরম্যাট',
+      badge: 'কার্ড ও ডেটা ভিজ্যুয়ালাইজেশন',
+    },
+    {
+      id: 'sms',
+      title: 'এসএমএস নোটিফিকেশন',
+      desc: 'অভিভাবকদের কাছে পরীক্ষার ফলাফল সামারি ও নোটিশ সরাসরি পাঠান',
+      icon: MessageSquare,
+      color: 'bg-teal-600 text-white',
+      badge: 'স্বয়ংক্রিয় ফলাফল এসএমএস',
     },
     {
       id: 'tabulation',
@@ -65,7 +118,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
       desc: 'সকল শিক্ষার্থীর বিষয়ভিত্তিক নম্বর ও মেধাক্রম মাস্টার শিট',
       icon: TableProperties,
       color: 'bg-purple-600 text-white',
-      badge: 'ল্যান্ডস্কেপ প্রিন্ট',
+      badge: 'Excel (.xlsx) ও প্রিন্ট',
+    },
+    {
+      id: 'attendance',
+      title: 'শিক্ষার্থী হাজিরা ও পারফরম্যান্স মেট্রিক্স',
+      desc: 'দৈনিক ডিজিটাল হাজিরা এন্ট্রি, মাসিক শিট এবং প্রোগ্রেস কার্ডে উপস্থিতির স্বয়ংক্রিয় মেট্রিক্স',
+      icon: CalendarCheck,
+      color: 'bg-teal-600 text-white',
+      badge: 'দৈনিক ও মাসিক রিপোর্ট',
+    },
+    {
+      id: 'calendar',
+      title: 'একাডেমিক ক্যালেন্ডার ও শিক্ষাপঞ্জি',
+      desc: 'পরীক্ষার সময়সূচি, সরকারি ও ধর্মীয় ছুটি, ফলাফল প্রকাশ এবং বার্ষিক অনুষ্ঠান ব্যবস্থাপনা',
+      icon: CalendarDays,
+      color: 'bg-indigo-700 text-white',
+      badge: 'গ্রিড ও সময়সূচি',
     },
     {
       id: 'students',
@@ -120,6 +189,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
 
             <div className="pt-4 flex flex-wrap gap-2.5 justify-center sm:justify-start">
               <button
+                onClick={() => onNavigate('daily_report')}
+                className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition"
+              >
+                <Receipt className="w-4 h-4 mr-1.5 text-amber-300" />
+                দৈনিক আদায় রিপোর্ট
+              </button>
+              <button
                 onClick={() => onNavigate('marks_entry')}
                 className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 shadow-md transition"
               >
@@ -134,8 +210,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
                 রেজাল্ট কার্ড দেখুন
               </button>
               <button
+                onClick={() => onNavigate('bulk_upload')}
+                className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20 text-white border border-white/20 transition backdrop-blur-sm cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-1.5 text-amber-300" />
+                বাল্ক শিক্ষার্থী আপলোড
+              </button>
+              <button
                 onClick={exportDatabaseBackup}
-                className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-medium bg-emerald-700/80 hover:bg-emerald-600 text-white transition"
+                className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-medium bg-emerald-700/80 hover:bg-emerald-600 text-white transition cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 mr-1" />
                 ডাটাবেস ব্যাকআপ
@@ -199,6 +282,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
           </div>
         </div>
       </div>
+
+      {/* Student Performance Trends Widget (Recharts) */}
+      <DashboardWidget onNavigate={onNavigate} />
 
       {/* Main Core Modules Grid */}
       <div>

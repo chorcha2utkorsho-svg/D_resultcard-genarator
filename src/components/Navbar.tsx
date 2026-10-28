@@ -13,6 +13,14 @@ import {
   Printer,
   Download,
   ShieldCheck,
+  MessageSquare,
+  CalendarCheck,
+  CalendarDays,
+  FileSpreadsheet,
+  BookMarked,
+  CreditCard,
+  Receipt,
+  ShieldAlert,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -29,10 +37,18 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
 
   const navItems = [
     { id: 'dashboard', label: 'ড্যাশবোর্ড', icon: GraduationCap },
+    { id: 'subjects', label: 'বিষয় ব্যবস্থাপনা', icon: BookMarked },
     { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
     { id: 'results', label: 'রেজাল্ট ও কার্ড', icon: Printer },
     { id: 'tabulation', label: 'ট্যাবুল্যাশন শিট', icon: TableProperties },
+    { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
+    { id: 'daily_report', label: 'দৈনিক রিপোর্ট', icon: Receipt },
+    { id: 'defaulters', label: 'খেলাপি তালিকা', icon: ShieldAlert },
+    { id: 'attendance', label: 'উপস্থিতি ও হাজিরা', icon: CalendarCheck },
+    { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+    { id: 'sms', label: 'এসএমএস নোটিশ', icon: MessageSquare },
     { id: 'students', label: 'শিক্ষার্থী তথ্য', icon: Users },
+    { id: 'bulk_upload', label: 'বাল্ক আপলোড', icon: FileSpreadsheet },
     { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
     { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
     { id: 'notes', label: 'ক্লাস নোট', icon: FileText },

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Download } from 'lucide-react';
 import { CalculatedStudentResult, SchoolInfo } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
@@ -8,6 +9,8 @@ interface MarksheetCardProps {
   schoolInfo: SchoolInfo;
   classNameTitle?: string;
   isPrintMode?: boolean;
+  onDownloadPdf?: () => void;
+  isExportingPdf?: boolean;
 }
 
 export const MarksheetCard: React.FC<MarksheetCardProps> = ({
@@ -15,11 +18,14 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
   schoolInfo,
   classNameTitle = '',
   isPrintMode = false,
+  onDownloadPdf,
+  isExportingPdf = false,
 }) => {
   const { student, subjectRows, totalFullMarks, grandTotalObtained, gpa, meritPositionBn } = result;
 
   return (
     <div
+      id={`marksheet-card-${result.student.id}`}
       className={`marksheet-page bg-white text-black font-sans box-border ${
         isPrintMode ? 'p-6 mx-auto w-full' : 'p-6 sm:p-8 rounded-lg shadow-md border border-slate-300 max-w-4xl mx-auto my-4'
       }`}
@@ -36,6 +42,26 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
       }}
     >
       <div>
+        {!isPrintMode && onDownloadPdf && (
+          <div className="no-print flex items-center justify-between pb-3 mb-3 border-b border-slate-200">
+            <span className="text-xs font-bold text-slate-500">
+              অফিসিয়াল একাডেমিক প্রোগ্রেস রিপোর্ট
+            </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDownloadPdf();
+              }}
+              disabled={isExportingPdf}
+              className="inline-flex items-center px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
+              title="এই প্রোগ্রেস কার্ডটি উচ্চমানের PDF ফরম্যাটে ডাউনলোড করুন"
+            >
+              <Download className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+              কার্ডটি PDF ডাউনলোড করুন
+            </button>
+          </div>
+        )}
+
         {/* HEADER SECTION - EXACTLY LIKE ATTACHED IMAGE */}
         <div className="flex items-center justify-between pb-2">
           {/* Logo on the left */}
@@ -222,6 +248,11 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
                 </td>
                 <td className="border-r border-black py-2 px-2 text-center w-[15%] font-medium">
                   {toBengaliNumber(result.attendanceDays)}
+                  {result.totalWorkingDays > 0 && (
+                    <span className="text-[10px] text-slate-600 block sm:inline font-mono font-bold sm:ml-1">
+                      ({toBengaliNumber(parseFloat(((result.attendanceDays / result.totalWorkingDays) * 100).toFixed(1)))}%)
+                    </span>
+                  )}
                 </td>
                 <td className="border-r border-black py-2 px-2 font-bold w-[18%] bg-slate-50/50">
                   অনুপস্থিতি

@@ -34,6 +34,8 @@ export interface Subject {
   fullMarks: number; // e.g. 100 or 50
   passMarks?: number;
   hasMonthlyExam: boolean; // default true for 80% + 20%
+  isOptional?: boolean;
+  category?: string;
 }
 
 export interface StudentSubjectMark {
@@ -157,3 +159,184 @@ export interface QuestionPaper {
   }[];
   createdAt: string;
 }
+
+export interface SMSLog {
+  id: string;
+  recipientPhone: string;
+  recipientName: string;
+  studentRoll?: number;
+  className?: string;
+  messageType: 'result' | 'notice' | 'attendance' | 'fees' | 'custom';
+  messageText: string;
+  sentAt: string;
+  status: 'sent' | 'delivered' | 'failed';
+  channel: 'device_sms' | 'gateway' | 'whatsapp';
+}
+
+export interface SMSGatewayConfig {
+  provider: 'device_sms' | 'greenweb' | 'bulksmsbd' | 'onnorokom' | 'custom_webhook';
+  apiKey?: string;
+  senderId?: string; // e.g. "DLIKON_MA"
+  webhookUrl?: string;
+  balance?: number;
+  autoLog: boolean;
+}
+
+export interface SMSNoticeTemplate {
+  id: string;
+  title: string;
+  category: 'result' | 'meeting' | 'holiday' | 'fees' | 'exam' | 'general';
+  body: string;
+}
+
+export type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave';
+
+export interface DailyAttendanceRecord {
+  id: string; // `${classId}_${section || 'all'}_${date}`
+  date: string; // YYYY-MM-DD
+  academicYear: string;
+  classId: string;
+  section: string;
+  records: Record<
+    string,
+    {
+      status: AttendanceStatus;
+      remarks?: string;
+    }
+  >; // studentId -> { status, remarks }
+  updatedAt: string;
+}
+
+export interface StudentAttendanceSummary {
+  studentId: string;
+  student: Student;
+  totalWorkingDays: number;
+  presentDays: number;
+  absentDays: number;
+  lateDays: number;
+  leaveDays: number;
+  percentage: number;
+  isEligible: boolean;
+}
+
+export type CalendarEventType = 'exam' | 'holiday' | 'event' | 'meeting' | 'result' | 'admission';
+
+export interface AcademicCalendarEvent {
+  id: string;
+  title: string;
+  type: CalendarEventType;
+  startDate: string; // YYYY-MM-DD
+  endDate?: string;   // YYYY-MM-DD (inclusive, for multi-day events)
+  description?: string;
+  applicableClasses?: string[]; // classIds or empty for all
+  academicYear: string; // e.g. "২০২৬"
+  isSchoolClosed: boolean; // whether classes are suspended
+  location?: string;
+}
+
+// ==================== FEE & BILLING MODULE TYPES ====================
+
+export type FeeCategory =
+  | 'monthly_tuition'
+  | 'arrears'
+  | 'coaching'
+  | 'midterm'
+  | 'semester'
+  | 'electricity_others'
+  | 'books_diary_badge'
+  | 'admission'
+  | 'session'
+  | 'exam'
+  | 'books'
+  | 'ict'
+  | 'sports'
+  | 'other';
+
+export interface Standard8FeeItem {
+  id: string;
+  serialBn: string; // '১', '২', etc.
+  nameBn: string;
+  amount: number;
+}
+
+export interface FeeHead {
+  id: string;
+  nameBn: string;
+  category: FeeCategory;
+  defaultAmount: number;
+  isMonthly: boolean;
+  applicableClassIds?: string[];
+}
+
+export interface StudentFeeBillItem {
+  headId: string;
+  nameBn: string;
+  month?: string;
+  amount: number;
+  waiver?: number;
+  netAmount: number;
+}
+
+export type FeeInvoiceStatus = 'paid' | 'partial' | 'unpaid';
+
+export interface FeeInvoice {
+  id: string;
+  invoiceNumber: string; // e.g. "INV-2026-001"
+  studentId: string;
+  studentNameBn: string;
+  studentRoll: number;
+  classId: string;
+  section: string;
+  academicYear: string;
+  title: string; // e.g. "অক্টোবর ২০২৬ মাসিক বেতন ও পরীক্ষা ফি"
+  billMonthYear: string;
+  items: StudentFeeBillItem[];
+  subtotal: number;
+  previousDue: number;
+  waiverTotal: number;
+  fineAmount: number;
+  totalPayable: number;
+  paidAmount: number;
+  dueAmount: number; // Real-time updated after payment
+  status: FeeInvoiceStatus;
+  dueDate: string;
+  createdAt: string;
+  lastPaymentDate?: string;
+}
+
+export type PaymentMethod = 'নগদ' | 'বিকাশ' | 'নগদ/রকেট' | 'ব্যাংক' | 'অন্যান্য';
+
+export interface PaymentRecord {
+  id: string;
+  receiptNumber: string; // e.g. "MR-2026-012"
+  invoiceId?: string;
+  studentId: string;
+  studentNameBn: string;
+  studentRoll: number;
+  classId: string;
+  section: string;
+  academicYear: string;
+  paidAmount: number;
+  amountInWordsBn: string;
+  paymentDate: string;
+  paymentMethod: PaymentMethod;
+  transactionRef?: string;
+  collectedBy: string;
+  previousTotalDue: number; // পেমেন্ট গ্রহণের পূর্বের বকেয়া
+  remainingDue: number; // পেমেন্ট গ্রহণের পর তাৎক্ষণিক অবশিষ্ট বকেয়া
+  itemsBreakdown: { nameBn: string; amount: number }[];
+  notes?: string;
+}
+
+export interface StudentDueSummary {
+  student: Student;
+  totalBilled: number;
+  totalPaid: number;
+  totalDue: number;
+  invoices: FeeInvoice[];
+  receipts: PaymentRecord[];
+  status: FeeInvoiceStatus;
+  lastPaymentDate?: string;
+}
+
+

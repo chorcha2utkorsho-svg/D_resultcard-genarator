@@ -10,10 +10,21 @@ import {
   Award,
   CheckCircle,
   Share2,
+  Smartphone,
+  Send,
+  Check,
+  BarChart2,
+  TrendingUp,
+  Download,
+  FileDown,
+  Loader2,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { MarksheetCard } from './MarksheetCard';
+import { ResultAnalyticsView } from './ResultAnalyticsView';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
+import { generateResultSMS, isValidBDMobile } from '../utils/smsHelper';
+import { exportElementToPDF, exportMultipleElementsToPDF } from '../utils/pdfExport';
 
 export const ResultsView: React.FC = () => {
   const {
@@ -29,13 +40,19 @@ export const ResultsView: React.FC = () => {
     selectedSection,
     setSelectedSection,
     getCalculatedResultsForClass,
+    sendSingleSMS,
+    sendBatchSMS,
   } = useSchool();
 
-  const [printMode, setPrintMode] = useState<'single' | 'batch'>('single');
+  const [viewMode, setViewMode] = useState<'single' | 'batch' | 'analytics'>('single');
   const [selectedStudentIndex, setSelectedStudentIndex] = useState<number>(0);
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([]);
+  const [smsFeedback, setSmsFeedback] = useState<string | null>(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
+  const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number; message: string } | null>(null);
 
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
+  const currentExam = examTerms.find((e) => e.id === selectedExamId) || examTerms[0];
 
   // Calculate full results for the class
   const classResults = getCalculatedResultsForClass(
@@ -56,6 +73,104 @@ export const ResultsView: React.FC = () => {
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleDownloadSinglePDF = async (targetResult = activeResult) => {
+    if (!targetResult) return;
+    setIsDownloadingPdf(true);
+    setPdfProgress({
+      current: 1,
+      total: 1,
+      message: `${targetResult.student.nameBn}-এর প্রোগ্রেস কার্ডের উচ্চমানের PDF প্রস্তুত হচ্ছে...`,
+    });
+
+    try {
+      // Find element in active view or offscreen container
+      let el = document.getElementById(`marksheet-card-${targetResult.student.id}`);
+      if (!el) {
+        el = document.getElementById(`marksheet-pdf-hidden-${targetResult.student.id}`);
+      }
+      if (!el) {
+        throw new Error('কার্ড উপাদান পাওয়া যায়নি');
+      }
+
+      const cleanClassName = (currentClass?.nameBn || '').replace(/\s+/g, '_');
+      const cleanExamName = (currentExam?.nameBn || '').replace(/\s+/g, '_');
+      const cleanStudentName = targetResult.student.nameBn.replace(/\s+/g, '_');
+      const fileName = `রেজাল্ট_কার্ড_${cleanClassName}_রোল_${targetResult.student.roll}_${cleanStudentName}_${cleanExamName}_${selectedYear}.pdf`;
+
+      await exportElementToPDF(el, {
+        fileName,
+        quality: 2.5,
+      });
+
+      setSmsFeedback(`সফলভাবে "${targetResult.student.nameBn}"-এর রেজাল্ট কার্ড PDF ডাউনলোড হয়েছে!`);
+      setTimeout(() => setSmsFeedback(null), 4000);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      setSmsFeedback('পিডিএফ ডাউনলোডে ত্রুটি দেখা দিয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+      setTimeout(() => setSmsFeedback(null), 4000);
+    } finally {
+      setIsDownloadingPdf(false);
+      setPdfProgress(null);
+    }
+  };
+
+  const handleDownloadBatchPDF = async () => {
+    const selectedResults = classResults.filter((r) => selectedBatchIds.includes(r.student.id));
+    if (selectedResults.length === 0) {
+      setSmsFeedback('অনুগ্রহ করে অন্তত একজন শিক্ষার্থী নির্বাচন করুন!');
+      setTimeout(() => setSmsFeedback(null), 3000);
+      return;
+    }
+
+    setIsDownloadingPdf(true);
+    setPdfProgress({
+      current: 0,
+      total: selectedResults.length,
+      message: 'সকল শিক্ষার্থীর প্রোগ্রেস কার্ড এক ফাইলে একত্রিত করা হচ্ছে...',
+    });
+
+    try {
+      const elements: HTMLElement[] = [];
+      for (const res of selectedResults) {
+        let el = document.getElementById(`marksheet-card-${res.student.id}`);
+        if (!el) {
+          el = document.getElementById(`marksheet-pdf-hidden-${res.student.id}`);
+        }
+        if (el) {
+          elements.push(el);
+        }
+      }
+
+      if (elements.length === 0) {
+        throw new Error('কোনো কার্ড উপাদান পাওয়া যায়নি');
+      }
+
+      const cleanClassName = (currentClass?.nameBn || '').replace(/\s+/g, '_');
+      const cleanExamName = (currentExam?.nameBn || '').replace(/\s+/g, '_');
+      const fileName = `সকল_রেজাল্ট_কার্ড_${cleanClassName}_${cleanExamName}_${selectedYear}.pdf`;
+
+      await exportMultipleElementsToPDF(elements, {
+        fileName,
+        quality: 2.0,
+        onProgress: (current, total, message) => {
+          setPdfProgress({ current, total, message });
+        },
+      });
+
+      setSmsFeedback(
+        `সফলভাবে ${toBengaliNumber(selectedResults.length)} জন শিক্ষার্থীর কার্ড সমন্বিত PDF ফাইলে ডাউনলোড হয়েছে!`
+      );
+      setTimeout(() => setSmsFeedback(null), 4000);
+    } catch (err) {
+      console.error('Batch PDF export error:', err);
+      setSmsFeedback('সকলের পিডিএফ ডাউনলোডে ত্রুটি হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+      setTimeout(() => setSmsFeedback(null), 4000);
+    } finally {
+      setIsDownloadingPdf(false);
+      setPdfProgress(null);
+    }
   };
 
   const handleSelectAll = (checked: boolean) => {
@@ -99,12 +214,12 @@ export const ResultsView: React.FC = () => {
             </div>
 
             {/* Print Mode Switcher */}
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
                 <button
-                  onClick={() => setPrintMode('single')}
+                  onClick={() => setViewMode('single')}
                   className={`inline-flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition ${
-                    printMode === 'single'
+                    viewMode === 'single'
                       ? 'bg-white shadow text-indigo-700'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
@@ -113,26 +228,87 @@ export const ResultsView: React.FC = () => {
                   একক রেজাল্ট কার্ড
                 </button>
                 <button
-                  onClick={() => setPrintMode('batch')}
+                  onClick={() => setViewMode('batch')}
                   className={`inline-flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition ${
-                    printMode === 'batch'
+                    viewMode === 'batch'
                       ? 'bg-white shadow text-indigo-700'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   <Users className="w-3.5 h-3.5 mr-1" />
-                  একসাথে সকল রেজাল্ট প্রিন্ট
+                  একসাথে সকল রেজাল্ট
+                </button>
+                <button
+                  onClick={() => setViewMode('analytics')}
+                  className={`inline-flex items-center px-3 py-1.5 rounded-md text-xs font-bold transition ${
+                    viewMode === 'analytics'
+                      ? 'bg-indigo-600 shadow text-white'
+                      : 'text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50'
+                  }`}
+                >
+                  <BarChart2 className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                  চার্ট ও অ্যানালিটিক্স
                 </button>
               </div>
 
-              {/* Action Print Button */}
-              <button
-                onClick={handlePrint}
-                className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition"
-              >
-                <Printer className="w-4 h-4 mr-1.5" />
-                {printMode === 'single' ? 'এই কার্ডটি প্রিন্ট করুন' : 'নির্বাচিত সকল কার্ড প্রিন্ট করুন'}
-              </button>
+              {/* Action Buttons: PDF and Print */}
+              {viewMode === 'single' ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDownloadSinglePDF()}
+                    disabled={isDownloadingPdf || !activeResult}
+                    className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition disabled:opacity-50"
+                    title="এই শিক্ষার্থীর প্রোগ্রেস কার্ডটি উচ্চমানের PDF ফরম্যাটে ডাউনলোড করুন"
+                  >
+                    {isDownloadingPdf ? (
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-1.5" />
+                    )}
+                    পিডিএফ ডাউনলোড (PDF)
+                  </button>
+
+                  <button
+                    onClick={handlePrint}
+                    className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition"
+                  >
+                    <Printer className="w-4 h-4 mr-1.5" />
+                    প্রিন্ট করুন
+                  </button>
+                </div>
+              ) : viewMode === 'batch' ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDownloadBatchPDF}
+                    disabled={isDownloadingPdf || selectedBatchIds.length === 0}
+                    className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition disabled:opacity-50"
+                    title="নির্বাচিত সকল শিক্ষার্থীর রেজাল্ট কার্ড একটি সমন্বিত মাল্টি-পেজ PDF হিসেবে ডাউনলোড করুন"
+                  >
+                    {isDownloadingPdf ? (
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-1.5" />
+                    )}
+                    সকল কার্ড এক ফাইলে PDF
+                  </button>
+
+                  <button
+                    onClick={handlePrint}
+                    className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition"
+                  >
+                    <Printer className="w-4 h-4 mr-1.5" />
+                    নির্বাচিত সকল কার্ড প্রিন্ট করুন
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handlePrint}
+                  className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition"
+                >
+                  <Printer className="w-4 h-4 mr-1.5" />
+                  অ্যানালিটিক্স প্রিন্ট
+                </button>
+              )}
             </div>
           </div>
 
@@ -248,8 +424,34 @@ export const ResultsView: React.FC = () => {
           </div>
         </div>
 
+        {/* Analytics Mode Banner button if on card view */}
+        {viewMode !== 'analytics' && (
+          <div className="bg-gradient-to-r from-indigo-50 via-blue-50 to-purple-50 border border-indigo-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2 bg-indigo-600 text-white rounded-lg shadow-xs">
+                <BarChart2 className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-indigo-950">
+                  পারফরম্যান্স গ্রাফ ও বিষয়ভিত্তিক অ্যানালিটিক্স
+                </h4>
+                <p className="text-[11px] text-indigo-700">
+                  শ্রেণিভিত্তিক পাসের হার, গ্রেড বণ্টন, বিষয়ভিত্তিক গড় নম্বর এবং সাময়িক ট্রেন্ড চার্ট দেখুন।
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setViewMode('analytics')}
+              className="inline-flex items-center px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition"
+            >
+              <TrendingUp className="w-3.5 h-3.5 mr-1 text-emerald-300" />
+              গ্রাফিক্যাল বিশ্লেষণ দেখুন →
+            </button>
+          </div>
+        )}
+
         {/* Single Student Selector Navigation */}
-        {printMode === 'single' && classResults.length > 0 && (
+        {viewMode === 'single' && classResults.length > 0 && (
           <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center space-x-2">
               <span className="text-xs font-bold text-indigo-900">শিক্ষার্থী নির্বাচন:</span>
@@ -267,6 +469,49 @@ export const ResultsView: React.FC = () => {
             </div>
 
             <div className="flex items-center space-x-2">
+              <button
+                onClick={async () => {
+                  if (!activeResult) return;
+                  if (!activeResult.student.guardianPhone || !isValidBDMobile(activeResult.student.guardianPhone)) {
+                    setSmsFeedback('অভিভাবকের সঠিক মোবাইল নম্বর নেই!');
+                    setTimeout(() => setSmsFeedback(null), 3000);
+                    return;
+                  }
+                  const text = generateResultSMS(activeResult, schoolInfo, currentClass.nameBn, currentExam.nameBn);
+                  const res = await sendSingleSMS(
+                    activeResult.student.guardianPhone,
+                    text,
+                    `${activeResult.student.nameBn} (অভিভাবক)`,
+                    {
+                      roll: activeResult.student.roll,
+                      className: currentClass.nameBn,
+                      messageType: 'result',
+                      channel: 'device_sms',
+                    }
+                  );
+                  setSmsFeedback(res.message);
+                  setTimeout(() => setSmsFeedback(null), 3000);
+                }}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-xs font-bold text-emerald-800 hover:bg-emerald-100 transition"
+              >
+                <Smartphone className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                ফলাফল এসএমএস পাঠান
+              </button>
+
+              <button
+                onClick={() => handleDownloadSinglePDF(activeResult)}
+                disabled={isDownloadingPdf || !activeResult}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-xs font-bold text-indigo-900 hover:bg-indigo-100 transition disabled:opacity-50 shadow-xs"
+                title="এই প্রোগ্রেস কার্ডটি PDF ফাইল হিসেবে সংরক্ষণ করুন"
+              >
+                {isDownloadingPdf ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1 text-indigo-700 animate-spin" />
+                ) : (
+                  <Download className="w-3.5 h-3.5 mr-1 text-indigo-700" />
+                )}
+                পিডিএফ ডাউনলোড
+              </button>
+
               <button
                 disabled={selectedStudentIndex <= 0}
                 onClick={() => setSelectedStudentIndex((prev) => Math.max(0, prev - 1))}
@@ -290,8 +535,18 @@ export const ResultsView: React.FC = () => {
           </div>
         )}
 
+        {/* Feedback Alert Toast */}
+        {smsFeedback && (
+          <div className="bg-emerald-800 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center justify-between animate-in fade-in">
+            <span className="flex items-center">
+              <Check className="w-4 h-4 mr-2 text-emerald-300" />
+              {smsFeedback}
+            </span>
+          </div>
+        )}
+
         {/* Batch Print Student Checklist Selector */}
-        {printMode === 'batch' && (
+        {viewMode === 'batch' && (
           <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4">
             <div className="flex flex-wrap items-center justify-between pb-3 border-b border-amber-200/80 mb-3 gap-2">
               <div>
@@ -302,16 +557,57 @@ export const ResultsView: React.FC = () => {
                   নিচের যেসকল শিক্ষার্থীর পাশে টিক চিহ্ন রয়েছে তাদের রেজাল্ট কার্ড প্রিন্ট হবে।
                 </p>
               </div>
-              <div className="flex items-center space-x-3">
-                <label className="inline-flex items-center text-xs font-bold text-amber-950 cursor-pointer">
+              <div className="flex items-center space-x-2">
+                <label className="inline-flex items-center text-xs font-bold text-amber-950 cursor-pointer mr-2">
                   <input
                     type="checkbox"
                     checked={selectedBatchIds.length === classResults.length && classResults.length > 0}
                     onChange={(e) => handleSelectAll(e.target.checked)}
                     className="rounded text-indigo-600 focus:ring-indigo-500 mr-1.5 h-4 w-4"
                   />
-                  সবাইকে নির্বাচন করুন ({toBengaliNumber(selectedBatchIds.length)} জন)
+                  সবাইকে নির্বাচন ({toBengaliNumber(selectedBatchIds.length)})
                 </label>
+
+                <button
+                  onClick={async () => {
+                    const selected = classResults.filter((r) => selectedBatchIds.includes(r.student.id));
+                    const valid = selected.filter((r) => r.student.guardianPhone && isValidBDMobile(r.student.guardianPhone));
+                    if (valid.length === 0) {
+                      setSmsFeedback('নির্বাচিত শিক্ষার্থীদের মধ্যে কোনো অভিভাবক ফোন নম্বর নেই!');
+                      setTimeout(() => setSmsFeedback(null), 3000);
+                      return;
+                    }
+                    const batchData = valid.map((r) => ({
+                      phone: r.student.guardianPhone!,
+                      text: generateResultSMS(r, schoolInfo, currentClass.nameBn, currentExam.nameBn),
+                      recipientName: `${r.student.nameBn} (অভিভাবক)`,
+                      roll: r.student.roll,
+                      className: currentClass.nameBn,
+                    }));
+                    const res = await sendBatchSMS(batchData, 'result');
+                    setSmsFeedback(`সফলভাবে ${toBengaliNumber(res.sentCount)} জনকে ফলাফল এসএমএস পাঠানো হয়েছে!`);
+                    setTimeout(() => setSmsFeedback(null), 3000);
+                  }}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm inline-flex items-center"
+                >
+                  <Smartphone className="w-3.5 h-3.5 mr-1" />
+                  এসএমএস পাঠান
+                </button>
+
+                <button
+                  onClick={handleDownloadBatchPDF}
+                  disabled={isDownloadingPdf || selectedBatchIds.length === 0}
+                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold shadow-sm inline-flex items-center transition disabled:opacity-50"
+                  title="নির্বাচিত শিক্ষার্থীদের সকল কার্ড সমন্বিত PDF হিসেবে ডাউনলোড করুন"
+                >
+                  {isDownloadingPdf ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5 mr-1" />
+                  )}
+                  সকলের PDF ডাউনলোড
+                </button>
+
                 <button
                   onClick={handlePrint}
                   className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-sm"
@@ -350,38 +646,109 @@ export const ResultsView: React.FC = () => {
         )}
       </div>
 
-      {/* RESULT CARDS RENDERING (PRINTABLE AREA) */}
-      <div className="printable-area">
-        {classResults.length === 0 ? (
-          <div className="no-print bg-white p-12 text-center rounded-xl border border-slate-200 text-slate-500">
-            এই শ্রেণিতে এখনো কোনো ফলাফল প্রস্তুত নেই। &quot;মার্ক এন্ট্রি&quot; থেকে নম্বর এন্ট্রি সম্পন্ন করুন।
+      {/* VIEW CONTENT: ANALYTICS OR RESULT CARDS */}
+      {viewMode === 'analytics' ? (
+        <ResultAnalyticsView onBackToCards={() => setViewMode('single')} />
+      ) : (
+        /* RESULT CARDS RENDERING (PRINTABLE AREA) */
+        <div className="printable-area">
+          {classResults.length === 0 ? (
+            <div className="no-print bg-white p-12 text-center rounded-xl border border-slate-200 text-slate-500">
+              এই শ্রেণিতে এখনো কোনো ফলাফল প্রস্তুত নেই। &quot;মার্ক এন্ট্রি&quot; থেকে নম্বর এন্ট্রি সম্পন্ন করুন।
+            </div>
+          ) : viewMode === 'single' ? (
+            /* Single Card View */
+            activeResult && (
+              <MarksheetCard
+                result={activeResult}
+                schoolInfo={schoolInfo}
+                classNameTitle={currentClass.nameBn}
+                isPrintMode={false}
+                onDownloadPdf={() => handleDownloadSinglePDF(activeResult)}
+                isExportingPdf={isDownloadingPdf}
+              />
+            )
+          ) : (
+            /* Batch Cards View - Each will break onto its own A4 page in print! */
+            <div className="space-y-8 print:space-y-0">
+              {classResults
+                .filter((res) => selectedBatchIds.includes(res.student.id))
+                .map((res) => (
+                  <MarksheetCard
+                    key={res.student.id}
+                    result={res}
+                    schoolInfo={schoolInfo}
+                    classNameTitle={currentClass.nameBn}
+                    isPrintMode={true}
+                  />
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PDF Generation Progress Modal Overlay */}
+      {pdfProgress && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 text-center space-y-4 animate-in zoom-in-95">
+            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
+              <Loader2 className="w-6 h-6 animate-spin" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-800">উচ্চমানের PDF তৈরি হচ্ছে...</h3>
+              <p className="text-xs text-slate-500 mt-1">{pdfProgress.message}</p>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+              <div
+                className="bg-indigo-600 h-2.5 rounded-full transition-all duration-300"
+                style={{
+                  width: `${
+                    pdfProgress.total > 0
+                      ? Math.round((pdfProgress.current / pdfProgress.total) * 100)
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <div className="text-xs font-bold text-indigo-900">
+              {toBengaliNumber(pdfProgress.current)} / {toBengaliNumber(pdfProgress.total)} (
+              {toBengaliNumber(
+                pdfProgress.total > 0
+                  ? Math.round((pdfProgress.current / pdfProgress.total) * 100)
+                  : 0
+              )}
+              %)
+            </div>
+            <p className="text-[11px] text-slate-400">
+              প্রোগ্রেস কার্ড হাই-রেজোলিউশনে রেন্ডার হচ্ছে, সম্পন্ন হলে স্বয়ংক্রিয়ভাবে ডাউনলোড শুরু হবে।
+            </p>
           </div>
-        ) : printMode === 'single' ? (
-          /* Single Card View */
-          activeResult && (
+        </div>
+      )}
+
+      {/* Offscreen Container to guarantee all cards are rendered for Batch PDF */}
+      <div
+        id="batch-pdf-offscreen-container"
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '-9999px',
+          top: 0,
+          width: '820px',
+          pointerEvents: 'none',
+          opacity: 0.01,
+        }}
+      >
+        {classResults.map((res) => (
+          <div key={`pdf-hidden-${res.student.id}`} id={`marksheet-pdf-hidden-${res.student.id}`}>
             <MarksheetCard
-              result={activeResult}
+              result={res}
               schoolInfo={schoolInfo}
               classNameTitle={currentClass.nameBn}
-              isPrintMode={false}
+              isPrintMode={true}
             />
-          )
-        ) : (
-          /* Batch Cards View - Each will break onto its own A4 page in print! */
-          <div className="space-y-8 print:space-y-0">
-            {classResults
-              .filter((res) => selectedBatchIds.includes(res.student.id))
-              .map((res) => (
-                <MarksheetCard
-                  key={res.student.id}
-                  result={res}
-                  schoolInfo={schoolInfo}
-                  classNameTitle={currentClass.nameBn}
-                  isPrintMode={true}
-                />
-              ))}
           </div>
-        )}
+        ))}
       </div>
     </div>
   );

@@ -1,10 +1,16 @@
-import React from 'react';
-import { Printer, Download, TableProperties, Award } from 'lucide-react';
+import React, { useState } from 'react';
+import { Printer, Download, TableProperties, Award, FileSpreadsheet, Check, Loader2, BookMarked } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useSchool } from '../context/SchoolContext';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
+import { exportElementToPDF } from '../utils/pdfExport';
 
-export const TabulationSheet: React.FC = () => {
+interface TabulationSheetProps {
+  onNavigate?: (tab: string) => void;
+}
+
+export const TabulationSheet: React.FC<TabulationSheetProps> = ({ onNavigate }) => {
   const {
     schoolInfo,
     classes,
@@ -20,6 +26,9 @@ export const TabulationSheet: React.FC = () => {
     getCalculatedResultsForClass,
   } = useSchool();
 
+  const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
   const subjects = currentClass?.defaultSubjects || [];
   const classResults = getCalculatedResultsForClass(
@@ -33,6 +42,171 @@ export const TabulationSheet: React.FC = () => {
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleExportPDF = async () => {
+    const element = document.getElementById('tabulation-sheet-printable');
+    if (!element) return;
+
+    setIsExportingPdf(true);
+    try {
+      const cleanExamName = (examTerm?.nameBn || 'exam').replace(/\s+/g, '_');
+      const cleanClassName = currentClass.nameBn.replace(/\s+/g, '_');
+      const fileName = `ট্যাবুল্যাশন_শিট_${cleanClassName}_${cleanExamName}_${selectedYear}.pdf`;
+
+      await exportElementToPDF(element, {
+        fileName,
+        quality: 2.0,
+        orientation: 'landscape',
+        format: 'a4',
+        margin: 5,
+      });
+
+      setExportSuccessMsg(`ট্যাবুল্যাশন শিট PDF ফাইল (${fileName}) সফলভাবে ডাউনলোড হয়েছে!`);
+      setTimeout(() => setExportSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error(err);
+      setExportSuccessMsg('PDF ডাউনলোডে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+      setTimeout(() => setExportSuccessMsg(null), 4000);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportExcel = () => {
+    const passedCount = classResults.filter((r) => r.isPassed).length;
+    const failedCount = classResults.length - passedCount;
+    const passRate = classResults.length > 0 ? ((passedCount / classResults.length) * 100).toFixed(1) : '0';
+
+    // Build worksheet data rows (Array of Arrays)
+    const rows: (string | number)[][] = [];
+
+    // Title & School Information
+    rows.push([schoolInfo.name]);
+    rows.push([schoolInfo.address]);
+    rows.push([
+      `ট্যাবুল্যাশন শিট (Tabulation Sheet) - ${examTerm?.nameBn || ''} (${selectedYear} ইং)`,
+    ]);
+    rows.push([
+      `শ্রেণি: ${currentClass.nameBn} | শাখা: ${selectedSection || 'সকল শাখা'} | মোট শিক্ষার্থী: ${classResults.length} জন | পাসের হার: ${passRate}%`,
+    ]);
+    rows.push([]); // empty spacer row
+
+    // Table Header Row
+    const headerRow: string[] = [
+      'মেধাক্রম',
+      'রোল',
+      'শিক্ষার্থীর নাম',
+      'পিতা/অভিভাবক',
+      'শাখা',
+      'মোবাইল নম্বর',
+    ];
+
+    subjects.forEach((sub) => {
+      headerRow.push(`${sub.nameBn} (${sub.fullMarks})`);
+    });
+
+    headerRow.push(
+      'সর্বমোট প্রাপ্ত নম্বর',
+      'মোট পূর্ণমান',
+      'শতকরা (%)',
+      'জিপিএ (GPA)',
+      'লেটার গ্রেড',
+      'ফলাফল (স্ট্যাটাস)'
+    );
+
+    rows.push(headerRow);
+
+    // Student Data Rows
+    classResults.forEach((res) => {
+      const percentage =
+        res.totalFullMarks > 0
+          ? ((res.grandTotalObtained / res.totalFullMarks) * 100).toFixed(1)
+          : '0';
+
+      const row: (string | number)[] = [
+        res.meritPositionBn || res.meritPosition,
+        res.student.roll,
+        res.student.nameBn,
+        res.student.fatherName || res.student.motherName || '',
+        res.student.section || selectedSection || '',
+        res.student.guardianPhone || '',
+      ];
+
+      // Subject-wise marks
+      res.subjectRows.forEach((sRow) => {
+        if (sRow.totalObtained !== null && sRow.totalObtained !== undefined) {
+          row.push(`${sRow.totalObtained} (${sRow.letterGrade})`);
+        } else {
+          row.push('-');
+        }
+      });
+
+      row.push(
+        res.grandTotalObtained,
+        res.totalFullMarks,
+        `${percentage}%`,
+        Number(res.gpa.toFixed(2)),
+        res.overallGrade,
+        res.isPassed ? 'উত্তীর্ণ' : 'অনুত্তীর্ণ'
+      );
+
+      rows.push(row);
+    });
+
+    // Summary Statistics Rows
+    rows.push([]);
+    rows.push([
+      'সারসংক্ষেপ:',
+      `মোট শিক্ষার্থী: ${classResults.length} জন`,
+      `উত্তীর্ণ: ${passedCount} জন`,
+      `অনুত্তীর্ণ: ${failedCount} জন`,
+      `পাসের হার: ${passRate}%`,
+    ]);
+
+    // Create Worksheet
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+
+    // Calculate Column Widths dynamically
+    const colWidths = [
+      { wch: 10 }, // Merit
+      { wch: 8 },  // Roll
+      { wch: 25 }, // Name
+      { wch: 20 }, // Father/Guardian
+      { wch: 8 },  // Section
+      { wch: 15 }, // Phone
+    ];
+
+    subjects.forEach(() => {
+      colWidths.push({ wch: 16 });
+    });
+
+    colWidths.push(
+      { wch: 18 }, // Total Obtained
+      { wch: 14 }, // Full Marks
+      { wch: 12 }, // Percentage
+      { wch: 12 }, // GPA
+      { wch: 12 }, // Grade
+      { wch: 16 }  // Status
+    );
+
+    ws['!cols'] = colWidths;
+
+    // Create Workbook and append sheet
+    const wb = XLSX.utils.book_new();
+    const sheetName = `${currentClass.nameBn}`.substring(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+    // Clean filename
+    const cleanExamName = (examTerm?.nameBn || 'exam').replace(/\s+/g, '_');
+    const cleanClassName = currentClass.nameBn.replace(/\s+/g, '_');
+    const fileName = `ট্যাবুল্যাশন_শিট_${cleanClassName}_${cleanExamName}_${selectedYear}.xlsx`;
+
+    // Download .xlsx file
+    XLSX.writeFile(wb, fileName);
+
+    setExportSuccessMsg(`এক্সেল ফাইল (${fileName}) সফলভাবে ডাউনলোড হয়েছে!`);
+    setTimeout(() => setExportSuccessMsg(null), 4000);
   };
 
   const handleExportCSV = () => {
@@ -74,23 +248,62 @@ export const TabulationSheet: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleExportPDF}
+              disabled={isExportingPdf || classResults.length === 0}
+              className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold border border-indigo-600 bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition disabled:opacity-50"
+              title="ট্যাবুল্যাশন শিট হাই-কোয়ালিটি PDF ফরম্যাটে ডাউনলোড করুন"
+            >
+              {isExportingPdf ? (
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4 mr-1.5" />
+              )}
+              PDF ডাউনলোড
+            </button>
+            <button
+              onClick={handleExportExcel}
+              className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold border border-emerald-600 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition"
+              title="মাইক্রোসফট এক্সেল (.xlsx) ফরম্যাটে ডাউনলোড করুন"
+            >
+              <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+              Excel (.xlsx) ডাউনলোড
+            </button>
             <button
               onClick={handleExportCSV}
               className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-bold border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 shadow-xs transition"
+              title="সাধারণ CSV ফরম্যাটে ডাউনলোড করুন"
             >
-              <Download className="w-4 h-4 mr-1.5 text-emerald-600" />
-              CSV / Excel ডাউনলোড
+              <Download className="w-4 h-4 mr-1.5 text-slate-600" />
+              CSV ফাইল
             </button>
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('subjects')}
+                className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-bold border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 shadow-xs transition cursor-pointer"
+                title="শ্রেণির বিষয়সমূহ পরিচালনা বা নতুন বিষয় যোগ করুন"
+              >
+                <BookMarked className="w-4 h-4 mr-1.5 text-indigo-600" />
+                বিষয় ব্যবস্থাপনা
+              </button>
+            )}
             <button
               onClick={handlePrint}
-              className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition"
+              className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white shadow-xs transition"
             >
               <Printer className="w-4 h-4 mr-1.5" />
-              ট্যাবুল্যাশন শিট প্রিন্ট করুন
+              প্রিন্ট করুন
             </button>
           </div>
         </div>
+
+        {exportSuccessMsg && (
+          <div className="mb-4 bg-emerald-50 border border-emerald-300 text-emerald-800 px-4 py-2.5 rounded-lg text-xs font-bold flex items-center shadow-xs animate-in fade-in">
+            <Check className="w-4 h-4 mr-2 text-emerald-600" />
+            {exportSuccessMsg}
+          </div>
+        )}
 
         {/* Filter Controls */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -153,7 +366,10 @@ export const TabulationSheet: React.FC = () => {
       </div>
 
       {/* TABULATION SHEET PRINTABLE CANVAS */}
-      <div className="printable-area bg-white p-6 rounded-xl border border-slate-300 shadow-sm overflow-x-auto text-black">
+      <div
+        id="tabulation-sheet-printable"
+        className="printable-area bg-white p-6 rounded-xl border border-slate-300 shadow-sm overflow-x-auto text-black"
+      >
         {/* School Header */}
         <div className="text-center pb-4 border-b-2 border-black mb-4 flex items-center justify-between">
           <div className="w-20">

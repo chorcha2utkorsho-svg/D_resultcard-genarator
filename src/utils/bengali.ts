@@ -77,3 +77,52 @@ export function toBengaliOrdinal(num: number): string {
   };
   return ordinals[num] || `${toBengaliNumber(num)}তম`;
 }
+
+export function parseBengaliNumber(val: string | number | null | undefined): number {
+  if (val === null || val === undefined) return NaN;
+  const str = String(val).trim();
+  const bengaliMap: Record<string, string> = {
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+    '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+  };
+  const converted = str.replace(/[০-৯]/g, (ch) => bengaliMap[ch] || ch);
+  return parseInt(converted, 10);
+}
+
+export function normalizeBengaliDigits(val: string | null | undefined): string {
+  if (!val) return '';
+  const bengaliMap: Record<string, string> = {
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+    '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+  };
+  return String(val).replace(/[০-৯]/g, (ch) => bengaliMap[ch] || ch);
+}
+
+export const BENGALI_MONTHS = [
+  'জানুয়ারি', 'ফেব্রুয়ারি', 'মার্চ', 'এপ্রিল', 'মে', 'জুন',
+  'জুলাই', 'আগস্ট', 'সেপ্টেম্বর', 'অক্টোবর', 'নভেম্বর', 'ডিসেম্বর'
+];
+
+export const BENGALI_DAYS = [
+  'রবিবার', 'সোমবার', 'মঙ্গলবার', 'বুধবার', 'বৃহস্পতিবার', 'শুক্রবার', 'শনিবার'
+];
+
+export function formatBengaliDate(isoDateString: string | null | undefined): string {
+  if (!isoDateString) return '';
+  try {
+    const parts = isoDateString.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const d = new Date(year, month, day);
+      const dayName = BENGALI_DAYS[d.getDay()] || '';
+      const monthName = BENGALI_MONTHS[month] || '';
+      return `${toBengaliNumber(day)} ${monthName}, ${toBengaliNumber(year)} (${dayName})`;
+    }
+  } catch {
+    // fallback
+  }
+  return toBengaliNumber(isoDateString);
+}
+

@@ -11,9 +11,17 @@ import { MarkEntryView } from './components/MarkEntryView';
 import { ResultsView } from './components/ResultsView';
 import { TabulationSheet } from './components/TabulationSheet';
 import { StudentManagement } from './components/StudentManagement';
+import { BulkStudentRegistration } from './components/BulkStudentRegistration';
+import { SubjectManagementView } from './components/SubjectManagementView';
 import { SyllabusView } from './components/SyllabusView';
 import { QuestionPaperGenerator } from './components/QuestionPaperGenerator';
 import { NotesView } from './components/NotesView';
+import { SMSNotificationView } from './components/SMSNotificationView';
+import { AttendanceView } from './components/AttendanceView';
+import { AcademicCalendarView } from './components/AcademicCalendarView';
+import { StudentFeesView } from './components/StudentFeesView';
+import { DailyFeeReportView } from './components/DailyFeeReportView';
+import { DefaulterListView } from './components/DefaulterListView';
 import { BackupSettingsModal } from './components/BackupSettingsModal';
 
 function MainContent() {
@@ -39,13 +47,46 @@ function MainContent() {
           />
         )}
 
-        {currentTab === 'marks_entry' && <MarkEntryView />}
+        {currentTab === 'subjects' && (
+          <SubjectManagementView onNavigate={(tab) => setCurrentTab(tab)} />
+        )}
+
+        {currentTab === 'marks_entry' && <MarkEntryView onNavigate={(tab) => setCurrentTab(tab)} />}
 
         {currentTab === 'results' && <ResultsView />}
 
-        {currentTab === 'tabulation' && <TabulationSheet />}
+        {currentTab === 'tabulation' && (
+          <TabulationSheet onNavigate={(tab) => setCurrentTab(tab)} />
+        )}
+
+        {currentTab === 'fees' && (
+          <StudentFeesView onNavigateToTab={(tab) => setCurrentTab(tab)} />
+        )}
+
+        {currentTab === 'daily_report' && (
+          <DailyFeeReportView onNavigate={(tab) => setCurrentTab(tab)} />
+        )}
+
+        {currentTab === 'defaulters' && (
+          <DefaulterListView
+            onNavigate={(tab) => setCurrentTab(tab)}
+            onOpenStudentHistory={() => setCurrentTab('fees')}
+          />
+        )}
+
+        {currentTab === 'attendance' && (
+          <AttendanceView onNavigateToResults={() => setCurrentTab('results')} />
+        )}
+
+        {currentTab === 'calendar' && <AcademicCalendarView />}
+
+        {currentTab === 'sms' && <SMSNotificationView />}
 
         {currentTab === 'students' && <StudentManagement />}
+
+        {currentTab === 'bulk_upload' && (
+          <BulkStudentRegistration onSuccessNavigate={() => setCurrentTab('students')} />
+        )}
 
         {currentTab === 'syllabus' && <SyllabusView />}
 

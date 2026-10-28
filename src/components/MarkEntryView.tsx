@@ -13,7 +13,11 @@ import {
 import { useSchool } from '../context/SchoolContext';
 import { calculateGrade, toBengaliNumber, toBengaliRoll } from '../utils/bengali';
 
-export const MarkEntryView: React.FC = () => {
+interface MarkEntryViewProps {
+  onNavigate?: (tab: string) => void;
+}
+
+export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
   const {
     classes,
     examTerms,
@@ -310,20 +314,36 @@ export const MarkEntryView: React.FC = () => {
           {/* Subject (if subject-wise mode) */}
           {entryMode === 'subject_wise' && (
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                <BookOpen className="w-3.5 h-3.5 inline mr-1 text-indigo-600" />
-                বিষয় নির্বাচন
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">
+                  <BookOpen className="w-3.5 h-3.5 inline mr-1 text-indigo-600" />
+                  বিষয় নির্বাচন
+                </label>
+                {onNavigate && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('subjects')}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer"
+                    title="বিষয় যোগ বা পরিমার্জন করুন"
+                  >
+                    + বিষয় ব্যবস্থাপনা
+                  </button>
+                )}
+              </div>
               <select
                 value={selectedSubjectId}
                 onChange={(e) => setSelectedSubjectId(e.target.value)}
                 className="w-full text-sm font-bold border border-amber-400 rounded-lg px-2.5 py-2 bg-amber-50 text-amber-950 focus:ring-2 focus:ring-amber-500 focus:outline-none"
               >
-                {subjects.map((sub) => (
-                  <option key={sub.id} value={sub.id}>
-                    {sub.nameBn} (পূর্ণমান {toBengaliNumber(sub.fullMarks)})
-                  </option>
-                ))}
+                {subjects.length === 0 ? (
+                  <option value="">কোনো বিষয় নেই</option>
+                ) : (
+                  subjects.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.nameBn} (পূর্ণমান {toBengaliNumber(sub.fullMarks)}{sub.hasMonthlyExam === false ? ' • ১০০% পরীক্ষা' : ''})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           )}
@@ -408,12 +428,16 @@ export const MarkEntryView: React.FC = () => {
                     </div>
                   </th>
                   <th className="py-3 px-2 text-center w-28 bg-slate-50">
-                    ৮০% হিসাব
-                    <div className="text-[10px] text-slate-500 font-normal">(অটোমেটিক)</div>
+                    {activeSubject?.hasMonthlyExam === false ? 'প্রাপ্ত মূল নম্বর' : '৮০% হিসাব'}
+                    <div className="text-[10px] text-slate-500 font-normal">
+                      {activeSubject?.hasMonthlyExam === false ? '(১০০% চূড়ান্ত)' : '(অটোমেটিক)'}
+                    </div>
                   </th>
                   <th className="py-3 px-2 text-center w-28 bg-blue-50/60">
                     মাসিক ২০%
-                    <div className="text-[10px] text-blue-800 font-normal">(ধারাবাহিক)</div>
+                    <div className="text-[10px] text-blue-800 font-normal">
+                      {activeSubject?.hasMonthlyExam === false ? '(প্রযোজ্য নয়)' : '(ধারাবাহিক)'}
+                    </div>
                   </th>
                   <th className="py-3 px-2 text-center w-28 bg-emerald-50/60 font-bold">
                     মোট প্রাপ্ত নম্বর
@@ -442,8 +466,13 @@ export const MarkEntryView: React.FC = () => {
                     let totalObtained: number | null = null;
 
                     if (numExam !== null) {
-                      calc80 = parseFloat(((numExam * 80) / 100).toFixed(1));
-                      totalObtained = Math.round(calc80 + (numMonthly || 0));
+                      if (activeSubject?.hasMonthlyExam === false) {
+                        calc80 = numExam;
+                        totalObtained = Math.round(numExam);
+                      } else {
+                        calc80 = parseFloat(((numExam * 80) / 100).toFixed(1));
+                        totalObtained = Math.round(calc80 + (numMonthly || 0));
+                      }
                     }
 
                     const grade = calculateGrade(totalObtained, fullMarks);
@@ -489,16 +518,22 @@ export const MarkEntryView: React.FC = () => {
 
                         {/* Monthly 20% mark Input */}
                         <td className="py-2.5 px-2 text-center bg-blue-50/40">
-                          <input
-                            type="number"
-                            min="0"
-                            max="20"
-                            step="any"
-                            placeholder="০-২০"
-                            value={monthlyVal}
-                            onChange={(e) => handleMonthlyMarkChange(std.id, e.target.value)}
-                            className="w-20 text-center font-semibold text-sm border border-blue-300 rounded-lg py-1 px-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white text-blue-950"
-                          />
+                          {activeSubject?.hasMonthlyExam === false ? (
+                            <span className="text-[11px] text-slate-400 font-medium italic">
+                              প্রযোজ্য নয়
+                            </span>
+                          ) : (
+                            <input
+                              type="number"
+                              min="0"
+                              max="20"
+                              step="any"
+                              placeholder="০-২০"
+                              value={monthlyVal}
+                              onChange={(e) => handleMonthlyMarkChange(std.id, e.target.value)}
+                              className="w-20 text-center font-semibold text-sm border border-blue-300 rounded-lg py-1 px-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white text-blue-950"
+                            />
+                          )}
                         </td>
 
                         {/* Total Obtained */}
@@ -647,26 +682,32 @@ export const MarkEntryView: React.FC = () => {
                         {calc80 !== null ? toBengaliNumber(calc80) : '-'}
                       </td>
                       <td className="py-2 px-2 text-center bg-blue-50/50">
-                        <input
-                          type="number"
-                          min="0"
-                          max="20"
-                          placeholder="০"
-                          value={monthly20}
-                          onChange={(e) => {
-                            const val = e.target.value === '' ? null : parseFloat(e.target.value);
-                            saveMarkRecord(
-                              activeStudentId,
-                              selectedExamId,
-                              selectedYear,
-                              selectedClassId,
-                              selectedSection,
-                              sub.id,
-                              { monthlyMarks20: val }
-                            );
-                          }}
-                          className="w-16 text-center font-semibold text-sm border border-blue-300 rounded py-1 px-1 bg-white"
-                        />
+                        {sub.hasMonthlyExam === false ? (
+                          <span className="text-[11px] text-slate-400 font-medium italic">
+                            প্রযোজ্য নয়
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            min="0"
+                            max="20"
+                            placeholder="০"
+                            value={monthly20}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                              saveMarkRecord(
+                                activeStudentId,
+                                selectedExamId,
+                                selectedYear,
+                                selectedClassId,
+                                selectedSection,
+                                sub.id,
+                                { monthlyMarks20: val }
+                              );
+                            }}
+                            className="w-16 text-center font-semibold text-sm border border-blue-300 rounded py-1 px-1 bg-white"
+                          />
+                        )}
                       </td>
                       <td className="py-2 px-2 text-center font-bold text-emerald-800 bg-emerald-50/40">
                         {totalMarks !== null ? toBengaliNumber(totalMarks) : '-'}

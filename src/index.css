@@ -60,4 +60,29 @@
   table, th, td {
     border-color: #000000 !important;
   }
+
+  .printable-slip-wrapper,
+  .printable-receipt-wrapper,
+  .official-voucher-a4-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .official-voucher-slip {
+    border: 1.5px solid #000000 !important;
+    color: #000000 !important;
+    background: #ffffff !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
 }
+

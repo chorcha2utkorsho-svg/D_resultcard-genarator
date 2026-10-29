@@ -6,11 +6,11 @@
   }
 }
 
-/* Print specific styles for high resolution A4 printing */
+/* Print specific styles for high resolution printing */
 @media print {
   @page {
-    size: A4 portrait;
-    margin: 8mm 6mm;
+    size: auto;
+    margin: 6mm 5mm;
   }
 
   body {
@@ -18,10 +18,29 @@
     color: #000000 !important;
     padding: 0 !important;
     margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* When printing batch vouchers modal, strictly hide all other background UI */
+  body.printing-batch-vouchers #root > div > *:not(.batch-voucher-modal-portal) {
+    display: none !important;
+  }
+
+  body.printing-batch-vouchers .batch-voucher-modal-portal {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
 
   /* Hide UI elements during print */
   .no-print,
+  .batch-voucher-control-bar,
   nav,
   aside,
   header,
@@ -70,14 +89,22 @@
     margin: 0 !important;
     box-shadow: none !important;
     border: none !important;
+    height: 100% !important;
+    min-height: 195mm !important;
   }
 
   .official-voucher-slip {
-    border: 1.5px solid #000000 !important;
+    border: 2px solid #000000 !important;
     color: #000000 !important;
     background: #ffffff !important;
     break-inside: avoid !important;
     page-break-inside: avoid !important;
+    height: 100% !important;
+    min-height: 188mm !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
   }
 
   .page-break-after {

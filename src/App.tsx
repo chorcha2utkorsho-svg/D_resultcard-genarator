@@ -23,8 +23,16 @@ import { StudentFeesView } from './components/StudentFeesView';
 import { DailyFeeReportView } from './components/DailyFeeReportView';
 import { DefaulterListView } from './components/DefaulterListView';
 import { BackupSettingsModal } from './components/BackupSettingsModal';
+import { StandaloneVoucherPrintView } from './components/StandaloneVoucherPrintView';
 
 function MainContent() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const isStandalonePrint = urlParams.get('mode') === 'print_vouchers';
+
+  if (isStandalonePrint) {
+    return <StandaloneVoucherPrintView />;
+  }
+
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const { schoolInfo } = useSchool();

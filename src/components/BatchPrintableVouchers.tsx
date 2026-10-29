@@ -1,12 +1,35 @@
-import React, { useState, useMemo } from 'react';
-import { Printer, X, FileText, CheckCircle2, ChevronDown, Check, Layers, UserCheck } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import {
+  Printer,
+  X,
+  FileText,
+  UserCheck,
+  Scissors,
+  CheckCircle2,
+  Copy,
+  Layers,
+  Sparkles,
+  ExternalLink,
+  Download,
+  FileDown,
+  Info,
+  Upload,
+  FileCheck,
+  Trash2,
+  Image as ImageIcon,
+} from 'lucide-react';
 import { SchoolInfo, Student, FeeInvoice, SchoolClass } from '../types';
-import { SchoolLogo } from './SchoolLogo';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
 import { numberToBengaliWords } from '../utils/bengaliWords';
 import { STANDARD_8_VOUCHER_HEADS } from '../data/defaultData';
+import { SingleReceiptSlip, PrintableReceiptData } from './PrintableReceiptLayout';
+import { downloadPrintableHtml } from '../utils/voucherExport';
 
 export type VoucherPrintMode = 'blank_students' | 'universal_blank' | 'with_amounts';
+export type PaperSavingLayout =
+  | 'two_students_landscape' // 1 A4 Landscape sheet with 2 slips SIDE-BY-SIDE (DEFAULT)
+  | 'four_students_per_sheet' // 1 A4 sheet with 4 students in 2x2 grid
+  | 'single_student_double_copy'; // 1 A4 Landscape sheet with 1 student (Office + Student copies)
 
 export interface BatchPrintableVouchersProps {
   schoolInfo: SchoolInfo;
@@ -31,7 +54,6 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
   initialIsBlank = true,
   onClose,
 }) => {
-  // Active class filter: ensure it strictly filters by class!
   const defaultClassId =
     initialClassId && initialClassId !== 'all'
       ? initialClassId
@@ -42,21 +64,32 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
   const [voucherMode, setVoucherMode] = useState<VoucherPrintMode>(
     initialIsBlank ? 'blank_students' : 'with_amounts'
   );
+
+  // Custom Logo and Signatures state (Base64 data URLs for 100% offline reliability)
+  const [customLogo, setCustomLogo] = useState<string>(schoolInfo.logoUrl || '');
+  const [principalSig, setPrincipalSig] = useState<string>(schoolInfo.principalSignatureUrl || '');
+  const [guardianSig, setGuardianSig] = useState<string>('');
+
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const principalSigInputRef = useRef<HTMLInputElement>(null);
+  const guardianSigInputRef = useRef<HTMLInputElement>(null);
+
+  // DEFAULT: 2 STUDENTS SIDE-BY-SIDE ON A4 LANDSCAPE
+  const [paperLayout, setPaperLayout] = useState<PaperSavingLayout>('two_students_landscape');
+
   const [customTitle, setCustomTitle] = useState<string>(
-    voucherType === 'due_slip' ? 'বকেয়া বেতনের রিসিট' : 'বেতনের রিসিট'
+    voucherType === 'due_slip' ? 'বকেয়া নোটিশ / বিল' : 'বেতনের রিসিট'
   );
+
+  const [copyLabel, setCopyLabel] = useState<string>('- শিক্ষার্থী কপি (নোটিশ বিল) -');
+
   const [universalBlankCount, setUniversalBlankCount] = useState<number>(10);
+  const printableAreaRef = useRef<HTMLDivElement>(null);
 
-  const handlePrint = () => {
-    window.print();
-  };
-
-  // Currently selected class object
   const currentClass = useMemo(() => {
     return classes.find((c) => c.id === selectedClassId) || classes[0];
   }, [classes, selectedClassId]);
 
-  // Filter students strictly by selectedClassId and sort ascending by roll
   const classStudents = useMemo(() => {
     let list = students.filter((s) => s.classId === selectedClassId);
     if (selectedSection !== 'all') {
@@ -65,13 +98,11 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
     return list.sort((a, b) => a.roll - b.roll);
   }, [students, selectedClassId, selectedSection]);
 
-  // Helper to get 8 items for a student
-  const getStudentVoucherData = (student: Student) => {
-    const matchedClass = classes.find((c) => c.id === student.classId);
+  const getStudentVoucherData = (student: Student | null): PrintableReceiptData => {
+    const matchedClass = student ? classes.find((c) => c.id === student.classId) : null;
     const classNameBn = matchedClass ? matchedClass.nameBn : currentClass?.nameBn || 'শ্রেণি';
 
-    // In blank mode: amounts are 0 and will be rendered completely blank (no text, no 0/-)
-    if (voucherMode === 'blank_students' || voucherMode === 'universal_blank') {
+    if (voucherMode === 'blank_students' || voucherMode === 'universal_blank' || !student) {
       const blankItems = STANDARD_8_VOUCHER_HEADS.map((head) => ({
         serialBn: head.serialBn,
         nameBn: head.nameBn,
@@ -85,7 +116,6 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
       };
     }
 
-    // With amounts mode: look up student invoice
     const studentInvoice = invoices.find((inv) => inv.studentId === student.id);
     const items = STANDARD_8_VOUCHER_HEADS.map((head) => {
       let amount = 0;
@@ -104,7 +134,7 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
           }
         }
       } else {
-        amount = 0; // if no invoice, keep blank
+        amount = 0;
       }
       return {
         serialBn: head.serialBn,
@@ -124,218 +154,390 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
     };
   };
 
-  // Render Single A5 slip
-  const renderSingleA5Slip = (
-    student: Student | null,
-    data: ReturnType<typeof getStudentVoucherData>,
-    copyType: '- অফিস কপি -' | '- শিক্ষার্থী কপি -'
-  ) => {
-    const isUniversalBlank = voucherMode === 'universal_blank' || !student;
-    const isBlankAmounts = voucherMode !== 'with_amounts' || data.grandTotal === 0;
+  const groupedStudents = useMemo(() => {
+    if (voucherMode === 'universal_blank') {
+      const groups: (Student | null)[][] = [];
+      const totalSheets = universalBlankCount || 5;
+      for (let i = 0; i < totalSheets; i++) {
+        if (paperLayout === 'four_students_per_sheet') {
+          groups.push([null, null, null, null]);
+        } else if (paperLayout === 'single_student_double_copy') {
+          groups.push([null]);
+        } else {
+          groups.push([null, null]);
+        }
+      }
+      return groups;
+    }
 
-    return (
-      <div className="official-voucher-slip bg-white text-black p-3.5 flex flex-col justify-between select-none relative box-border border-2 border-slate-900 rounded-xs min-h-[485px] text-xs">
-        <div>
-          {/* School Header */}
-          <div className="relative flex items-center justify-center pb-2 border-b border-black">
-            <div className="absolute left-0 top-1/2 -translate-y-1/2">
-              <SchoolLogo
-                customLogoUrl={schoolInfo.logoUrl}
-                size={44}
-                className="border border-black/40 rounded-full p-0.5"
-              />
-            </div>
-            <div className="text-center px-10">
-              <h1 className="text-lg font-bold font-serif text-black leading-tight">
-                {schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
-              </h1>
-              <p className="text-[11px] font-semibold text-slate-800 leading-tight mt-0.5">
-                {schoolInfo.established || 'স্থাপিত: ২০১৮ ইং'}
-              </p>
-              <p className="text-[10px] text-slate-700 leading-tight mt-0.5">
-                {schoolInfo.address || 'গনি মার্কেট, সনমানিয়া, কাপাসিয়া, গাজীপুর।'}
-              </p>
-            </div>
-          </div>
+    if (paperLayout === 'single_student_double_copy') {
+      return classStudents.map((s) => [s]);
+    }
+    if (paperLayout === 'four_students_per_sheet') {
+      const groups: (Student | null)[][] = [];
+      for (let i = 0; i < classStudents.length; i += 4) {
+        groups.push([
+          classStudents[i] || null,
+          classStudents[i + 1] || null,
+          classStudents[i + 2] || null,
+          classStudents[i + 3] || null,
+        ]);
+      }
+      return groups;
+    }
+    // Default: 2 students side-by-side
+    const groups: (Student | null)[][] = [];
+    for (let i = 0; i < classStudents.length; i += 2) {
+      groups.push([classStudents[i] || null, classStudents[i + 1] || null]);
+    }
+    return groups;
+  }, [classStudents, paperLayout, voucherMode, universalBlankCount]);
 
-          {/* Voucher Title */}
-          <div className="text-center my-1.5">
-            <div className="inline-block px-4 py-0.5 border border-black rounded-md font-bold text-xs tracking-wide bg-white text-black">
-              {customTitle}
-            </div>
-          </div>
+  const calculatedPageCount = useMemo(() => {
+    if (voucherMode === 'universal_blank') return universalBlankCount;
+    if (paperLayout === 'four_students_per_sheet') {
+      return Math.ceil(classStudents.length / 4);
+    }
+    return Math.ceil(classStudents.length / 2);
+  }, [voucherMode, universalBlankCount, paperLayout, classStudents.length]);
 
-          {/* Student Meta Details */}
-          <div className="space-y-1 mb-2 text-[11px]">
-            {/* Row 1: নাম & শ্রেণি */}
-            <div className="grid grid-cols-12 gap-2 items-baseline">
-              <div className="col-span-7 flex items-baseline overflow-hidden">
-                <span className="font-semibold whitespace-nowrap">নাম:</span>
-                {!isUniversalBlank && student ? (
-                  <span className="ml-1 font-bold text-black whitespace-nowrap">{student.nameBn}</span>
-                ) : (
-                  <span className="ml-1 text-transparent select-none whitespace-nowrap">...........</span>
-                )}
-                <span className="flex-1 border-b border-dotted border-black ml-1 min-w-[20px]" />
-              </div>
-              <div className="col-span-5 flex items-baseline overflow-hidden">
-                <span className="font-semibold whitespace-nowrap">শ্রেণি:</span>
-                <span className="ml-1 font-bold text-black whitespace-nowrap">
-                  {currentClass?.nameBn || data.classNameBn}
-                </span>
-                <span className="flex-1 border-b border-dotted border-black ml-1 min-w-[20px]" />
-              </div>
-            </div>
+  // Handle Logo Upload (Converts to Base64 data URL)
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setCustomLogo(base64);
+    };
+    reader.readAsDataURL(file);
+  };
 
-            {/* Row 2: শাখা & রোল */}
-            <div className="grid grid-cols-12 gap-2 items-baseline">
-              <div className="col-span-7 flex items-baseline overflow-hidden">
-                <span className="font-semibold whitespace-nowrap"> শাখা:</span>
-                {!isUniversalBlank && student ? (
-                  <span className="ml-1 font-bold text-black whitespace-nowrap">
-                    {student.section || 'ক'}
-                  </span>
-                ) : (
-                  <span className="ml-1 text-transparent select-none whitespace-nowrap">.....</span>
-                )}
-                <span className="flex-1 border-b border-dotted border-black ml-1 min-w-[20px]" />
-              </div>
-              <div className="col-span-5 flex items-baseline overflow-hidden">
-                <span className="font-semibold whitespace-nowrap">রোল:</span>
-                {!isUniversalBlank && student ? (
-                  <span className="ml-1 font-bold text-black whitespace-nowrap font-mono">
-                    {toBengaliRoll(student.roll)}
-                  </span>
-                ) : (
-                  <span className="ml-1 text-transparent select-none whitespace-nowrap">.....</span>
-                )}
-                <span className="flex-1 border-b border-dotted border-black ml-1 min-w-[20px]" />
-              </div>
-            </div>
-          </div>
+  // Handle Principal Signature Upload
+  const handlePrincipalSigUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setPrincipalSig(base64);
+    };
+    reader.readAsDataURL(file);
+  };
 
-          {/* 8-Row Breakdown Table */}
-          <table className="w-full border-collapse border border-black text-[11px] mb-2">
-            <thead>
-              <tr className="border-b border-black font-bold bg-slate-50">
-                <th className="border border-black py-0.5 px-1 text-center w-7">ক্র.</th>
-                <th className="border border-black py-0.5 px-2 text-center">বিবরণ</th>
-                <th className="border border-black py-0.5 px-2 text-center w-24">টাকা</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((item, idx) => (
-                <tr key={idx} className="border-b border-black">
-                  <td className="border border-black py-0.5 px-1 text-center font-medium">
-                    {item.serialBn}
-                  </td>
-                  <td className="border border-black py-0.5 px-2 text-left font-medium">
-                    {item.nameBn}
-                  </td>
-                  <td className="border border-black py-0.5 px-2 text-right font-medium font-mono min-h-[20px]">
-                    {item.amount > 0 ? `${toBengaliNumber(item.amount)}/-` : ''}
-                  </td>
-                </tr>
-              ))}
-              {/* Grand Total Row */}
-              <tr className="border-t-2 border-black font-bold">
-                <td
-                  colSpan={2}
-                  className="border border-black py-1 px-3 text-right pr-3 font-bold text-xs"
-                >
-                  সর্বমোট টাকা =
-                </td>
-                <td className="border border-black py-1 px-2 text-right font-bold text-xs font-mono">
-                  {/* NEVER print ০/- when blank mode or 0 amount! Leave empty for hand-writing */}
-                  {data.grandTotal > 0 && !isBlankAmounts ? (
-                    `${toBengaliNumber(data.grandTotal)}/-`
-                  ) : (
-                    <span className="text-transparent select-none">&nbsp;</span>
-                  )}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+  // Handle Guardian Signature Upload
+  const handleGuardianSigUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setGuardianSig(base64);
+    };
+    reader.readAsDataURL(file);
+  };
 
-          {/* In Words */}
-          <div className="flex items-baseline overflow-hidden text-[11px] mb-3">
-            <span className="font-semibold whitespace-nowrap">কথায়:</span>
-            {data.grandTotalWords && !isBlankAmounts ? (
-              <span className="ml-1 font-bold text-black whitespace-nowrap">
-                {data.grandTotalWords}
-              </span>
-            ) : (
-              <span className="ml-1 text-transparent select-none whitespace-nowrap">&nbsp;</span>
-            )}
-            <span className="flex-1 border-b border-dotted border-black ml-1 min-w-[20px]" />
-          </div>
-        </div>
-
-        {/* Footer Signatures */}
-        <div className="pt-6">
-          <div className="flex justify-between items-end px-2 mb-2 text-[11px]">
-            <div className="text-center">
-              <div className="w-28 border-t border-black mb-1 mx-auto" />
-              <span className="font-medium text-black">অভিভাবকের স্বাক্ষর</span>
-            </div>
-            <div className="text-center">
-              <div className="w-28 border-t border-black mb-1 mx-auto" />
-              <span className="font-medium text-black">অফিস সহকারী / প্রিন্সিপাল</span>
-            </div>
-          </div>
-          <div className="text-center mt-0.5">
-            <span className="text-[10px] font-bold text-slate-800 tracking-wider">
-              {copyType}
-            </span>
-          </div>
-        </div>
-      </div>
+  const handleDownloadHtml = () => {
+    if (!printableAreaRef.current) return;
+    downloadPrintableHtml(
+      customTitle,
+      currentClass?.nameBn || 'class',
+      'landscape',
+      printableAreaRef.current.innerHTML
     );
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/85 backdrop-blur-xs overflow-y-auto flex items-start justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static print:inset-auto">
-      <div className="bg-slate-100 rounded-2xl shadow-2xl max-w-5xl w-full my-4 overflow-hidden border border-slate-300 print:shadow-none print:border-none print:m-0 print:max-w-none">
-        {/* Sticky Control Bar (Hidden during Print) */}
-        <div className="p-3.5 bg-slate-900 text-white flex flex-col gap-3 print:hidden border-b border-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+    <div
+      id="batch-printable-vouchers-modal"
+      className="batch-voucher-modal-portal fixed inset-0 z-50 bg-slate-900/90 backdrop-blur-xs overflow-y-auto flex items-start justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static print:inset-auto"
+    >
+      <style>{`
+        @media print {
+          @page {
+            size: 297mm 210mm !important;
+            margin: 5mm 5mm !important;
+          }
+          body {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .no-print,
+          .batch-voucher-control-bar,
+          nav, aside, header, footer, button {
+            display: none !important;
+          }
+          .official-voucher-sheet-wrapper,
+          .official-voucher-a4-sheet {
+            page-break-after: always !important;
+            break-after: page !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            clear: both !important;
+            display: block !important;
+            width: 100% !important;
+          }
+          .official-voucher-a4-sheet {
+            margin: 0 auto !important;
+            padding: 2mm 3mm !important;
+            width: 287mm !important;
+            max-width: 287mm !important;
+            box-shadow: none !important;
+            border: none !important;
+            box-sizing: border-box !important;
+          }
+          .official-voucher-sheet-wrapper:last-child,
+          .official-voucher-a4-sheet:last-child {
+            page-break-after: avoid !important;
+            break-after: avoid !important;
+          }
+          .official-voucher-slip {
+            border: 2px solid #000000 !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            box-sizing: border-box !important;
+          }
+          .official-voucher-slip img {
+            max-height: 26px !important;
+            max-width: 90px !important;
+            object-fit: contain !important;
+          }
+        }
+      `}</style>
+
+      <div className="bg-slate-100 rounded-2xl shadow-2xl max-w-6xl w-full my-3 overflow-hidden border border-slate-300 print:shadow-none print:border-none print:m-0 print:max-w-none">
+        {/* Top Control Bar */}
+        <div className="batch-voucher-control-bar p-3.5 sm:p-4 bg-slate-900 text-white flex flex-col gap-3 print:hidden border-b border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center space-x-2">
               <FileText className="w-5 h-5 text-amber-400" />
               <div>
-                <h2 className="font-bold text-sm sm:text-base font-serif flex items-center">
-                  <span>অফিশিয়াল মানি রিসিট / ডিউ স্লিপ প্রিন্ট ভিউ</span>
-                  <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-emerald-950 text-emerald-300 border border-emerald-600 font-sans">
-                    A4 পেপারে ২টি A5 পাশাপাশি
+                <h2 className="font-bold text-sm sm:text-base font-serif flex items-center gap-2">
+                  <span>অভিভাবক নোটিশ ও মানি রিসিট প্রস্তুতকারক</span>
+                  <span className="px-2.5 py-0.5 text-xs rounded-full bg-emerald-950 text-emerald-300 border border-emerald-600 font-sans font-bold">
+                    ১ পাতায় পাশাপাশি ২টি স্লিপ (A4 Landscape - ৫০% কাগজ সাশ্রয়)
                   </span>
                 </h2>
                 <p className="text-[11px] text-slate-300">
-                  বাম পাশে অফিস কপি ও ডান পাশে শিক্ষার্থী কপি প্রিন্ট হবে।
+                  ১টি A4 পাতায় বামে ১ জন ও ডানে ১ জন শিক্ষার্থীর স্লিপ পাশাপাশি থাকবে। মাঝখান দিয়ে কেটে ২ জনকে দিন।
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center space-x-2">
+            {/* ACTION BUTTON: The single working, verified Blue Print File Download Button */}
+            <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={handlePrint}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center space-x-1.5 cursor-pointer shadow-md transition"
+                onClick={handleDownloadHtml}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded-xl font-bold text-sm sm:text-base flex items-center space-x-2 shadow-xl cursor-pointer transition ring-2 ring-blue-300"
+                title="১ ক্লিকে সম্পূর্ণ প্রিন্ট ফাইল ডাউনলোড করুন (A4 Landscape - পাশাপাশি ২টি স্লিপ)"
               >
-                <Printer className="w-4 h-4" />
-                <span>প্রিন্ট করুন (A4 Landscape)</span>
+                <FileDown className="w-5 h-5 text-amber-300" />
+                <span>🖨️ প্রিন্ট ফাইল ডাউনলোড করুন (HTML)</span>
               </button>
+
               <button
                 type="button"
                 onClick={onClose}
                 className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl cursor-pointer transition"
+                title="বন্ধ করুন"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
           </div>
 
-          {/* Class, Section, Voucher Mode & Title Configuration Strip */}
+          {/* LOGO & DIGITAL SIGNATURE UPLOAD STRIP */}
+          <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Logo Upload Button */}
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-amber-300 flex items-center gap-1">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  লোগো:
+                </span>
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => logoInputRef.current?.click()}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold border border-slate-600 flex items-center space-x-1.5 cursor-pointer transition shadow-xs"
+                >
+                  <Upload className="w-3.5 h-3.5 text-amber-400" />
+                  <span>লোগো ব্রাউজ করুন (Browse)</span>
+                </button>
+                {customLogo && (
+                  <div className="flex items-center space-x-1.5 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                    <img
+                      src={customLogo}
+                      alt="Logo"
+                      className="w-5 h-5 rounded-full border border-white/50 object-contain bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCustomLogo('')}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                    >
+                      রিমুভ
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Principal Signature Upload Button */}
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-emerald-300 flex items-center gap-1">
+                  <FileCheck className="w-3.5 h-3.5" />
+                  অফিস সহকারী/প্রিন্সিপাল স্বাক্ষর:
+                </span>
+                <input
+                  ref={principalSigInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handlePrincipalSigUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => principalSigInputRef.current?.click()}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-bold border border-slate-600 flex items-center space-x-1.5 cursor-pointer transition shadow-xs"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>স্বাক্ষর আপলোড (PNG)</span>
+                </button>
+                {principalSig && (
+                  <div className="flex items-center space-x-1.5 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                    <img
+                      src={principalSig}
+                      alt="স্বাক্ষর"
+                      className="h-5 max-w-[50px] object-contain bg-white/90 p-0.5 rounded"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPrincipalSig('')}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                    >
+                      রিমুভ
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Guardian Signature Upload Button (Optional) */}
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-slate-400">অভিভাবক স্বাক্ষর (ঐচ্ছিক):</span>
+                <input
+                  ref={guardianSigInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleGuardianSigUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => guardianSigInputRef.current?.click()}
+                  className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 rounded-lg text-xs border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
+                >
+                  <span>স্বাক্ষর (PNG)</span>
+                </button>
+                {guardianSig && (
+                  <div className="flex items-center space-x-1.5 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                    <img
+                      src={guardianSig}
+                      alt="স্বাক্ষর"
+                      className="h-5 max-w-[45px] object-contain bg-white/90 p-0.5 rounded"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setGuardianSig('')}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                    >
+                      রিমুভ
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="text-[11px] text-amber-200/90 font-medium">
+              ✓ লোগো ও স্বাক্ষর অফলাইন ফাইলে স্থায়ীভাবে যুক্ত থাকবে
+            </div>
+          </div>
+
+          {/* PRINTER SETTING INSTRUCTION NOTE */}
+          <div className="bg-blue-950/70 border border-blue-500/50 p-2.5 rounded-xl flex items-center gap-2 text-xs text-blue-200">
+            <Info className="w-4 h-4 text-amber-400 shrink-0" />
+            <div>
+              <strong>প্রিন্ট নির্দেশনা:</strong> উপরের নীল বাটনটিতে ক্লিক করলেই প্রিন্টযোগ্য ফাইল ডাউনলোড হয়ে যাবে। ফাইলটি ওপেন করে কিবোর্ডে <strong>Ctrl + P</strong> চাপুন এবং প্রিন্টার ডায়ালগে <strong>Layout: Landscape (আড়াআড়ি)</strong> নিশ্চিত করুন। এতে বামে ও ডানে ২টি স্লিপ মার্জিন না কেটে নিখুঁতভাবে প্রিন্ট হবে।
+            </div>
+          </div>
+
+          {/* Paper Savings & Layout Selector */}
+          <div className="bg-emerald-950/70 border border-emerald-500/50 p-2.5 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center space-x-2">
+              <span className="font-bold text-emerald-300 flex items-center gap-1">
+                <Scissors className="w-4 h-4 text-emerald-400" />
+                লেআউট:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPaperLayout('two_students_landscape')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                    paperLayout === 'two_students_landscape'
+                      ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-white'
+                      : 'bg-slate-800 text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <span>১ পাতায় পাশাপাশি ২টি (Landscape - ৫০% সাশ্রয়ী)</span>
+                  <span className="text-[10px] bg-emerald-900/80 text-emerald-200 px-1.5 py-0.2 rounded font-sans">
+                    রেকমেন্ডেড
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaperLayout('four_students_per_sheet')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 ${
+                    paperLayout === 'four_students_per_sheet'
+                      ? 'bg-amber-400 text-slate-950 shadow-md ring-2 ring-white'
+                      : 'bg-slate-800 text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <span>১ পাতায় ৪ জন (৭৫% সাশ্রয়ী 2x2)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaperLayout('single_student_double_copy')}
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 ${
+                    paperLayout === 'single_student_double_copy'
+                      ? 'bg-indigo-600 text-white shadow-md ring-2 ring-white'
+                      : 'bg-slate-800 text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <span>১ পাতায় ১ জন (অফিস ও শিক্ষার্থী ডাবল)</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="text-[11px] text-emerald-200 font-medium">
+              মোট শিক্ষার্থী: <strong>{toBengaliNumber(classStudents.length)}</strong> জন • মোট কাগজ লাগবে:{' '}
+              <strong className="text-amber-300">{toBengaliNumber(calculatedPageCount)}</strong> টি A4 পাতা
+            </div>
+          </div>
+
+          {/* Config Bar */}
           <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-950/60 p-2.5 rounded-xl">
-            {/* Class Selector Dropdown */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center space-x-1.5">
                 <span className="font-bold text-amber-300">শ্রেণি:</span>
@@ -355,7 +557,6 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
                 </select>
               </div>
 
-              {/* Section Selector */}
               <div className="flex items-center space-x-1">
                 <span className="font-semibold text-slate-400">শাখা:</span>
                 <select
@@ -380,21 +581,19 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
                     ? 'bg-amber-500 text-slate-950 shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
-                title="শিক্ষার্থীর নাম ও রোল প্রিন্ট হবে, টাকার ঘরগুলো হাতে লেখার জন্য ফাঁকা থাকবে"
               >
                 <UserCheck className="w-3.5 h-3.5" />
-                <span>নাম-রোলসহ ব্ল্যাঙ্ক রিসিট ({toBengaliNumber(classStudents.length)})</span>
+                <span>নাম-রোলসহ ব্ল্যাঙ্ক স্লিপ</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setVoucherMode('universal_blank')}
-                className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer flex items-center space-x-1 ${
+                className={`px-2.5 py-1 rounded-lg font-bold text-xs transition cursor-pointer flex items-center space-x-1 ${
                   voucherMode === 'universal_blank'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
-                title="নাম ও রোল ছাড়া সম্পূর্ণ খালি ফরম্যাট প্রিন্ট করুন"
               >
                 <span>সম্পূর্ণ খালি স্লিপ</span>
               </button>
@@ -407,7 +606,6 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
-                title="সফটওয়্যারের হিসাবকৃত টাকার অংকসহ প্রিন্ট"
               >
                 <span>টাকাসহ ভাউচার</span>
               </button>
@@ -416,7 +614,7 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
             {/* Slip Title Pills */}
             <div className="flex items-center space-x-1">
               <span className="text-slate-400 font-semibold mr-1">শিরোনাম:</span>
-              {(['বকেয়া বেতনের রিসিট', 'বেতনের রিসিট', 'মানি রিসিট'] as const).map((t) => (
+              {(['বকেয়া নোটিশ / বিল', 'বকেয়া বেতনের রিসিট', 'বেতনের রিসিট', 'মানি রিসিট'] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -432,119 +630,202 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
               ))}
             </div>
           </div>
-
-          {/* Quick Notice Banner based on Mode */}
-          <div className="text-[11px] text-amber-200/90 bg-amber-950/40 px-3 py-1.5 rounded-lg border border-amber-900/50 flex items-center justify-between">
-            {voucherMode === 'blank_students' && (
-              <span>
-                ✓ <strong>{currentClass?.nameBn}</strong>-এর মোট{' '}
-                <strong>{toBengaliNumber(classStudents.length)}</strong> জন শিক্ষার্থীর নাম, রোল ও শ্রেণি
-                প্রিন্ট হবে। টাকার ঘর, সর্বমোট ও কথায় সম্পূর্ণ খালি থাকবে যা হিসাবরক্ষক নিজে হাতে লিখে দিতে
-                পারবেন।
-              </span>
-            )}
-            {voucherMode === 'universal_blank' && (
-              <div className="flex items-center space-x-3 w-full justify-between">
-                <span>
-                  ✓ নাম ও রোল ছাড়া <strong>{currentClass?.nameBn}</strong>-এর সম্পূর্ণ খালি স্লিপ তৈরি হচ্ছে।
-                </span>
-                <div className="flex items-center space-x-1">
-                  <span>কপির সংখ্যা:</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={universalBlankCount}
-                    onChange={(e) => setUniversalBlankCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    className="w-14 px-1.5 py-0.5 text-center bg-slate-800 border border-slate-700 text-white rounded font-mono font-bold"
-                  />
-                  <span>পাতা</span>
-                </div>
-              </div>
-            )}
-            {voucherMode === 'with_amounts' && (
-              <span>
-                ✓ ডাটাবেজে এন্ট্রি করা ইনভয়েস ও বকেয়া টাকার পরিমাণসহ ভাউচার তৈরি হচ্ছে।
-              </span>
-            )}
-          </div>
         </div>
 
-        {/* All Students Voucher Sheets */}
-        <div className="p-4 sm:p-6 space-y-8 bg-slate-200/50 print:p-0 print:space-y-0 print:bg-white">
-          {/* Universal Blank Mode: print requested number of blank sheets */}
-          {voucherMode === 'universal_blank' && (
-            <>
-              {Array.from({ length: universalBlankCount }).map((_, idx) => {
-                const blankData = getStudentVoucherData({
-                  id: `blank_${idx}`,
-                  roll: 0,
-                  nameBn: '',
-                  classId: selectedClassId,
-                  section: selectedSection === 'all' ? 'ক' : selectedSection,
-                  academicYear: '২০২৬',
-                });
+        {/* Printable Sheets Container */}
+        <div
+          ref={printableAreaRef}
+          id="batch-voucher-printable-content"
+          className="p-3 sm:p-6 space-y-6 sm:space-y-8 bg-slate-200/50 print:p-0 print:space-y-0 print:bg-white"
+        >
+          {groupedStudents.length === 0 ? (
+            <div className="bg-white p-12 text-center rounded-xl border border-slate-300">
+              <FileText className="w-12 h-12 text-slate-400 mx-auto mb-2" />
+              <h3 className="font-bold text-slate-800 text-base">
+                {voucherMode === 'universal_blank'
+                  ? 'কোনো স্লিপ নির্বাচন করা হয়নি।'
+                  : `${currentClass?.nameBn}-এ কোনো শিক্ষার্থী পাওয়া যায়নি।`}
+              </h3>
+            </div>
+          ) : (
+            groupedStudents.map((group, pageIdx) => {
+              // CASE 1: 2 STUDENTS SIDE-BY-SIDE ON A4 LANDSCAPE (DEFAULT)
+              if (paperLayout === 'two_students_landscape') {
+                const student1 = group[0];
+                const student2 = group[1] || null;
+                const data1 = student1 ? getStudentVoucherData(student1) : getStudentVoucherData(null);
+                const data2 = student2 ? getStudentVoucherData(student2) : getStudentVoucherData(null);
 
                 return (
                   <div
-                    key={`universal_page_${idx}`}
-                    className="official-voucher-a4-sheet bg-white p-4 sm:p-5 shadow-md max-w-[950px] mx-auto print:shadow-none print:p-0 print:m-0 print:w-full page-break-after"
+                    key={`page_land_wrapper_${pageIdx}`}
+                    className="official-voucher-sheet-wrapper space-y-1 print:space-y-0"
+                    style={{
+                      pageBreakAfter: pageIdx === groupedStudents.length - 1 ? 'auto' : 'always',
+                      breakAfter: pageIdx === groupedStudents.length - 1 ? 'auto' : 'page',
+                      pageBreakInside: 'avoid',
+                      breakInside: 'avoid',
+                      width: '100%',
+                      display: 'block',
+                      clear: 'both',
+                    }}
                   >
-                    <div className="text-xs text-slate-500 font-semibold mb-2 print:hidden flex justify-between">
-                      <span>
-                        পাতা {toBengaliNumber(idx + 1)}: {currentClass?.nameBn} (সম্পূর্ণ খালি স্লিপ)
+                    {/* Screen Indicator (Never rendered in print or exported HTML) */}
+                    <div className="no-print print:hidden text-xs text-slate-600 font-semibold mb-1 flex justify-between bg-slate-200/90 px-3 py-1.5 rounded-lg max-w-[950px] mx-auto border border-slate-300">
+                      <span className="font-bold text-slate-800">
+                        পাতা {toBengaliNumber(pageIdx + 1)} / {toBengaliNumber(calculatedPageCount)}: বামে {student1?.nameBn} (রোল: {student1 ? toBengaliRoll(student1.roll) : '-'}) ও ডানে {student2 ? `${student2.nameBn} (রোল: ${toBengaliRoll(student2.roll)})` : 'খালি স্লিপ'}
                       </span>
-                      <span className="text-slate-400">হাতে লিখে দেয়ার জন্য</span>
+                      <span className="text-emerald-700 font-bold">১ পাতায় পাশাপাশি ২টি (A4 Landscape)</span>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 print:grid-cols-2 print:gap-4">
-                      {renderSingleA5Slip(null, blankData, '- অফিস কপি -')}
-                      {renderSingleA5Slip(null, blankData, '- শিক্ষার্থী কপি -')}
+
+                    <div
+                      key={`page_land_${pageIdx}`}
+                      className="official-voucher-a4-sheet bg-white p-2 sm:p-2.5 shadow-md max-w-[950px] mx-auto print:shadow-none print:p-0 print:m-0 print:w-full"
+                      style={{
+                        width: '100%',
+                        maxWidth: '287mm',
+                        boxSizing: 'border-box',
+                        pageBreakAfter: pageIdx === groupedStudents.length - 1 ? 'auto' : 'always',
+                        breakAfter: pageIdx === groupedStudents.length - 1 ? 'auto' : 'page',
+                        pageBreakInside: 'avoid',
+                        breakInside: 'avoid',
+                      }}
+                    >
+                      {/* Side-by-side grid */}
+                      <div
+                        className="side-by-side-grid relative"
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr',
+                          gap: '5mm',
+                          width: '100%',
+                          position: 'relative',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        {/* Left Slip: Student 1 */}
+                        <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                          <SingleReceiptSlip
+                            schoolInfo={schoolInfo}
+                            student={student1}
+                            data={data1}
+                            voucherTitle={customTitle}
+                            copyLabel={copyLabel}
+                            isBlankAmounts={voucherMode === 'blank_students'}
+                            customLogoUrl={customLogo}
+                            principalSignatureUrl={principalSig}
+                            guardianSignatureUrl={guardianSig}
+                          />
+                        </div>
+
+                        {/* Scissor Cut Line in the Middle */}
+                        <div
+                          className="hidden print:flex absolute left-1/2 top-0 bottom-0 -translate-x-1/2 flex-col justify-between items-center py-2 z-10 pointer-events-none"
+                          style={{ height: '100%' }}
+                        >
+                          <span className="text-[9px] font-bold text-slate-500 bg-white px-1">✂ কাটার দাগ</span>
+                          <div className="w-0 flex-1 border-l-2 border-dashed border-slate-400 my-1" />
+                          <span className="text-[9px] font-bold text-slate-500 bg-white px-1">✂</span>
+                        </div>
+
+                        {/* Right Slip: Student 2 */}
+                        <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                          <SingleReceiptSlip
+                            schoolInfo={schoolInfo}
+                            student={student2}
+                            data={data2}
+                            voucherTitle={customTitle}
+                            copyLabel={copyLabel}
+                            isBlankAmounts={voucherMode === 'blank_students'}
+                            customLogoUrl={customLogo}
+                            principalSignatureUrl={principalSig}
+                            guardianSignatureUrl={guardianSig}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
-              })}
-            </>
-          )}
+              }
 
-          {/* Student Specific Mode (Blank or With Amounts) */}
-          {voucherMode !== 'universal_blank' && (
-            <>
-              {classStudents.length === 0 ? (
-                <div className="bg-white p-12 text-center rounded-xl border border-slate-300">
-                  <FileText className="w-12 h-12 text-slate-400 mx-auto mb-2" />
-                  <h3 className="font-bold text-slate-800 text-base">
-                    {currentClass?.nameBn}-এ কোনো শিক্ষার্থী পাওয়া যায়নি।
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                    দয়া করে উপরের শ্রেণি ড্রপডাউন থেকে অন্য কোনো শ্রেণি নির্বাচন করুন অথবা
-                    'সম্পূর্ণ খালি স্লিপ' মোড ব্যবহার করুন।
-                  </p>
-                </div>
-              ) : (
-                classStudents.map((student, sIdx) => {
-                  const data = getStudentVoucherData(student);
-                  return (
-                    <div
-                      key={student.id}
-                      className="official-voucher-a4-sheet bg-white p-4 sm:p-5 shadow-md max-w-[950px] mx-auto print:shadow-none print:p-0 print:m-0 print:w-full page-break-after"
-                    >
-                      <div className="text-xs text-slate-500 font-semibold mb-2 print:hidden flex justify-between">
-                        <span>
-                          পাতা {toBengaliNumber(sIdx + 1)} / {toBengaliNumber(classStudents.length)}: {student.nameBn} (রোল: {toBengaliRoll(student.roll)}, {currentClass?.nameBn})
-                        </span>
-                        <span className="text-emerald-700 font-bold">
-                          {voucherMode === 'blank_students' ? 'ব্ল্যাঙ্ক টাকার ঘর (হাতে লেখার জন্য প্রস্তুত)' : 'টাকাসহ'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 print:grid-cols-2 print:gap-4">
-                        {renderSingleA5Slip(student, data, '- অফিস কপি -')}
-                        {renderSingleA5Slip(student, data, '- শিক্ষার্থী কপি -')}
-                      </div>
+              // CASE 2: 4 STUDENTS GRID
+              if (paperLayout === 'four_students_per_sheet') {
+                return (
+                  <div
+                    key={`page_four_${pageIdx}`}
+                    className="official-voucher-a4-sheet bg-white p-3 shadow-md max-w-[950px] mx-auto print:shadow-none print:p-0 print:m-0 print:w-full page-break-after"
+                    style={{ height: '284mm', maxHeight: '284mm', boxSizing: 'border-box' }}
+                  >
+                    <div className="grid grid-cols-2 gap-2.5 h-full" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: '4mm', height: '100%' }}>
+                      {group.map((stu, sIdx) => {
+                        const stuData = stu ? getStudentVoucherData(stu) : getStudentVoucherData(null);
+                        return (
+                          <SingleReceiptSlip
+                            key={stu ? stu.id : `blank_pad_${sIdx}`}
+                            schoolInfo={schoolInfo}
+                            student={stu}
+                            data={stuData}
+                            voucherTitle={customTitle}
+                            copyLabel={copyLabel}
+                            isBlankAmounts={voucherMode === 'blank_students'}
+                            isCompact={true}
+                            customLogoUrl={customLogo}
+                            principalSignatureUrl={principalSig}
+                            guardianSignatureUrl={guardianSig}
+                          />
+                        );
+                      })}
                     </div>
-                  );
-                })
-              )}
-            </>
+                  </div>
+                );
+              }
+
+              // CASE 3: DOUBLE COPY 1 STUDENT
+              const student = group[0];
+              if (!student) return null;
+              const data = getStudentVoucherData(student);
+
+              return (
+                <div
+                  key={`single_${student.id}`}
+                  className="official-voucher-a4-sheet bg-white p-2 sm:p-2.5 shadow-md max-w-[950px] mx-auto print:shadow-none print:p-0 print:m-0 print:w-full page-break-after"
+                  style={{
+                    width: '100%',
+                    maxWidth: '287mm',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <div className="side-by-side-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5mm', width: '100%', boxSizing: 'border-box' }}>
+                    <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                      <SingleReceiptSlip
+                        schoolInfo={schoolInfo}
+                        student={student}
+                        data={data}
+                        voucherTitle={customTitle}
+                        copyLabel="- অফিস কপি -"
+                        isBlankAmounts={voucherMode === 'blank_students'}
+                        customLogoUrl={customLogo}
+                        principalSignatureUrl={principalSig}
+                        guardianSignatureUrl={guardianSig}
+                      />
+                    </div>
+                    <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                      <SingleReceiptSlip
+                        schoolInfo={schoolInfo}
+                        student={student}
+                        data={data}
+                        voucherTitle={customTitle}
+                        copyLabel="- শিক্ষার্থী কপি -"
+                        isBlankAmounts={voucherMode === 'blank_students'}
+                        customLogoUrl={customLogo}
+                        principalSignatureUrl={principalSig}
+                        guardianSignatureUrl={guardianSig}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       </div>

@@ -6,21 +6,24 @@ interface SchoolLogoProps {
   size?: number;
 }
 
-export const SchoolLogo: React.FC<SchoolLogoProps> = ({ customLogoUrl, className = '', size = 96 }) => {
+export const SchoolLogo: React.FC<SchoolLogoProps> = ({ customLogoUrl, className = '', size = 64 }) => {
   if (customLogoUrl) {
     return (
       <img
         src={customLogoUrl}
         alt="School Logo"
-        className={`object-contain rounded-full ${className}`}
-        style={{ width: size, height: size }}
+        className={`object-contain ${className}`}
+        style={{ width: size, height: size, minWidth: size, minHeight: size, maxWidth: size, maxHeight: size }}
       />
     );
   }
 
   // Vector emblem accurately reflecting D-Likon Model Academy's official crest from the attached document
   return (
-    <div className={`relative inline-flex items-center justify-center select-none ${className}`} style={{ width: size, height: size }}>
+    <div
+      className={`relative inline-flex items-center justify-center select-none ${className}`}
+      style={{ width: size, height: size, minWidth: size, minHeight: size }}
+    >
       <svg
         viewBox="0 0 200 200"
         className="w-full h-full drop-shadow-sm"

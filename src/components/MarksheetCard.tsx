@@ -1,5 +1,5 @@
-import React from 'react';
-import { Download } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Download, User, Camera } from 'lucide-react';
 import { CalculatedStudentResult, SchoolInfo } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
@@ -11,6 +11,7 @@ interface MarksheetCardProps {
   isPrintMode?: boolean;
   onDownloadPdf?: () => void;
   isExportingPdf?: boolean;
+  onPhotoUpload?: (studentId: string, base64: string) => void;
 }
 
 export const MarksheetCard: React.FC<MarksheetCardProps> = ({
@@ -20,8 +21,23 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
   isPrintMode = false,
   onDownloadPdf,
   isExportingPdf = false,
+  onPhotoUpload,
 }) => {
   const { student, subjectRows, totalFullMarks, grandTotalObtained, gpa, meritPositionBn } = result;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !onPhotoUpload) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      if (base64) {
+        onPhotoUpload(student.id, base64);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div
@@ -62,15 +78,15 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
           </div>
         )}
 
-        {/* HEADER SECTION - EXACTLY LIKE ATTACHED IMAGE */}
+        {/* HEADER SECTION - BALANCED WITH SCHOOL LOGO ON LEFT & STUDENT PHOTO ON RIGHT */}
         <div className="flex items-center justify-between pb-2">
           {/* Logo on the left */}
           <div className="flex-shrink-0 mr-3">
-            <SchoolLogo customLogoUrl={schoolInfo.logoUrl} size={110} />
+            <SchoolLogo customLogoUrl={schoolInfo.logoUrl} size={105} />
           </div>
 
           {/* School Name and Info in center */}
-          <div className="flex-grow text-center">
+          <div className="flex-grow text-center px-2">
             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-black mb-1 font-serif">
               {schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
             </h1>
@@ -86,6 +102,55 @@ export const MarksheetCard: React.FC<MarksheetCardProps> = ({
             <p className="text-sm text-black">
               ই-মেইল:-{schoolInfo.email || 'contact.dlikonmodelacademy@gmail.com'}
             </p>
+          </div>
+
+          {/* Student Confident Passport Photo on the Right */}
+          <div className="flex-shrink-0 ml-3 flex flex-col items-center">
+            <div
+              onClick={() => onPhotoUpload && fileInputRef.current?.click()}
+              title={onPhotoUpload ? 'ছবি পরিবর্তন বা আপলোড করতে ক্লিক করুন' : undefined}
+              className={`w-[85px] h-[105px] border-2 border-black bg-slate-50 flex items-center justify-center overflow-hidden relative shadow-xs ${
+                onPhotoUpload ? 'cursor-pointer hover:border-indigo-600' : ''
+              }`}
+              style={{ width: '85px', height: '105px', boxSizing: 'border-box' }}
+            >
+              {student.avatarUrl ? (
+                <img
+                  src={student.avatarUrl}
+                  alt={student.nameBn}
+                  className="w-full h-full object-cover block"
+                />
+              ) : (
+                <div className="text-center p-1 text-slate-400 flex flex-col items-center justify-center">
+                  <User className="w-8 h-8 mx-auto mb-1 text-slate-400" />
+                  <span className="text-[10px] font-bold block text-slate-600 leading-tight">ছবি নেই</span>
+                  {onPhotoUpload && (
+                    <span className="no-print text-[8px] text-indigo-600 underline mt-0.5">আপলোড</span>
+                  )}
+                </div>
+              )}
+
+              {onPhotoUpload && (
+                <div
+                  className="no-print absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 flex flex-col items-center justify-center text-white transition-opacity duration-150"
+                >
+                  <Camera className="w-5 h-5 text-amber-300" />
+                  <span className="text-[9px] font-bold mt-1">আপলোড</span>
+                </div>
+              )}
+            </div>
+            <span className="text-[10px] font-bold text-black mt-1 font-serif">শিক্ষার্থীর ছবি</span>
+
+            {onPhotoUpload && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+                tabIndex={-1}
+              />
+            )}
           </div>
         </div>
 

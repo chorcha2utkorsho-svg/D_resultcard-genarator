@@ -17,12 +17,66 @@ export interface Student {
   classId: string;
   section: string;
   academicYear: string;
-  fatherName?: string;
-  motherName?: string;
-  guardianPhone?: string;
+  avatarUrl?: string; // ছবি
+  dob?: string; // জন্ম তারিখ (YYYY-MM-DD)
+  birthRegNo?: string; // জন্ম নিবন্ধন নম্বর (১৭ ডিজিট)
   gender?: 'ছাত্র' | 'ছাত্রী';
   bloodGroup?: string;
-  avatarUrl?: string;
+  religion?: string;
+
+  // পিতা সংক্রান্ত বিস্তারিত তথ্য
+  fatherNameBn?: string;
+  fatherNameEn?: string;
+  fatherAvatarUrl?: string; // পিতার ছবি
+  fatherDob?: string;
+  fatherBirthRegNo?: string;
+  fatherNid?: string;
+  fatherPhone?: string;
+  fatherOccupation?: string;
+
+  // মাতা সংক্রান্ত বিস্তারিত তথ্য
+  motherNameBn?: string;
+  motherNameEn?: string;
+  motherAvatarUrl?: string; // মাতার ছবি
+  motherDob?: string;
+  motherBirthRegNo?: string;
+  motherNid?: string;
+  motherPhone?: string;
+  motherOccupation?: string;
+
+  // অভিভাবক ও যোগাযোগ
+  guardianName?: string;
+  guardianRelation?: 'পিতা' | 'মাতা' | 'ভাই' | 'চাচা' | 'অন্যান্য';
+  guardianPhone?: string;
+  guardianNid?: string;
+  emergencyPhone?: string;
+  guardianPin?: string; // অভিভাবকের গোপন পিন বা পাসওয়ার্ড
+
+  // ঠিকানা
+  presentAddress?: string; // বর্তমান ঠিকানা (বাড়ি/রাস্তা, ডাকঘর, উপজেলা, জেলা)
+  permanentAddress?: string; // স্থায়ী ঠিকানা
+
+  // Backward compatibility fields
+  fatherName?: string;
+  motherName?: string;
+
+  // ডিজিটাল সিকিউরিটি ও স্মার্ট আইডি কিউআর কোড
+  securityQrCode?: string; // সিকিউর কিউআর কোড টোকেন
+}
+
+export interface SecurityGatepassLog {
+  id: string;
+  studentId: string;
+  studentNameBn: string;
+  studentRoll: number;
+  classNameBn: string;
+  action: 'entry' | 'exit';
+  timestamp: string; // ISO string
+  guardianPhone: string;
+  voiceDispatched: boolean;
+  smsDispatched: boolean;
+  status: 'verified' | 'flagged';
+  operatorNote?: string;
 }
 
 export interface Subject {

@@ -24,7 +24,10 @@ import {
   PaymentMethod,
   FeeInvoiceStatus,
   StudentFeeBillItem,
+  SecurityGatepassLog,
 } from '../types';
+import { idbSet, idbGet } from '../utils/indexedDbStorage';
+import { compressImageBase64 } from '../utils/imageCompressor';
 import {
   DEFAULT_SCHOOL_INFO,
   DEFAULT_CLASSES,
@@ -232,6 +235,10 @@ interface SchoolContextType {
     studentCount: number;
     dueStudentCount: number;
   };
+  // Digital Security & Gatepass Module
+  securityLogs: SecurityGatepassLog[];
+  addSecurityLog: (log: Omit<SecurityGatepassLog, 'id' | 'timestamp'>) => SecurityGatepassLog;
+  clearSecurityLogs: () => void;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -416,6 +423,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   });
 
+  const [securityLogs, setSecurityLogs] = useState<SecurityGatepassLog[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_security_logs`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Global Filter selections
   const [selectedYear, setSelectedYear] = useState<string>('২০২৬');
   const [selectedExamId, setSelectedExamId] = useState<string>('term_2');
@@ -496,13 +512,85 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [classes]);
 
+  const [isIdbInitialized, setIsIdbInitialized] = useState(false);
+
+  // Initialize students from IndexedDB if available
   useEffect(() => {
+    let isMounted = true;
+    idbGet<Student[]>(`${STORAGE_KEY}_students`).then((idbStudents) => {
+      if (isMounted) {
+        if (idbStudents && Array.isArray(idbStudents) && idbStudents.length > 0) {
+          setStudents((current) => {
+            // Merge photos from IndexedDB with current students to preserve all photos
+            return current.map((curr) => {
+              const fromIdb = idbStudents.find((s) => s.id === curr.id);
+              if (fromIdb) {
+                return {
+                  ...curr,
+                  avatarUrl: fromIdb.avatarUrl || curr.avatarUrl || '',
+                  fatherAvatarUrl: fromIdb.fatherAvatarUrl || curr.fatherAvatarUrl || '',
+                  motherAvatarUrl: fromIdb.motherAvatarUrl || curr.motherAvatarUrl || '',
+                };
+              }
+              return curr;
+            });
+          });
+        }
+        setIsIdbInitialized(true);
+      }
+    }).catch((err) => {
+      console.warn('Could not read students from IndexedDB:', err);
+      if (isMounted) setIsIdbInitialized(true);
+    });
+
+    idbGet<SecurityGatepassLog[]>(`${STORAGE_KEY}_security_logs`).then((logs) => {
+      if (isMounted && logs && Array.isArray(logs) && logs.length > 0) {
+        setSecurityLogs(logs);
+      }
+    }).catch((err) => {
+      console.warn('Could not read security logs from IndexedDB:', err);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Save students to IndexedDB (unlimited) + localStorage (safe fallback)
+  useEffect(() => {
+    if (!isIdbInitialized) return; // Prevent overwriting IndexedDB on initial mount!
+
+    // 1. IndexedDB handles full data (including photos) without quota errors
+    idbSet(`${STORAGE_KEY}_students`, students);
+
+    // 2. Safe localStorage save with QuotaExceededError protection
     try {
       localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(students));
     } catch (e) {
-      console.error('Failed to save students', e);
+      console.warn('localStorage full (QuotaExceededError). Saving lightweight copy without large photos to localStorage; IndexedDB holds full data:', e);
+      try {
+        const lightweight = students.map((s) => ({
+          ...s,
+          avatarUrl: '', // only in localStorage fallback, never in-memory or IndexedDB!
+          fatherAvatarUrl: '',
+          motherAvatarUrl: '',
+        }));
+        localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(lightweight));
+      } catch (innerErr) {
+        console.warn('Could not write lightweight students to localStorage. IndexedDB remains source of truth.', innerErr);
+      }
     }
-  }, [students]);
+  }, [students, isIdbInitialized]);
+
+  // Security gatepass logs persistence
+  useEffect(() => {
+    idbSet(`${STORAGE_KEY}_security_logs`, securityLogs);
+    try {
+      localStorage.setItem(`${STORAGE_KEY}_security_logs`, JSON.stringify(securityLogs));
+    } catch (e) {
+      console.warn('Could not save security logs to localStorage:', e);
+    }
+  }, [securityLogs]);
 
   useEffect(() => {
     try {
@@ -662,17 +750,53 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addStudent = (studentData: Omit<Student, 'id'>): Student => {
     const newId = `std_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const newStudent: Student = { ...studentData, id: newId };
+    const qrCode = studentData.securityQrCode || `DLIKON-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
+    const newStudent: Student = {
+      ...studentData,
+      id: newId,
+      securityQrCode: qrCode,
+    };
+    
+    // Asynchronously compress image in background if large
+    if (studentData.avatarUrl && studentData.avatarUrl.length > 50000) {
+      compressImageBase64(studentData.avatarUrl).then((compressed) => {
+        setStudents((prev) => prev.map((s) => (s.id === newId ? { ...s, avatarUrl: compressed } : s)));
+      });
+    }
+
     setStudents((prev) => [...prev, newStudent]);
     return newStudent;
   };
 
   const updateStudent = (student: Student) => {
-    setStudents((prev) => prev.map((s) => (s.id === student.id ? student : s)));
+    const qrCode = student.securityQrCode || `DLIKON-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
+    const studentWithQr = { ...student, securityQrCode: qrCode };
+
+    if (student.avatarUrl && student.avatarUrl.length > 50000) {
+      compressImageBase64(student.avatarUrl).then((compressed) => {
+        setStudents((prev) => prev.map((s) => (s.id === student.id ? { ...s, avatarUrl: compressed } : s)));
+      });
+    }
+
+    setStudents((prev) => prev.map((s) => (s.id === student.id ? studentWithQr : s)));
   };
 
   const deleteStudent = (studentId: string) => {
     setStudents((prev) => prev.filter((s) => s.id !== studentId));
+  };
+
+  const addSecurityLog = (logData: Omit<SecurityGatepassLog, 'id' | 'timestamp'>): SecurityGatepassLog => {
+    const newLog: SecurityGatepassLog = {
+      ...logData,
+      id: `seclog_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+    };
+    setSecurityLogs((prev) => [newLog, ...prev]);
+    return newLog;
+  };
+
+  const clearSecurityLogs = () => {
+    setSecurityLogs([]);
   };
 
   const bulkImportStudents = (
@@ -1999,6 +2123,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deletePaymentReceipt,
         getStudentDueSummary,
         getClassDueOverview,
+        securityLogs,
+        addSecurityLog,
+        clearSecurityLogs,
       }}
     >
       {children}

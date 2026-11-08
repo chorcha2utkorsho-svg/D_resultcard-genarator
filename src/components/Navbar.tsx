@@ -21,6 +21,8 @@ import {
   CreditCard,
   Receipt,
   ShieldAlert,
+  LayoutGrid,
+  FileBadge,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -40,6 +42,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
     { id: 'subjects', label: 'বিষয় ব্যবস্থাপনা', icon: BookMarked },
     { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
     { id: 'results', label: 'রেজাল্ট ও কার্ড', icon: Printer },
+    { id: 'admit_card', label: 'এডমিট কার্ড', icon: FileBadge },
+    { id: 'seat_plan', label: 'আসন বিন্যাস', icon: LayoutGrid },
+    { id: 'digital_security', label: 'ডিজিটাল সিকিউরিটি', icon: ShieldCheck },
     { id: 'tabulation', label: 'ট্যাবুল্যাশন শিট', icon: TableProperties },
     { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
     { id: 'daily_report', label: 'দৈনিক রিপোর্ট', icon: Receipt },

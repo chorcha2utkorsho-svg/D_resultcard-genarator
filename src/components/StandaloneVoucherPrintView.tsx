@@ -148,19 +148,33 @@ export const StandaloneVoucherPrintView: React.FC = () => {
           padding: 0 !important;
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
+          font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
         }
         .no-print {
           display: none !important;
         }
+        .official-voucher-sheet-wrapper,
         .official-voucher-a4-sheet {
           page-break-after: always !important;
           break-after: page !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          clear: both !important;
+          display: block !important;
+          width: 100% !important;
+        }
+        .official-voucher-a4-sheet {
           margin: 0 auto !important;
           box-shadow: none !important;
           border: none !important;
           width: 100% !important;
+          height: ${layoutMode === 'single_receipt' ? '280mm' : '196mm'} !important;
+          max-height: ${layoutMode === 'single_receipt' ? '280mm' : '196mm'} !important;
+          overflow: hidden !important;
           box-sizing: border-box !important;
+          font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
         }
+        .official-voucher-sheet-wrapper:last-child,
         .official-voucher-a4-sheet:last-child {
           page-break-after: avoid !important;
           break-after: avoid !important;
@@ -170,6 +184,21 @@ export const StandaloneVoucherPrintView: React.FC = () => {
           page-break-inside: avoid !important;
           break-inside: avoid !important;
           box-sizing: border-box !important;
+          height: 100% !important;
+          max-height: 100% !important;
+          overflow: hidden !important;
+          font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
+        }
+        .official-voucher-slip img,
+        img.signature-img,
+        img[alt*="স্বাক্ষর"] {
+          max-height: 22px !important;
+          max-width: 85px !important;
+          width: auto !important;
+          height: auto !important;
+          object-fit: contain !important;
+          display: block !important;
+          margin: 0 auto !important;
         }
       `}</style>
 

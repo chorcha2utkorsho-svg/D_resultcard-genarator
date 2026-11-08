@@ -39,10 +39,22 @@ export const ResultsView: React.FC = () => {
     setSelectedClassId,
     selectedSection,
     setSelectedSection,
+    students,
+    updateStudent,
     getCalculatedResultsForClass,
     sendSingleSMS,
     sendBatchSMS,
   } = useSchool();
+
+  const handleStudentPhotoUpload = (studentId: string, base64: string) => {
+    const student = students.find((s) => s.id === studentId);
+    if (student) {
+      updateStudent({
+        ...student,
+        avatarUrl: base64,
+      });
+    }
+  };
 
   const [viewMode, setViewMode] = useState<'single' | 'batch' | 'analytics'>('single');
   const [selectedStudentIndex, setSelectedStudentIndex] = useState<number>(0);
@@ -666,6 +678,7 @@ export const ResultsView: React.FC = () => {
                 isPrintMode={false}
                 onDownloadPdf={() => handleDownloadSinglePDF(activeResult)}
                 isExportingPdf={isDownloadingPdf}
+                onPhotoUpload={handleStudentPhotoUpload}
               />
             )
           ) : (

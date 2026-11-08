@@ -1,8 +1,9 @@
+@import url('https://fonts.maateen.me/kalpurush/font.css');
 @import "tailwindcss";
 
 @layer base {
   body {
-    font-family: 'Hind Siliguri', system-ui, -apple-system, sans-serif;
+    font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', system-ui, -apple-system, sans-serif;
   }
 }
 
@@ -36,6 +37,31 @@
     background: #ffffff !important;
     padding: 0 !important;
     margin: 0 !important;
+  }
+
+  /* When printing seat plan slips, strictly isolate #seat-plan-printable-area */
+  body.printing-seat-plan #root > div > *:not(main),
+  body.printing-seat-plan main > *:not(#seat-plan-printable-area),
+  body.printing-seat-plan .control-bar-section,
+  body.printing-seat-plan .no-print {
+    display: none !important;
+  }
+
+  body.printing-seat-plan #seat-plan-printable-area {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Universal print suppression for file upload inputs and buttons */
+  input[type="file"],
+  input[type="file"]::file-selector-button {
+    display: none !important;
+    visibility: hidden !important;
+    width: 0 !important;
+    height: 0 !important;
+    opacity: 0 !important;
   }
 
   /* Hide UI elements during print */

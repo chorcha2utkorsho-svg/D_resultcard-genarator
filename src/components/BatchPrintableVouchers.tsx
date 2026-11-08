@@ -17,6 +17,7 @@ import {
   FileCheck,
   Trash2,
   Image as ImageIcon,
+  Eye,
 } from 'lucide-react';
 import { SchoolInfo, Student, FeeInvoice, SchoolClass } from '../types';
 import { toBengaliNumber, toBengaliRoll } from '../utils/bengali';
@@ -24,6 +25,7 @@ import { numberToBengaliWords } from '../utils/bengaliWords';
 import { STANDARD_8_VOUCHER_HEADS } from '../data/defaultData';
 import { SingleReceiptSlip, PrintableReceiptData } from './PrintableReceiptLayout';
 import { downloadPrintableHtml } from '../utils/voucherExport';
+import { RealisticA4LandscapePreviewModal } from './RealisticA4LandscapePreviewModal';
 
 export type VoucherPrintMode = 'blank_students' | 'universal_blank' | 'with_amounts';
 export type PaperSavingLayout =
@@ -82,6 +84,7 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
   );
 
   const [copyLabel, setCopyLabel] = useState<string>('- শিক্ষার্থী কপি (নোটিশ বিল) -');
+  const [isRealisticPreviewOpen, setIsRealisticPreviewOpen] = useState<boolean>(false);
 
   const [universalBlankCount, setUniversalBlankCount] = useState<number>(10);
   const printableAreaRef = useRef<HTMLDivElement>(null);
@@ -286,9 +289,13 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
             padding: 2mm 3mm !important;
             width: 287mm !important;
             max-width: 287mm !important;
+            height: 196mm !important;
+            max-height: 196mm !important;
+            overflow: hidden !important;
             box-shadow: none !important;
             border: none !important;
             box-sizing: border-box !important;
+            font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
           }
           .official-voucher-sheet-wrapper:last-child,
           .official-voucher-a4-sheet:last-child {
@@ -300,11 +307,21 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
             page-break-inside: avoid !important;
             break-inside: avoid !important;
             box-sizing: border-box !important;
+            height: 100% !important;
+            max-height: 100% !important;
+            overflow: hidden !important;
+            font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
           }
-          .official-voucher-slip img {
-            max-height: 26px !important;
-            max-width: 90px !important;
+          .official-voucher-slip img,
+          img.signature-img,
+          img[alt*="স্বাক্ষর"] {
+            max-height: 22px !important;
+            max-width: 85px !important;
+            width: auto !important;
+            height: auto !important;
             object-fit: contain !important;
+            display: block !important;
+            margin: 0 auto !important;
           }
         }
       `}</style>
@@ -328,16 +345,26 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
               </div>
             </div>
 
-            {/* ACTION BUTTON: The single working, verified Blue Print File Download Button */}
-            <div className="flex items-center gap-3">
+            {/* ACTION BUTTONS: Preview Modal & Download HTML */}
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setIsRealisticPreviewOpen(true)}
+                className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center space-x-1.5 shadow-lg cursor-pointer transition border border-emerald-400"
+                title="প্রিন্ট ডায়ালগের আগে হুবহু A4 ল্যান্ডস্কেপ প্রিভিউ দেখুন"
+              >
+                <Eye className="w-4 h-4 text-emerald-200" />
+                <span>👁️ প্রিন্ট প্রিভিউ দেখুন</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleDownloadHtml}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded-xl font-bold text-sm sm:text-base flex items-center space-x-2 shadow-xl cursor-pointer transition ring-2 ring-blue-300"
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded-xl font-bold text-xs sm:text-sm flex items-center space-x-1.5 shadow-xl cursor-pointer transition ring-2 ring-blue-300"
                 title="১ ক্লিকে সম্পূর্ণ প্রিন্ট ফাইল ডাউনলোড করুন (A4 Landscape - পাশাপাশি ২টি স্লিপ)"
               >
-                <FileDown className="w-5 h-5 text-amber-300" />
-                <span>🖨️ প্রিন্ট ফাইল ডাউনলোড করুন (HTML)</span>
+                <FileDown className="w-4 h-4 text-amber-300" />
+                <span>🖨️ প্রিন্ট ফাইল ডাউনলোড (HTML)</span>
               </button>
 
               <button
@@ -829,6 +856,31 @@ export const BatchPrintableVouchers: React.FC<BatchPrintableVouchersProps> = ({
           )}
         </div>
       </div>
+
+      {/* Realistic A4 Landscape Print Preview Modal */}
+      <RealisticA4LandscapePreviewModal
+        isOpen={isRealisticPreviewOpen}
+        onClose={() => setIsRealisticPreviewOpen(false)}
+        schoolInfo={schoolInfo}
+        students={classStudents}
+        groupedStudents={groupedStudents}
+        getStudentVoucherData={getStudentVoucherData}
+        voucherTitle={customTitle}
+        copyLabel={copyLabel}
+        voucherMode={voucherMode}
+        customLogoUrl={customLogo}
+        principalSignatureUrl={principalSig}
+        guardianSignatureUrl={guardianSig}
+        onDownloadHtml={handleDownloadHtml}
+        onTriggerPrint={() => {
+          setIsRealisticPreviewOpen(false);
+          setTimeout(() => {
+            window.focus();
+            window.print();
+          }, 300);
+        }}
+        classNameBn={currentClass?.nameBn || 'শ্রেণি'}
+      />
     </div>
   );
 };

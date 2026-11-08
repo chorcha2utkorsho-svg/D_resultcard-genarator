@@ -70,6 +70,7 @@ export const SingleReceiptSlip: React.FC<PrintableReceiptLayoutProps> = ({
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
+        fontFamily: "'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif",
       }}
     >
       <div className="flex-1 flex flex-col">
@@ -260,15 +261,15 @@ export const SingleReceiptSlip: React.FC<PrintableReceiptLayoutProps> = ({
                   src={guardianSignatureUrl}
                   alt="অভিভাবক স্বাক্ষর"
                   style={{
-                    maxHeight: isSingleReceiptFullA4 ? '34px' : '22px',
-                    maxWidth: isSingleReceiptFullA4 ? '120px' : '85px',
+                    maxHeight: isSingleReceiptFullA4 ? '30px' : '20px',
+                    maxWidth: isSingleReceiptFullA4 ? '110px' : '80px',
                     height: 'auto',
                     width: 'auto',
                     objectFit: 'contain',
                     display: 'block',
                     margin: '0 auto',
                   }}
-                  className={`${isSingleReceiptFullA4 ? 'h-10 max-h-10' : 'h-6 max-h-6'} object-contain`}
+                  className={`signature-img ${isSingleReceiptFullA4 ? 'h-8 max-h-8' : 'h-5 max-h-5'} object-contain`}
                 />
               ) : null}
             </div>
@@ -290,8 +291,8 @@ export const SingleReceiptSlip: React.FC<PrintableReceiptLayoutProps> = ({
             <div
               className={`${isSingleReceiptFullA4 ? 'h-11' : 'h-7'} flex items-end justify-center mb-0.5 w-full`}
               style={{
-                height: isSingleReceiptFullA4 ? '40px' : '26px',
-                maxHeight: isSingleReceiptFullA4 ? '40px' : '26px',
+                height: isSingleReceiptFullA4 ? '36px' : '24px',
+                maxHeight: isSingleReceiptFullA4 ? '36px' : '24px',
                 display: 'flex',
                 alignItems: 'flex-end',
                 justifyContent: 'center',
@@ -303,15 +304,15 @@ export const SingleReceiptSlip: React.FC<PrintableReceiptLayoutProps> = ({
                   src={activePrincipalSig}
                   alt="প্রিন্সিপাল স্বাক্ষর"
                   style={{
-                    maxHeight: isSingleReceiptFullA4 ? '34px' : '22px',
-                    maxWidth: isSingleReceiptFullA4 ? '120px' : '85px',
+                    maxHeight: isSingleReceiptFullA4 ? '30px' : '20px',
+                    maxWidth: isSingleReceiptFullA4 ? '110px' : '80px',
                     height: 'auto',
                     width: 'auto',
                     objectFit: 'contain',
                     display: 'block',
                     margin: '0 auto',
                   }}
-                  className={`${isSingleReceiptFullA4 ? 'h-10 max-h-10' : 'h-6 max-h-6'} object-contain`}
+                  className={`signature-img ${isSingleReceiptFullA4 ? 'h-8 max-h-8' : 'h-5 max-h-5'} object-contain`}
                 />
               ) : null}
             </div>

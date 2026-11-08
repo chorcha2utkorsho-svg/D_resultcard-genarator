@@ -17,6 +17,7 @@ export function downloadPrintableHtml(
   <title>${title} - ${classNameBn}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.maateen.me/kalpurush/font.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     @page {
@@ -29,7 +30,7 @@ export function downloadPrintableHtml(
       print-color-adjust: exact !important;
     }
     body {
-      font-family: 'Hind Siliguri', system-ui, -apple-system, sans-serif;
+      font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', system-ui, -apple-system, sans-serif !important;
       background: #e2e8f0;
       margin: 0;
       padding: 12px;
@@ -42,27 +43,39 @@ export function downloadPrintableHtml(
       padding: 0 !important;
       overflow: hidden !important;
     }
+    .official-voucher-sheet-wrapper,
     .official-voucher-a4-sheet {
       page-break-after: always !important;
       break-after: page !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      clear: both !important;
+      display: block !important;
+    }
+    .official-voucher-a4-sheet {
       width: 287mm !important;
       max-width: 287mm !important;
-      margin: 0 auto 16px auto;
+      height: 196mm !important;
+      max-height: 196mm !important;
+      overflow: hidden !important;
+      margin: 0 auto 20px auto !important;
       background: #ffffff;
       padding: 2mm 3mm;
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
       box-sizing: border-box !important;
     }
+    .official-voucher-sheet-wrapper:last-child,
     .official-voucher-a4-sheet:last-child {
       page-break-after: avoid !important;
       break-after: avoid !important;
-      margin-bottom: 0;
+      margin-bottom: 0 !important;
     }
     .side-by-side-grid {
       display: grid !important;
       grid-template-columns: 1fr 1fr !important;
       gap: 5mm !important;
       width: 100% !important;
+      height: 100% !important;
       position: relative !important;
       box-sizing: border-box !important;
     }
@@ -70,13 +83,28 @@ export function downloadPrintableHtml(
       border: 2px solid #000000 !important;
       background: #ffffff !important;
       width: 100% !important;
+      height: 100% !important;
+      max-height: 100% !important;
       display: flex !important;
       flex-direction: column !important;
       justify-content: space-between !important;
       padding: 6px 10px !important;
       box-sizing: border-box !important;
+      overflow: hidden !important;
       page-break-inside: avoid !important;
       break-inside: avoid !important;
+      font-family: 'Kalpurush', 'Hind Siliguri', 'SolaimanLipi', sans-serif !important;
+    }
+    .official-voucher-slip img,
+    img.signature-img,
+    img[alt*="স্বাক্ষর"] {
+      max-height: 24px !important;
+      max-width: 85px !important;
+      width: auto !important;
+      height: auto !important;
+      object-fit: contain !important;
+      display: block !important;
+      margin: 0 auto !important;
     }
     table {
       border-collapse: collapse !important;
@@ -140,15 +168,26 @@ export function downloadPrintableHtml(
         margin: 0 !important;
         padding: 0 !important;
       }
+      .official-voucher-sheet-wrapper,
       .official-voucher-a4-sheet {
-        margin: 0 auto !important;
-        padding: 0 !important;
-        box-shadow: none !important;
-        width: 100% !important;
-        max-width: 100% !important;
         page-break-after: always !important;
         break-after: page !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        clear: both !important;
+        display: block !important;
       }
+      .official-voucher-a4-sheet {
+        margin: 0 auto !important;
+        padding: 2mm 3mm !important;
+        box-shadow: none !important;
+        width: 287mm !important;
+        max-width: 287mm !important;
+        height: 196mm !important;
+        max-height: 196mm !important;
+        overflow: hidden !important;
+      }
+      .official-voucher-sheet-wrapper:last-child,
       .official-voucher-a4-sheet:last-child {
         page-break-after: avoid !important;
         break-after: avoid !important;
@@ -157,6 +196,20 @@ export function downloadPrintableHtml(
         border: 2px solid #000000 !important;
         page-break-inside: avoid !important;
         break-inside: avoid !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        overflow: hidden !important;
+      }
+      .official-voucher-slip img,
+      img.signature-img,
+      img[alt*="স্বাক্ষর"] {
+        max-height: 24px !important;
+        max-width: 85px !important;
+        width: auto !important;
+        height: auto !important;
+        object-fit: contain !important;
+        display: block !important;
+        margin: 0 auto !important;
       }
     }
   </style>

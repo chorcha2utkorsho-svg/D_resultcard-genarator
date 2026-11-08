@@ -21,6 +21,8 @@ import {
   CreditCard,
   Receipt,
   ShieldAlert,
+  LayoutGrid,
+  FileBadge,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -103,6 +105,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
       icon: Printer,
       color: 'bg-emerald-600 text-white',
       badge: 'কার্ড ও ডেটা ভিজ্যুয়ালাইজেশন',
+    },
+    {
+      id: 'admit_card',
+      title: 'এপিঠ-ওপিঠ এডমিট কার্ড জেনারেটর',
+      desc: '১টি A4 পাতায় ৪টি করে প্রবেশপত্র ও অপর পৃষ্ঠায় পরীক্ষার সাধারণ নিয়মাবলী প্রিন্ট',
+      icon: FileBadge,
+      color: 'bg-amber-600 text-white',
+      badge: 'এপিঠ-ওপিঠ ৪টি/A4',
+    },
+    {
+      id: 'seat_plan',
+      title: 'পরীক্ষার আসন বিন্যাস স্লিপ (ছবি সহ)',
+      desc: '১টি A4 পাতায় ৮টি করে ছবি ও রোল সহ আসন বিন্যাস স্লিপ প্রস্তুত ও এক ক্লিকে প্রিন্ট',
+      icon: LayoutGrid,
+      color: 'bg-indigo-700 text-white',
+      badge: 'ছবি সহ ৮টি/A4',
     },
     {
       id: 'sms',
@@ -208,6 +226,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
               >
                 <Printer className="w-4 h-4 mr-1.5 text-amber-400" />
                 রেজাল্ট কার্ড দেখুন
+              </button>
+              <button
+                onClick={() => onNavigate('digital_security')}
+                className="inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4 mr-1.5 text-emerald-300" />
+                ডিজিটাল সিকিউরিটি গেটপাস
               </button>
               <button
                 onClick={() => onNavigate('bulk_upload')}

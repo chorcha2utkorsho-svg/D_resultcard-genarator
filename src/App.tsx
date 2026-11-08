@@ -24,6 +24,9 @@ import { DailyFeeReportView } from './components/DailyFeeReportView';
 import { DefaulterListView } from './components/DefaulterListView';
 import { BackupSettingsModal } from './components/BackupSettingsModal';
 import { StandaloneVoucherPrintView } from './components/StandaloneVoucherPrintView';
+import { SeatPlanView } from './components/SeatPlanView';
+import { AdmitCardView } from './components/AdmitCardView';
+import { DigitalSecurityGatepassView } from './components/DigitalSecurityGatepassView';
 
 function MainContent() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -62,6 +65,9 @@ function MainContent() {
         {currentTab === 'marks_entry' && <MarkEntryView onNavigate={(tab) => setCurrentTab(tab)} />}
 
         {currentTab === 'results' && <ResultsView />}
+        {currentTab === 'admit_card' && <AdmitCardView />}
+        {currentTab === 'seat_plan' && <SeatPlanView />}
+        {currentTab === 'digital_security' && <DigitalSecurityGatepassView />}
 
         {currentTab === 'tabulation' && (
           <TabulationSheet onNavigate={(tab) => setCurrentTab(tab)} />

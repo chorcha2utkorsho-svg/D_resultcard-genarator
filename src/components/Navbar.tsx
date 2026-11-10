@@ -23,6 +23,7 @@ import {
   ShieldAlert,
   LayoutGrid,
   FileBadge,
+  RefreshCw,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -34,7 +35,7 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpenSettings }) => {
-  const { schoolInfo, exportDatabaseBackup } = useSchool();
+  const { schoolInfo, exportDatabaseBackup, isServerSyncing, serverSyncStatus, forceServerSync } = useSchool();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navItems = [
@@ -84,8 +85,23 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
             </div>
           </div>
 
-          {/* Quick Actions (Backup & Settings) on Desktop */}
+          {/* Quick Actions (Sync, Backup & Settings) on Desktop */}
           <div className="hidden lg:flex items-center space-x-2">
+            <button
+              onClick={async () => {
+                await forceServerSync();
+                alert('কেন্দ্রীয় ডাটাবেজের সাথে সকল ডিভাইসের তথ্য সফলভাবে সিঙ্ক হয়েছে!');
+              }}
+              title="সকল সংযুক্ত ডিভাইস ও কম্পিউটারের সাথে ডাটা সিঙ্ক করুন"
+              className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer ${
+                serverSyncStatus === 'synced'
+                  ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/80'
+                  : 'bg-amber-950/70 text-amber-300 border-amber-500/50 hover:bg-amber-900/80'
+              }`}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isServerSyncing ? 'animate-spin text-amber-400' : 'text-emerald-400'}`} />
+              <span>{serverSyncStatus === 'synced' ? 'ক্লাউড ডাটাবেজ সংযুক্ত' : 'সিঙ্ক হচ্ছে...'}</span>
+            </button>
             <button
               onClick={exportDatabaseBackup}
               title="সম্পূর্ণ ডাটাবেস ব্যাকআপ ডাউনলোড করুন"

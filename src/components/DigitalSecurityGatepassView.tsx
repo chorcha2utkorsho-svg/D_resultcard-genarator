@@ -35,13 +35,19 @@ import {
   Check,
   X,
   FlipHorizontal,
+  Edit3,
+  ExternalLink,
+  Save,
+  Zap,
 } from 'lucide-react';
+import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
 import { Student, SecurityGatepassLog } from '../types';
 import { toBengaliNumber, toBengaliRoll, formatBengaliDate } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { compressImageBase64 } from '../utils/imageCompressor';
+import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport';
 
 // Web Audio API beep sound generator for realistic barcode scanner beep
 const playScannerBeep = (freq = 1900, durationMs = 120) => {
@@ -112,6 +118,11 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     clearSecurityLogs,
     selectedClassId,
     selectedYear,
+    isServerSyncing,
+    serverSyncStatus,
+    lastSyncedTime,
+    forceServerSync,
+    seedParentDetailsForClass,
   } = useSchool();
 
   // Top-Level Active Tab for the 3 core parts mandated by user:
@@ -138,8 +149,14 @@ export const DigitalSecurityGatepassView: React.FC = () => {
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraFacingMode, setCameraFacingMode] = useState<'environment' | 'user'>('environment');
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [hasTorchSupport, setHasTorchSupport] = useState<boolean>(false);
+  const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
+  const [scanSuccessPulse, setScanSuccessPulse] = useState<boolean>(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const lastScannedPayloadRef = useRef<string>('');
+  const lastScannedTimeRef = useRef<number>(0);
+  const scanAnimationFrameRef = useRef<number | null>(null);
 
   // Time state for live security clock
   const [currentTime, setCurrentTime] = useState<string>('');
@@ -161,6 +178,21 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Toggle torch / flashlight if supported on device
+  const toggleTorch = async () => {
+    if (!mediaStreamRef.current) return;
+    const track = mediaStreamRef.current.getVideoTracks()[0];
+    if (track) {
+      try {
+        const nextState = !isTorchOn;
+        await (track.applyConstraints as any)({ advanced: [{ torch: nextState }] });
+        setIsTorchOn(nextState);
+      } catch (err) {
+        console.warn('Torch toggle error:', err);
+      }
+    }
+  };
+
   // Handle camera start/stop
   const startCamera = async () => {
     setCameraError(null);
@@ -168,24 +200,52 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: cameraFacingMode },
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: cameraFacingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
         audio: false,
-      });
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
       setIsCameraActive(true);
+
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        const caps = (track.getCapabilities && (track.getCapabilities() as any)) || {};
+        setHasTorchSupport(Boolean(caps.torch));
+      }
     } catch (err: any) {
-      console.warn('Camera access issue:', err);
-      setCameraError('ক্যামেরা চালু করা যায়নি বা অনুমতি দেওয়া হয়নি। আপনি নিচের বারকোড ইনপুট বক্স ব্যবহার করে সরাসরি স্ক্যান করতে পারেন।');
-      setIsCameraActive(false);
+      console.warn('Camera access issue, trying fallback:', err);
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+        mediaStreamRef.current = fallbackStream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = fallbackStream;
+          await videoRef.current.play();
+        }
+        setIsCameraActive(true);
+      } catch (fErr) {
+        setCameraError('ক্যামেরা চালু করা যায়নি বা অনুমতি দেওয়া হয়নি। আপনি নিচের বারকোড ইনপুট বক্স ব্যবহার করে সরাসরি স্ক্যান করতে পারেন।');
+        setIsCameraActive(false);
+      }
     }
   };
 
   const stopCamera = () => {
+    if (scanAnimationFrameRef.current) {
+      cancelAnimationFrame(scanAnimationFrameRef.current);
+      scanAnimationFrameRef.current = null;
+    }
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
@@ -194,15 +254,25 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
+    setIsTorchOn(false);
   };
 
   useEffect(() => {
     return () => {
+      if (scanAnimationFrameRef.current) {
+        cancelAnimationFrame(scanAnimationFrameRef.current);
+      }
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (isCameraActive) {
+      startCamera();
+    }
+  }, [cameraFacingMode]);
 
   // Bengali Voice Synthesis helper
   const speakBengali = (text: string) => {
@@ -284,27 +354,198 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     }, 4500);
   };
 
-  // Filter students based on barcode input
+  // Filter and match students based on scanned QR code, barcode, roll, or phone
   const handleBarcodeSearchSubmit = (inputQuery: string) => {
     if (!inputQuery.trim()) return;
     const q = inputQuery.toLowerCase().trim();
+    const cleanDigitsQ = q.replace(/\D/g, '');
+
     const matched = students.find((s) => {
-      const matchRoll = String(s.roll) === q || toBengaliNumber(s.roll) === q;
-      const matchBirth = s.birthRegNo && s.birthRegNo.replace(/\D/g, '') === q.replace(/\D/g, '');
-      const matchId = s.id.toLowerCase() === q || s.id.toLowerCase().endsWith(q);
-      const matchQr = s.securityQrCode && s.securityQrCode.toLowerCase().includes(q);
+      const rollStr = String(s.roll).trim();
+      const rollBn = toBengaliNumber(s.roll).trim();
+      const matchRoll = rollStr === q || rollBn === q;
+
+      const sBirthDigits = s.birthRegNo ? s.birthRegNo.replace(/\D/g, '') : '';
+      const matchBirth = Boolean(sBirthDigits && cleanDigitsQ && sBirthDigits === cleanDigitsQ);
+
+      const sIdLower = s.id.toLowerCase();
+      const matchId = sIdLower === q || sIdLower.endsWith(q) || q.includes(sIdLower);
+
+      const matchQr = Boolean(
+        s.securityQrCode &&
+          (s.securityQrCode.toLowerCase().includes(q) || q.includes(s.securityQrCode.toLowerCase()))
+      );
+
+      const sClassStr = (s.classId || '').toLowerCase();
+      const defaultQr = `dlikon-sec-${sClassStr}-${s.roll}-${s.id.slice(-4)}`.toLowerCase();
+      const matchDefaultQr = defaultQr === q || q.includes(defaultQr) || defaultQr.includes(q);
+
+      const hasRollSegment =
+        q.includes(`-${rollStr}-`) ||
+        q.endsWith(`-${rollStr}`) ||
+        q.startsWith(`${rollStr}-`) ||
+        q.includes(`_${rollStr}_`) ||
+        q.endsWith(`_${rollStr}`) ||
+        (q.includes(s.id.toLowerCase().slice(-4)) && q.includes(rollStr));
+
+      const matchClassAndRoll = Boolean(sClassStr && q.includes(sClassStr) && q.includes(rollStr));
+
       const matchName = s.nameBn.toLowerCase().includes(q) || (s.nameEn && s.nameEn.toLowerCase().includes(q));
-      const matchPhone = (s.guardianPhone && s.guardianPhone.includes(q)) || (s.fatherPhone && s.fatherPhone.includes(q));
-      return matchRoll || matchBirth || matchId || matchQr || matchName || matchPhone;
+
+      const sFatherPhoneDigits = s.fatherPhone ? s.fatherPhone.replace(/\D/g, '') : '';
+      const sGuardianPhoneDigits = s.guardianPhone ? s.guardianPhone.replace(/\D/g, '') : '';
+      const matchPhone = Boolean(
+        (cleanDigitsQ.length >= 6 && sFatherPhoneDigits && sFatherPhoneDigits.includes(cleanDigitsQ)) ||
+          (cleanDigitsQ.length >= 6 && sGuardianPhoneDigits && sGuardianPhoneDigits.includes(cleanDigitsQ))
+      );
+
+      return (
+        matchRoll ||
+        matchBirth ||
+        matchId ||
+        matchQr ||
+        matchDefaultQr ||
+        hasRollSegment ||
+        matchClassAndRoll ||
+        matchName ||
+        matchPhone
+      );
     });
 
     if (matched) {
       handleVerifyStudent(matched);
     } else {
-      setScannerFeedback(`❌ "${inputQuery}" নম্বরে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।`);
-      setTimeout(() => setScannerFeedback(null), 3000);
+      setScannerFeedback(`❌ "${inputQuery}" কিউআর কোড বা নম্বরে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।`);
+      setTimeout(() => setScannerFeedback(null), 3500);
     }
   };
+
+  const handleBarcodeSearchSubmitRef = useRef(handleBarcodeSearchSubmit);
+  useEffect(() => {
+    handleBarcodeSearchSubmitRef.current = handleBarcodeSearchSubmit;
+  });
+
+  // Real-Time Camera QR Code Frame Processing Loop (Runs on Mobile Phone Camera)
+  useEffect(() => {
+    if (!isCameraActive) {
+      if (scanAnimationFrameRef.current) {
+        cancelAnimationFrame(scanAnimationFrameRef.current);
+        scanAnimationFrameRef.current = null;
+      }
+      return;
+    }
+
+    let isRunning = true;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    let barcodeDetector: any = null;
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        barcodeDetector = new (window as any).BarcodeDetector({
+          formats: ['qr_code', 'code_128', 'ean_13', 'code_39', 'data_matrix'],
+        });
+      } catch {
+        barcodeDetector = null;
+      }
+    }
+
+    let lastScanTime = 0;
+
+    const processFrame = async () => {
+      if (!isRunning) return;
+
+      const video = videoRef.current;
+      const now = Date.now();
+
+      if (
+        video &&
+        video.readyState >= 2 &&
+        video.videoWidth > 0 &&
+        video.videoHeight > 0 &&
+        now - lastScanTime >= 100
+      ) {
+        lastScanTime = now;
+
+        try {
+          let detectedCode: string | null = null;
+
+          // 1. Try native BarcodeDetector on Chrome Android first
+          if (barcodeDetector) {
+            try {
+              const barcodes = await barcodeDetector.detect(video);
+              if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                detectedCode = barcodes[0].rawValue;
+              }
+            } catch {
+              // Fallback to jsQR
+            }
+          }
+
+          // 2. Fallback to jsQR decoder
+          if (!detectedCode && ctx) {
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            const scale = Math.min(1, 640 / Math.max(vw, vh));
+            const cw = Math.floor(vw * scale);
+            const ch = Math.floor(vh * scale);
+
+            if (canvas.width !== cw || canvas.height !== ch) {
+              canvas.width = cw;
+              canvas.height = ch;
+            }
+
+            ctx.drawImage(video, 0, 0, cw, ch);
+            const imgData = ctx.getImageData(0, 0, cw, ch);
+            const qrResult = jsQR(imgData.data, cw, ch, {
+              inversionAttempts: 'attemptBoth',
+            });
+
+            if (qrResult && qrResult.data) {
+              detectedCode = qrResult.data;
+            }
+          }
+
+          if (detectedCode && detectedCode.trim()) {
+            const trimmed = detectedCode.trim();
+            const timeSinceLast = Date.now() - lastScannedTimeRef.current;
+
+            if (trimmed !== lastScannedPayloadRef.current || timeSinceLast > 2500) {
+              lastScannedPayloadRef.current = trimmed;
+              lastScannedTimeRef.current = Date.now();
+
+              if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                try {
+                  navigator.vibrate([80, 40, 80]);
+                } catch {}
+              }
+
+              setScanSuccessPulse(true);
+              setTimeout(() => setScanSuccessPulse(false), 900);
+
+              handleBarcodeSearchSubmitRef.current(trimmed);
+            }
+          }
+        } catch (err) {
+          console.warn('QR scan processing error:', err);
+        }
+      }
+
+      if (isRunning) {
+        scanAnimationFrameRef.current = requestAnimationFrame(processFrame);
+      }
+    };
+
+    scanAnimationFrameRef.current = requestAnimationFrame(processFrame);
+
+    return () => {
+      isRunning = false;
+      if (scanAnimationFrameRef.current) {
+        cancelAnimationFrame(scanAnimationFrameRef.current);
+        scanAnimationFrameRef.current = null;
+      }
+    };
+  }, [isCameraActive]);
 
   // =========================================================================
   // PART 1: GUARDIAN ACCOUNT LOGIN & PRIVATE DASHBOARD STATES
@@ -379,10 +620,125 @@ export const DigitalSecurityGatepassView: React.FC = () => {
   const [selectedStudentForIdCard, setSelectedStudentForIdCard] = useState<Student | null>(null);
   const [photoTargetStudentId, setPhotoTargetStudentId] = useState<string>('');
 
+  // Print & Quick Edit States
+  const printSheetsContainerRef = useRef<HTMLDivElement>(null);
+  const [idCardDisplayMode, setIdCardDisplayMode] = useState<'cards' | 'sheets'>('cards');
+  const [quickEditStudent, setQuickEditStudent] = useState<Student | null>(null);
+
   const idCardFilteredStudents = useMemo(() => {
     if (idCardClassFilter === 'all') return students;
     return students.filter((s) => s.classId === idCardClassFilter);
   }, [students, idCardClassFilter]);
+
+  // Compute exact 4-cards-per-A4-page chunks (2x2 grid layout)
+  interface IdCardPrintSlot {
+    student: Student;
+    side: 'front' | 'back';
+    studentIndex: number;
+  }
+
+  interface IdCardPrintSheet {
+    sheetIndex: number;
+    slots: IdCardPrintSlot[];
+  }
+
+  const idCardPrintSheets = useMemo<IdCardPrintSheet[]>(() => {
+    const sheets: IdCardPrintSheet[] = [];
+
+    if (idCardSideView === 'both') {
+      // Both sides: 2 students per A4 sheet (2 front + 2 back = 4 cards per sheet)
+      for (let i = 0; i < idCardFilteredStudents.length; i += 2) {
+        const slots: IdCardPrintSlot[] = [];
+        const std1 = idCardFilteredStudents[i];
+        if (std1) {
+          slots.push({ student: std1, side: 'front', studentIndex: i });
+          slots.push({ student: std1, side: 'back', studentIndex: i });
+        }
+        const std2 = idCardFilteredStudents[i + 1];
+        if (std2) {
+          slots.push({ student: std2, side: 'front', studentIndex: i + 1 });
+          slots.push({ student: std2, side: 'back', studentIndex: i + 1 });
+        }
+        sheets.push({
+          sheetIndex: sheets.length,
+          slots,
+        });
+      }
+    } else {
+      // Single side (front or back): 4 students per A4 sheet
+      const side = idCardSideView;
+      for (let i = 0; i < idCardFilteredStudents.length; i += 4) {
+        const slots: IdCardPrintSlot[] = [];
+        for (let j = 0; j < 4; j++) {
+          const std = idCardFilteredStudents[i + j];
+          if (std) {
+            slots.push({ student: std, side, studentIndex: i + j });
+          }
+        }
+        sheets.push({
+          sheetIndex: sheets.length,
+          slots,
+        });
+      }
+    }
+
+    return sheets;
+  }, [idCardFilteredStudents, idCardSideView]);
+
+  // Clean print triggers that bypass iframe sandboxing and use pristine A4 sheets
+  const handleOpenPrintTab = () => {
+    const targetClass = classes.find((c) => c.id === idCardClassFilter);
+    const classNameBn = targetClass ? targetClass.nameBn : 'সকল শ্রেণি';
+    const container = printSheetsContainerRef.current;
+    if (!container || !container.innerHTML.trim()) {
+      alert('প্রিন্ট করার মতো কোনো কার্ড পাওয়া যায়নি।');
+      return;
+    }
+    const modeDesc =
+      idCardSideView === 'both'
+        ? `এপিঠ ও ওপিঠ (প্রতি পাতায় ২ জন = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        : idCardSideView === 'front'
+        ? `১ম পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        : `২য় পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`;
+    openIdCardsInNewTab(schoolInfo.name, classNameBn, container.innerHTML, modeDesc);
+  };
+
+  const handleDownloadOfflinePrintHtml = () => {
+    const targetClass = classes.find((c) => c.id === idCardClassFilter);
+    const classNameBn = targetClass ? targetClass.nameBn : 'সকল শ্রেণি';
+    const container = printSheetsContainerRef.current;
+    if (!container || !container.innerHTML.trim()) {
+      alert('ডাউনলোড করার মতো কোনো কার্ড পাওয়া যায়নি।');
+      return;
+    }
+    const modeDesc =
+      idCardSideView === 'both'
+        ? `এপিঠ ও ওপিঠ (প্রতি পাতায় ২ জন = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        : idCardSideView === 'front'
+        ? `১ম পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        : `২য় পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`;
+    downloadIdCardsHtml(schoolInfo.name, classNameBn, container.innerHTML, modeDesc);
+  };
+
+  const handleSaveQuickEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickEditStudent) return;
+    const father = (quickEditStudent.fatherNameBn || quickEditStudent.fatherName || '').trim();
+    const mother = (quickEditStudent.motherNameBn || quickEditStudent.motherName || '').trim();
+    const phone = (quickEditStudent.fatherPhone || quickEditStudent.guardianPhone || '').trim();
+
+    const updated: Student = {
+      ...quickEditStudent,
+      fatherName: father,
+      fatherNameBn: father,
+      motherName: mother,
+      motherNameBn: mother,
+      fatherPhone: phone,
+      guardianPhone: phone,
+    };
+    updateStudent(updated);
+    setQuickEditStudent(null);
+  };
 
   // Handle uploading photos directly from ID card component
   const handleIdCardPhotoUpload = async (
@@ -624,37 +980,61 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Animated Laser Scanning Line */}
-                    <div className="absolute inset-x-4 top-1/4 bottom-1/4 border-2 border-dashed border-emerald-400/80 rounded-2xl pointer-events-none flex flex-col justify-center items-center">
-                      <div className="w-full h-0.5 bg-rose-500 shadow-[0_0_12px_#ef4444] animate-bounce" />
-                      <div className="text-[9px] font-mono text-emerald-300 bg-slate-950/80 px-2 py-0.5 rounded mt-2 uppercase tracking-widest">
-                        [ বারকোড / QR ফোকাস করুন ]
-                      </div>
+                    {/* Animated Laser Scanning Line & Real-Time QR Detection Focus */}
+                    <div className={`absolute inset-x-4 top-1/5 bottom-1/5 border-2 border-dashed ${scanSuccessPulse ? 'border-emerald-400 bg-emerald-500/25 ring-4 ring-emerald-400/50' : 'border-emerald-400/80'} rounded-2xl pointer-events-none flex flex-col justify-center items-center transition-all duration-200`}>
+                      {scanSuccessPulse ? (
+                        <div className="bg-emerald-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl shadow-xl flex items-center gap-1.5 animate-bounce">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                          <span>যাচাই ও গেটপাস সম্পন্ন!</span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="w-full h-0.5 bg-rose-500 shadow-[0_0_12px_#ef4444] animate-bounce" />
+                          <div className="text-[9.5px] font-mono text-emerald-300 bg-slate-950/85 px-2.5 py-1 rounded-md mt-2 tracking-wider flex items-center gap-1.5 shadow-md">
+                            <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
+                            <span>[ কার্ডের কিউআর কোড ফোকাস করুন ]</span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
                   {/* Camera Control Overlays at bottom */}
                   <div className="relative z-20 space-y-2 pt-2">
                     {isCameraActive && (
-                      <div className="flex items-center justify-between bg-slate-950/80 backdrop-blur-sm p-2 rounded-xl border border-slate-800">
+                      <div className="flex items-center justify-between gap-1.5 bg-slate-950/85 backdrop-blur-sm p-2 rounded-xl border border-slate-800">
                         <button
                           type="button"
                           onClick={() => {
                             setCameraFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
-                            setTimeout(startCamera, 100);
                           }}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1"
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                          title="সামনে বা পেছনের ক্যামেরা বদলান"
                         >
-                          <FlipHorizontal className="w-3 h-3" />
-                          <span>ক্যামেরা বদলান</span>
+                          <FlipHorizontal className="w-3.5 h-3.5" />
+                          <span>ক্যামেরা</span>
                         </button>
+
+                        {hasTorchSupport && (
+                          <button
+                            type="button"
+                            onClick={toggleTorch}
+                            className={`px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold flex items-center gap-1 transition cursor-pointer ${
+                              isTorchOn ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                            }`}
+                            title="ফ্ল্যাশ লাইট চালু/বন্ধ করুন"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>{isTorchOn ? 'লাইট অন' : 'লাইট'}</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
                           onClick={stopCamera}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1"
+                          className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-3.5 h-3.5" />
                           <span>বন্ধ করুন</span>
                         </button>
                       </div>
@@ -1289,16 +1669,78 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                 </p>
               </div>
 
-              {/* Print Batch Button */}
-              <div className="flex items-center gap-2">
+              {/* Print Batch & Cloud Sync Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-                  title="A4 পেপারে কার্ডসমূহ প্রিন্ট করুন"
+                  onClick={handleOpenPrintTab}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-2 shadow-md cursor-pointer hover:shadow-lg"
+                  title="A4 পেপারে কার্ডসমূহ সরাসরি প্রিন্ট করুন (নতুন ট্যাবে প্রিন্ট উইন্ডো ওপেন হবে)"
                 >
-                  <Printer className="w-4 h-4" />
-                  <span>A4 পেপারে প্রিন্ট করুন (Print A4)</span>
+                  <Printer className="w-4 h-4 text-white" />
+                  <div className="text-left">
+                    <span className="block leading-tight font-black">A4 পেপারে প্রিন্ট করুন (Print A4)</span>
+                    <span className="text-[10px] text-indigo-200 font-normal">
+                      প্রতি পাতায় ৪টি • মোট {toBengaliNumber(idCardPrintSheets.length)} পাতা
+                    </span>
+                  </div>
+                </button>
+
+                {/* View Mode Toggle: Card Editor vs A4 Sheet Preview */}
+                <div className="inline-flex rounded-xl p-0.5 bg-slate-100 border border-slate-200 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setIdCardDisplayMode('cards')}
+                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1 ${
+                      idCardDisplayMode === 'cards'
+                        ? 'bg-white text-indigo-900 shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-amber-500" />
+                    <span>কার্ড ও ফটো এডিটর</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIdCardDisplayMode('sheets')}
+                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1 ${
+                      idCardDisplayMode === 'sheets'
+                        ? 'bg-white text-indigo-900 shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>A4 পেজ ভিউ ({toBengaliNumber(idCardPrintSheets.length)} পাতা)</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadOfflinePrintHtml}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  title="অফলাইনে যেকোনো ডিভাইসে প্রিন্ট করার জন্য A4 HTML ডাউনলোড করুন"
+                >
+                  <Download className="w-4 h-4 text-amber-400" />
+                  <span className="hidden sm:inline">অফলাইন ফাইল (.html)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await forceServerSync();
+                    alert('কেন্দ্রীয় ক্লাউড সার্ভারের সাথে সকল ডিভাইসের তথ্য সফলভাবে সিঙ্ক হয়েছে!');
+                  }}
+                  className={`px-2.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer border ${
+                    serverSyncStatus === 'synced'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                  }`}
+                  title="অন্যান্য ডিভাইসের ডেটার সাথে সিঙ্ক করুন"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isServerSyncing ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+                  <span className="hidden sm:inline">
+                    {serverSyncStatus === 'synced' ? 'ক্লাউড সিঙ্কড' : 'সিঙ্ক করুন'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -1407,7 +1849,21 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetClassId = idCardClassFilter !== 'all' ? idCardClassFilter : 'class_play';
+                      const count = seedParentDetailsForClass(targetClassId);
+                      alert(`${toBengaliNumber(count)} জন শিক্ষার্থীর পিতা-মাতার নাম, মোবাইল ও এনআইডি যুক্ত করা হয়েছে এবং সার্ভারে সংরক্ষিত হয়েছে!`);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-lg transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                    title="নির্বাচিত শ্রেণির শিক্ষার্থীদের পিতা-মাতার নাম, মোবাইল নম্বর ও এনআইডি পূরণ করুন"
+                  >
+                    <Heart className="w-3.5 h-3.5" />
+                    <span>পিতা-মাতার পূর্ণ তথ্য পূরণ করুন</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={handleLoadSamplePhotosForPlayClass}
@@ -1473,24 +1929,113 @@ export const DigitalSecurityGatepassView: React.FC = () => {
             </div>
           </div>
 
-          {/* Cards Display Grid */}
-          <div
-            className={`grid gap-6 print:grid-cols-2 ${
-              idCardOrientation === 'portrait'
-                ? idCardSideView === 'both'
-                  ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
-                  : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4'
-                : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
-            }`}
-          >
-            {idCardFilteredStudents.length === 0 ? (
-              <div className="col-span-full py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
-                <CreditCard className="w-12 h-12 mx-auto text-slate-300 mb-2" />
-                <div className="font-bold text-slate-700">এই শ্রেণিতে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।</div>
-                <p className="text-xs text-slate-400 mt-1">শিক্ষার্থী ম্যানেজমেন্ট থেকে শিক্ষার্থী যুক্ত করুন।</p>
+          {/* ID Cards Display: Either Card Editor Grid OR A4 Sheets Preview */}
+          {idCardFilteredStudents.length === 0 ? (
+            <div className="col-span-full py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+              <CreditCard className="w-12 h-12 mx-auto text-slate-300 mb-2" />
+              <div className="font-bold text-slate-700">এই শ্রেণিতে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।</div>
+              <p className="text-xs text-slate-400 mt-1">শিক্ষার্থী ম্যানেজমেন্ট থেকে শিক্ষার্থী যুক্ত করুন।</p>
+            </div>
+          ) : idCardDisplayMode === 'sheets' ? (
+            /* A4 Sheets Page Preview (Exact 4 Cards per Page) */
+            <div className="space-y-8">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs text-indigo-950 font-medium">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  <span>
+                    <strong>এ৪ পেপার প্রিভিউ মোড:</strong> প্রতি পৃষ্ঠায় ৪টি করে কার্ড সাজানো হয়েছে। ৫ম থেকে ৮ম কার্ড পরবর্তী পৃষ্ঠায় স্বয়ংক্রিয়ভাবে সেট হবে।
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 font-bold">
+                  <span className="bg-white px-2.5 py-1 rounded-lg border border-indigo-200 text-indigo-900 shadow-2xs">
+                    মোট শিক্ষার্থী: {toBengaliNumber(idCardFilteredStudents.length)} জন
+                  </span>
+                  <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-lg shadow-2xs">
+                    মোট এ৪ পৃষ্ঠা: {toBengaliNumber(idCardPrintSheets.length)} টি
+                  </span>
+                </div>
               </div>
-            ) : (
-              idCardFilteredStudents.map((std) => {
+
+              {idCardPrintSheets.map((sheet) => {
+                const sheetNumber = sheet.sheetIndex + 1;
+                const startCardIdx = sheet.sheetIndex * 4 + 1;
+                const endCardIdx = sheet.sheetIndex * 4 + sheet.slots.length;
+
+                return (
+                  <div
+                    key={`preview-sheet-${sheet.sheetIndex}`}
+                    className="bg-white rounded-2xl border-2 border-indigo-100 shadow-sm p-4 sm:p-6 space-y-4"
+                  >
+                    {/* Sheet Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-indigo-600 text-white font-mono font-bold px-3 py-1 rounded-xl text-xs shadow-2xs">
+                          এ৪ পৃষ্ঠা নং: {toBengaliNumber(sheetNumber)}
+                        </span>
+                        <span className="text-xs font-bold text-slate-800">
+                          {idCardSideView === 'both'
+                            ? `২ জন শিক্ষার্থীর এপিঠ ও ওপিঠ (কার্ড ${toBengaliNumber(startCardIdx)} - ${toBengaliNumber(endCardIdx)})`
+                            : `কার্ড ${toBengaliNumber(startCardIdx)} থেকে ${toBengaliNumber(endCardIdx)} (মোট ৪টি)`}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <span>স্ট্যান্ডার্ড A4 (210×297 মিমি)</span>
+                        <span>•</span>
+                        <span className="text-emerald-700 font-bold">কাটিং রেডি</span>
+                      </div>
+                    </div>
+
+                    {/* 2x2 Grid of 4 Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 justify-items-center items-center py-2 bg-slate-50/60 rounded-xl p-4 border border-dashed border-slate-200">
+                      {sheet.slots.map((slot, sIdx) => {
+                        const cls = classes.find((c) => c.id === slot.student.classId);
+                        const classNameBn = cls?.nameBn || 'শ্রেণি';
+
+                        return (
+                          <div
+                            key={`preview-slot-${slot.student.id}-${slot.side}-${sIdx}`}
+                            className="flex flex-col items-center p-2 rounded-xl border border-dashed border-slate-300 bg-white shadow-2xs relative group"
+                          >
+                            <div className="text-[10px] font-bold text-slate-400 mb-1 flex items-center justify-between w-full px-1">
+                              <span>
+                                {slot.side === 'front' ? '১ম পৃষ্ঠা (এপিঠ)' : '২য় পৃষ্ঠা (ওপিঠ)'}
+                              </span>
+                              <span className="font-mono text-indigo-800">
+                                রোল: {toBengaliRoll(slot.student.roll)}
+                              </span>
+                            </div>
+
+                            <StudentIDCardSlip
+                              student={slot.student}
+                              classNameBn={classNameBn}
+                              schoolInfo={schoolInfo}
+                              side={slot.side}
+                              orientation={idCardOrientation}
+                              academicYear={selectedYear || '২০২৬'}
+                              onPhotoUpload={handleIdCardPhotoUpload}
+                              onEditDetails={(target) => setQuickEditStudent(target)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Traditional Card List & Photo/Details Editor Grid */
+            <div
+              className={`grid gap-6 ${
+                idCardOrientation === 'portrait'
+                  ? idCardSideView === 'both'
+                    ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
+                    : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4'
+                  : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-2'
+              }`}
+            >
+              {idCardFilteredStudents.map((std) => {
                 const cls = classes.find((c) => c.id === std.classId);
                 const classNameBn = cls?.nameBn || 'শ্রেণি';
 
@@ -1509,9 +2054,20 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                         <span className="text-slate-500 font-medium">({classNameBn})</span>
                       </div>
 
-                      <div className="flex items-center gap-1 text-[11px] text-slate-500">
-                        <Phone className="w-3 h-3 text-emerald-600" />
-                        <span>{std.guardianPhone || std.fatherPhone || '-'}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setQuickEditStudent(std)}
+                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-[10.5px] rounded-lg transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                          title="পিতা ও মাতার নাম, ফোন নম্বর ও এনআইডি এডিট করুন"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>পিতা-মাতার তথ্য এডিট</span>
+                        </button>
+                        <div className="hidden sm:flex items-center gap-1 text-[11px] text-slate-500">
+                          <Phone className="w-3 h-3 text-emerald-600" />
+                          <span>{std.guardianPhone || std.fatherPhone || '-'}</span>
+                        </div>
                       </div>
                     </div>
 
@@ -1531,6 +2087,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                             orientation={idCardOrientation}
                             academicYear={selectedYear || '২০২৬'}
                             onPhotoUpload={handleIdCardPhotoUpload}
+                            onEditDetails={(target) => setQuickEditStudent(target)}
                           />
                         </div>
                       )}
@@ -1549,14 +2106,60 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                             orientation={idCardOrientation}
                             academicYear={selectedYear || '২০২৬'}
                             onPhotoUpload={handleIdCardPhotoUpload}
+                            onEditDetails={(target) => setQuickEditStudent(target)}
                           />
                         </div>
                       )}
                     </div>
                   </div>
                 );
-              })
-            )}
+              })}
+            </div>
+          )}
+
+          {/* 
+            Dedicated Hidden Print Source Container:
+            Pre-chunked into exact 4-card A4 Sheets (2x2 grid) for the print engine.
+            Contains only pure StudentIDCardSlip cards wrapped in .id-card-a4-sheet,
+            with no screen headers, phone banners, or edit buttons.
+          */}
+          <div
+            ref={printSheetsContainerRef}
+            id="id-card-print-sheets-source"
+            className="hidden"
+            aria-hidden="true"
+          >
+            {idCardPrintSheets.map((sheet) => (
+              <div
+                key={`print-sheet-${sheet.sheetIndex}`}
+                className="id-card-a4-sheet"
+              >
+                {sheet.slots.map((slot, sIdx) => {
+                  const cls = classes.find((c) => c.id === slot.student.classId);
+                  const classNameBn = cls?.nameBn || 'শ্রেণি';
+                  return (
+                    <div
+                      key={`slot-${slot.student.id}-${slot.side}-${sIdx}`}
+                      className="id-card-print-slot"
+                    >
+                      <div className="id-card-slot-wrapper">
+                        <StudentIDCardSlip
+                          student={slot.student}
+                          classNameBn={classNameBn}
+                          schoolInfo={schoolInfo}
+                          side={slot.side}
+                          orientation={idCardOrientation}
+                          academicYear={selectedYear || '২০২৬'}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="sheet-watermark">
+                  পাতা: {toBengaliNumber(sheet.sheetIndex + 1)} / {toBengaliNumber(idCardPrintSheets.length)} • {schoolInfo.name}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1698,6 +2301,291 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* QUICK EDIT STUDENT & PARENT DETAILS MODAL                                 */}
+      {/* ========================================================================= */}
+      {quickEditStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border-2 border-indigo-900 w-full max-w-xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#091e42] to-indigo-900 text-white p-4 flex items-center justify-between border-b-2 border-amber-500">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-400 text-slate-950 rounded-xl">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-serif">
+                    অভিভাবক ও শিক্ষার্থীর তথ্য এডিট
+                  </h3>
+                  <div className="text-xs text-amber-300 font-medium">
+                    {quickEditStudent.nameBn} • রোল: {toBengaliRoll(quickEditStudent.roll)}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setQuickEditStudent(null)}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form Body */}
+            <form onSubmit={handleSaveQuickEdit} className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs">
+              {/* Father Section */}
+              <div className="border border-indigo-200 rounded-xl p-3 bg-indigo-50/40 space-y-2.5">
+                <div className="flex items-center gap-1.5 text-indigo-950 font-bold border-b border-indigo-100 pb-1.5">
+                  <User className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs uppercase tracking-wide">পিতার তথ্য (Father Details)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      পিতার নাম (বাংলা) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.fatherNameBn || quickEditStudent.fatherName || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          fatherNameBn: e.target.value,
+                          fatherName: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: মোঃ আবুল কাশেম"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      পিতার নাম (English)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.fatherNameEn || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          fatherNameEn: e.target.value,
+                        })
+                      }
+                      placeholder="e.g. Md. Abul Kashem"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      পিতার মোবাইল নম্বর <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      value={quickEditStudent.fatherPhone || quickEditStudent.guardianPhone || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          fatherPhone: e.target.value,
+                          guardianPhone: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: 01712345678"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      পিতার জাতীয় পরিচয়পত্র (NID)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.fatherNid || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          fatherNid: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: 1984261529100012"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Mother Section */}
+              <div className="border border-rose-200 rounded-xl p-3 bg-rose-50/40 space-y-2.5">
+                <div className="flex items-center gap-1.5 text-rose-950 font-bold border-b border-rose-100 pb-1.5">
+                  <Heart className="w-4 h-4 text-rose-600" />
+                  <span className="text-xs uppercase tracking-wide">মাতার তথ্য (Mother Details)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      মাতার নাম (বাংলা) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.motherNameBn || quickEditStudent.motherName || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          motherNameBn: e.target.value,
+                          motherName: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: নাসরিন জাহান"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      মাতার নাম (English)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.motherNameEn || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          motherNameEn: e.target.value,
+                        })
+                      }
+                      placeholder="e.g. Nasrin Jahan"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      মাতার মোবাইল নম্বর
+                    </label>
+                    <input
+                      type="tel"
+                      value={quickEditStudent.motherPhone || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          motherPhone: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: 01812345679"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      মাতার জাতীয় পরিচয়পত্র (NID)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.motherNid || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          motherNid: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: 1987261529100045"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Address & Emergency Info */}
+              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      রক্তের গ্রুপ (Blood Group)
+                    </label>
+                    <select
+                      value={quickEditStudent.bloodGroup || 'A+'}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          bloodGroup: e.target.value,
+                        })
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-bold"
+                    >
+                      {['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'].map((bg) => (
+                        <option key={bg} value={bg}>
+                          {bg}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      জরুরি যোগাযোগ ফোন নম্বর
+                    </label>
+                    <input
+                      type="tel"
+                      value={quickEditStudent.emergencyPhone || quickEditStudent.guardianPhone || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          emergencyPhone: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: 01712345678"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    বর্তমান ঠিকানা (ঠিকানা কার্ডের পেছনে মুদ্রিত হবে)
+                  </label>
+                  <input
+                    type="text"
+                    value={quickEditStudent.presentAddress || ''}
+                    onChange={(e) =>
+                      setQuickEditStudent({
+                        ...quickEditStudent,
+                        presentAddress: e.target.value,
+                      })
+                    }
+                    placeholder="উদা: দক্ষিণগাঁও, সনমানিয়া, কাপাসিয়া, গাজীপুর।"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setQuickEditStudent(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold transition cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>সংরক্ষণ ও আপডেট করুন</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -392,19 +392,29 @@ export const BulkStudentRegistration: React.FC<BulkStudentRegistrationProps> = (
     setIsSubmitting(true);
 
     try {
-      const payload = validRows.map((r) => ({
-        roll: r.roll,
-        nameBn: r.nameBn,
-        nameEn: r.nameEn || '',
-        classId: r.classId || selectedClassId,
-        section: r.section || selectedSection || 'ক',
-        gender: r.gender,
-        guardianPhone: r.guardianPhone || '',
-        fatherName: r.fatherName || '',
-        motherName: r.motherName || '',
-        bloodGroup: r.bloodGroup || '',
-        academicYear: r.academicYear || selectedYear,
-      }));
+      const payload = validRows.map((r) => {
+        const father = (r.fatherName || '').trim();
+        const mother = (r.motherName || '').trim();
+        const phone = (r.guardianPhone || '').trim();
+        return {
+          roll: r.roll,
+          nameBn: r.nameBn,
+          nameEn: r.nameEn || '',
+          classId: r.classId || selectedClassId,
+          section: r.section || selectedSection || 'ক',
+          gender: r.gender,
+          guardianPhone: phone,
+          guardianName: father || mother || 'অভিভাবক',
+          fatherName: father,
+          fatherNameBn: father,
+          fatherPhone: phone,
+          motherName: mother,
+          motherNameBn: mother,
+          motherPhone: phone,
+          bloodGroup: r.bloodGroup || '',
+          academicYear: r.academicYear || selectedYear,
+        };
+      });
 
       const distinctClassIds = Array.from(new Set(payload.map((s) => s.classId)));
 

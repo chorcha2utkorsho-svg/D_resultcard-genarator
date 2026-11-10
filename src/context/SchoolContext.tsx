@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   SchoolInfo,
   SchoolClass,
@@ -43,7 +43,7 @@ import {
   INITIAL_FEE_INVOICES,
   INITIAL_PAYMENT_RECEIPTS,
 } from '../data/defaultData';
-import { calculateGrade, formatGpa, getOverallGradeFromGpa, toBengaliOrdinal } from '../utils/bengali';
+import { calculateGrade, formatGpa, getOverallGradeFromGpa, toBengaliOrdinal, toBengaliNumber } from '../utils/bengali';
 import { numberToBengaliWords } from '../utils/bengaliWords';
 
 interface SchoolContextType {
@@ -239,6 +239,14 @@ interface SchoolContextType {
   securityLogs: SecurityGatepassLog[];
   addSecurityLog: (log: Omit<SecurityGatepassLog, 'id' | 'timestamp'>) => SecurityGatepassLog;
   clearSecurityLogs: () => void;
+  clearAllStudents: () => Promise<void>;
+  scanAndRecoverBrowserData: () => Promise<{ studentCount: number; message: string }>;
+  // Multi-Device Server Synchronization
+  isServerSyncing: boolean;
+  serverSyncStatus: 'synced' | 'syncing' | 'offline' | 'error';
+  lastSyncedTime: string;
+  forceServerSync: () => Promise<void>;
+  seedParentDetailsForClass: (classId: string) => number;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -270,7 +278,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [students, setStudents] = useState<Student[]>(() => {
     try {
       const saved = localStorage.getItem(`${STORAGE_KEY}_students`);
-      return saved ? JSON.parse(saved) : INITIAL_STUDENTS;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id));
+        }
+      }
+      return INITIAL_STUDENTS;
     } catch {
       return INITIAL_STUDENTS;
     }
@@ -278,16 +292,18 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [examRecords, setExamRecords] = useState<Record<string, StudentExamRecord>>(() => {
     try {
-      const initialMap: Record<string, StudentExamRecord> = {};
-      INITIAL_EXAM_RECORDS.forEach((rec) => {
-        initialMap[rec.id] = rec;
-      });
       const saved = localStorage.getItem(`${STORAGE_KEY}_exam_records`);
       if (saved) {
         const parsed = JSON.parse(saved);
-        return { ...initialMap, ...parsed };
+        const cleaned: Record<string, StudentExamRecord> = {};
+        Object.entries(parsed).forEach(([k, v]: [string, any]) => {
+          if (v && v.studentId && !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(v.studentId)) {
+            cleaned[k] = v;
+          }
+        });
+        return cleaned;
       }
-      return initialMap;
+      return {};
     } catch {
       return {};
     }
@@ -513,48 +529,299 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [classes]);
 
   const [isIdbInitialized, setIsIdbInitialized] = useState(false);
+  const [isServerSyncing, setIsServerSyncing] = useState<boolean>(false);
+  const [serverSyncStatus, setServerSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('syncing');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>('');
+  const lastSyncTimestampRef = useRef<number>(0);
+  const isInitialServerLoadDone = useRef<boolean>(false);
 
-  // Initialize students from IndexedDB if available
+  // Keep a reference to latest state so pushToServer doesn't need to recreate on every render
+  const latestStateRef = useRef({
+    schoolInfo,
+    classes,
+    students,
+    examRecords,
+    syllabi,
+    notes,
+    questionPapers,
+    smsLogs,
+    smsGatewayConfig,
+    attendanceRecords,
+    calendarEvents,
+    feeHeads,
+    feeInvoices,
+    feeReceipts,
+    securityLogs,
+  });
+
+  useEffect(() => {
+    latestStateRef.current = {
+      schoolInfo,
+      classes,
+      students,
+      examRecords,
+      syllabi,
+      notes,
+      questionPapers,
+      smsLogs,
+      smsGatewayConfig,
+      attendanceRecords,
+      calendarEvents,
+      feeHeads,
+      feeInvoices,
+      feeReceipts,
+      securityLogs,
+    };
+  });
+
+  // Push latest application data to central full-stack server with stable callback
+  const pushToServer = useCallback(async () => {
+    try {
+      setIsServerSyncing(true);
+      const payload = latestStateRef.current;
+      const res = await fetch('/api/school-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setServerSyncStatus('synced');
+        setLastSyncedTime(
+          new Date().toLocaleTimeString('bn-BD', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        );
+        lastSyncTimestampRef.current = Date.now();
+      } else {
+        setServerSyncStatus('offline');
+      }
+    } catch (e) {
+      console.warn('Could not push to server database:', e);
+      setServerSyncStatus('offline');
+    } finally {
+      setIsServerSyncing(false);
+    }
+  }, []);
+
+  // Pull latest data from central server across all PCs/smartphones
+  const fetchFromServer = useCallback(async () => {
+    try {
+      setIsServerSyncing(true);
+      const res = await fetch('/api/school-data');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.exists && json.data) {
+          const db = json.data;
+
+          if (Array.isArray(db.students)) {
+            const cleanedStudents = db.students.filter(
+              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+            );
+            setStudents((prev) => {
+              // CRITICAL SAFEGUARD: If server sends 0 students but client already has real students,
+              // DO NOT wipe the client's data! Push client's data to the server instead!
+              if (cleanedStudents.length === 0 && prev.length > 0) {
+                console.warn('[Sync Safeguard] Server is empty but client has data. Pushing client data to server.');
+                setTimeout(() => pushToServer(), 500);
+                return prev;
+              }
+
+              if (prev.length === 0 && cleanedStudents.length === 0) return prev;
+              if (
+                prev.length === cleanedStudents.length &&
+                prev.every(
+                  (p, idx) =>
+                    p.id === cleanedStudents[idx]?.id &&
+                    p.nameBn === cleanedStudents[idx]?.nameBn &&
+                    p.roll === cleanedStudents[idx]?.roll
+                )
+              ) {
+                return prev;
+              }
+              idbSet(`${STORAGE_KEY}_students`, cleanedStudents);
+              return cleanedStudents;
+            });
+          }
+
+          if (Array.isArray(db.classes) && db.classes.length > 0) {
+            setClasses((prev) => {
+              if (prev.length === db.classes.length) return prev;
+              return db.classes;
+            });
+          }
+
+          if (db.schoolInfo && db.schoolInfo.name) {
+            setSchoolInfo((prev) => {
+              if (
+                prev.name === db.schoolInfo.name &&
+                prev.address === db.schoolInfo.address &&
+                prev.logoUrl === db.schoolInfo.logoUrl
+              )
+                return prev;
+              return db.schoolInfo;
+            });
+          }
+
+          if (db.examRecords && typeof db.examRecords === 'object') {
+            setExamRecords((prev) => {
+              const prevKeys = Object.keys(prev);
+              const dbKeys = Object.keys(db.examRecords);
+              if (prevKeys.length === 0 && dbKeys.length === 0) return prev;
+              return db.examRecords;
+            });
+          }
+
+          if (db.attendanceRecords && typeof db.attendanceRecords === 'object') {
+            setAttendanceRecords((prev) => {
+              const prevKeys = Object.keys(prev);
+              const dbKeys = Object.keys(db.attendanceRecords);
+              if (prevKeys.length === 0 && dbKeys.length === 0) return prev;
+              return db.attendanceRecords;
+            });
+          }
+
+          if (Array.isArray(db.feeHeads) && db.feeHeads.length > 0) {
+            setFeeHeads((prev) => (prev.length === db.feeHeads.length ? prev : db.feeHeads));
+          }
+
+          if (Array.isArray(db.feeInvoices)) {
+            setFeeInvoices((prev) => {
+              if (prev.length === 0 && db.feeInvoices.length === 0) return prev;
+              return db.feeInvoices;
+            });
+          }
+
+          if (Array.isArray(db.feeReceipts)) {
+            setFeeReceipts((prev) => {
+              if (prev.length === 0 && db.feeReceipts.length === 0) return prev;
+              return db.feeReceipts;
+            });
+          }
+
+          if (Array.isArray(db.securityLogs)) {
+            setSecurityLogs((prev) => {
+              if (prev.length === 0 && db.securityLogs.length === 0) return prev;
+              return db.securityLogs;
+            });
+          }
+
+          if (Array.isArray(db.smsLogs)) setSmsLogs(db.smsLogs);
+          if (db.smsGatewayConfig) setSmsGatewayConfig(db.smsGatewayConfig);
+          if (Array.isArray(db.calendarEvents) && db.calendarEvents.length > 0) {
+            setCalendarEvents((prev) => (prev.length === db.calendarEvents.length ? prev : db.calendarEvents));
+          }
+
+          setServerSyncStatus('synced');
+          setLastSyncedTime(
+            new Date().toLocaleTimeString('bn-BD', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            })
+          );
+          lastSyncTimestampRef.current = Date.now();
+        } else {
+          // If server was fresh/empty, push current data to initialize server
+          pushToServer();
+        }
+      } else {
+        setServerSyncStatus('offline');
+      }
+    } catch (err) {
+      console.warn('Could not fetch from server database:', err);
+      setServerSyncStatus('offline');
+    } finally {
+      setIsServerSyncing(false);
+      isInitialServerLoadDone.current = true;
+    }
+  }, [pushToServer]);
+
+  // Initial load: IndexedDB local cache + Server Sync (Runs ONCE on mount)
   useEffect(() => {
     let isMounted = true;
-    idbGet<Student[]>(`${STORAGE_KEY}_students`).then((idbStudents) => {
-      if (isMounted) {
-        if (idbStudents && Array.isArray(idbStudents) && idbStudents.length > 0) {
-          setStudents((current) => {
-            // Merge photos from IndexedDB with current students to preserve all photos
-            return current.map((curr) => {
-              const fromIdb = idbStudents.find((s) => s.id === curr.id);
-              if (fromIdb) {
-                return {
-                  ...curr,
-                  avatarUrl: fromIdb.avatarUrl || curr.avatarUrl || '',
-                  fatherAvatarUrl: fromIdb.fatherAvatarUrl || curr.fatherAvatarUrl || '',
-                  motherAvatarUrl: fromIdb.motherAvatarUrl || curr.motherAvatarUrl || '',
-                };
-              }
-              return curr;
-            });
-          });
+    idbGet<Student[]>(`${STORAGE_KEY}_students`)
+      .then((idbStudents) => {
+        if (isMounted) {
+          if (idbStudents && Array.isArray(idbStudents)) {
+            const validStudents = idbStudents.filter(
+              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+            );
+            if (validStudents.length > 0) {
+              setStudents((current) => {
+                if (current.length === 0 || validStudents.length >= current.length) {
+                  return validStudents;
+                }
+                return current;
+              });
+            } else {
+              // Check if localStorage has any students to recover
+              scanAndRecoverBrowserData().catch(() => {});
+            }
+          } else {
+            // Check if localStorage has any students to recover
+            scanAndRecoverBrowserData().catch(() => {});
+          }
+          setIsIdbInitialized(true);
         }
-        setIsIdbInitialized(true);
-      }
-    }).catch((err) => {
-      console.warn('Could not read students from IndexedDB:', err);
-      if (isMounted) setIsIdbInitialized(true);
-    });
+      })
+      .catch((err) => {
+        console.warn('Could not read students from IndexedDB:', err);
+        if (isMounted) setIsIdbInitialized(true);
+      });
 
-    idbGet<SecurityGatepassLog[]>(`${STORAGE_KEY}_security_logs`).then((logs) => {
-      if (isMounted && logs && Array.isArray(logs) && logs.length > 0) {
-        setSecurityLogs(logs);
+    idbGet<SecurityGatepassLog[]>(`${STORAGE_KEY}_security_logs`)
+      .then((logs) => {
+        if (isMounted && logs && Array.isArray(logs) && logs.length > 0) {
+          setSecurityLogs(logs);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not read security logs from IndexedDB:', err);
+      });
+
+    // Immediately sync with central server once on mount
+    fetchFromServer();
+
+    // Auto-poll server every 15s or on window focus
+    const handleFocus = () => {
+      if (Date.now() - lastSyncTimestampRef.current > 6000) {
+        fetchFromServer();
       }
-    }).catch((err) => {
-      console.warn('Could not read security logs from IndexedDB:', err);
-    });
+    };
+    window.addEventListener('focus', handleFocus);
+    const interval = setInterval(() => {
+      fetchFromServer();
+    }, 15000);
 
     return () => {
       isMounted = false;
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
     };
-  }, []);
+  }, []); // Run strictly once on mount to prevent infinite re-render loops
+
+  // Debounced auto-save to central server on state changes
+  useEffect(() => {
+    if (!isInitialServerLoadDone.current) return;
+    const timer = setTimeout(() => {
+      pushToServer();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [
+    students,
+    classes,
+    schoolInfo,
+    examRecords,
+    attendanceRecords,
+    feeHeads,
+    feeInvoices,
+    feeReceipts,
+    securityLogs,
+    calendarEvents,
+    pushToServer,
+  ]);
 
   // Save students to IndexedDB (unlimited) + localStorage (safe fallback)
   useEffect(() => {
@@ -2025,6 +2292,200 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const forceServerSync = async (): Promise<void> => {
+    await pushToServer();
+    await fetchFromServer();
+  };
+
+  const seedParentDetailsForClass = (classId: string): number => {
+    const sampleParents = [
+      { father: 'মোঃ আবুল কাশেম', fatherEn: 'Md. Abul Kashem', mother: 'নাসরিন জাহান', motherEn: 'Nasrin Jahan', phone: '01712345678', nid: '1984261529100012' },
+      { father: 'আনিসুর রহমান', fatherEn: 'Anisur Rahman', mother: 'শাহানাজ পারভীন', motherEn: 'Shahanaj Parvin', phone: '01812345679', nid: '1982261529100088' },
+      { father: 'মোঃ মোজাম্মেল হক', fatherEn: 'Md. Mozammel Haque', mother: 'রাবেয়া খাতুন', motherEn: 'Rabeya Khatun', phone: '01912345680', nid: '1985261529100091' },
+      { father: 'মোঃ সেলিম হোসেন', fatherEn: 'Md. Selim Hossain', mother: 'শিরিনা আক্তার', motherEn: 'Shirina Akter', phone: '01734567890', nid: '1983261529100055' },
+      { father: 'নুরুল ইসলাম', fatherEn: 'Nurul Islam', mother: 'জাহানারা বেগম', motherEn: 'Jahanara Begum', phone: '01623456781', nid: '1981261529100042' },
+      { father: 'মোঃ আব্দুল বাতেন', fatherEn: 'Md. Abdul Baten', mother: 'খালেদা আক্তার', motherEn: 'Khaleda Akter', phone: '01512345682', nid: '1986261529100077' },
+      { father: 'মোঃ সিরাজুল ইসলাম', fatherEn: 'Md. Sirajul Islam', mother: 'ফারহানা আক্তার', motherEn: 'Farhana Akter', phone: '01711223344', nid: '1987261529100033' },
+      { father: 'জহিরুল ইসলাম', fatherEn: 'Zahirul Islam', mother: 'রোকেয়া বেগম', motherEn: 'Rokeya Begum', phone: '01811223355', nid: '1980261529100019' },
+      { father: 'মোঃ রফিকুল ইসলাম', fatherEn: 'Md. Rafiqul Islam', mother: 'মরিয়ম আক্তার', motherEn: 'Morium Akter', phone: '01911223366', nid: '1988261529100064' },
+      { father: 'কবীর হোসেন', fatherEn: 'Kabir Hossain', mother: 'তাসলিমা খাতুন', motherEn: 'Taslima Khatun', phone: '01611223377', nid: '1984261529100028' },
+    ];
+
+    let updatedCount = 0;
+    setStudents((prev) => {
+      const updated = prev.map((s, idx) => {
+        if (s.classId === classId) {
+          const sample = sampleParents[idx % sampleParents.length];
+          const hasFather = Boolean(s.fatherNameBn?.trim() || s.fatherName?.trim());
+          const hasMother = Boolean(s.motherNameBn?.trim() || s.motherName?.trim());
+          const hasPhone = Boolean(s.fatherPhone?.trim() || s.guardianPhone?.trim());
+
+          if (!hasFather || !hasMother || !hasPhone) {
+            updatedCount++;
+            const fName = s.fatherNameBn || s.fatherName || sample.father;
+            const mName = s.motherNameBn || s.motherName || sample.mother;
+            const phone = s.fatherPhone || s.guardianPhone || sample.phone;
+            return {
+              ...s,
+              fatherName: fName,
+              fatherNameBn: fName,
+              fatherNameEn: s.fatherNameEn || sample.fatherEn,
+              fatherNid: s.fatherNid || sample.nid,
+              fatherPhone: phone,
+              motherName: mName,
+              motherNameBn: mName,
+              motherNameEn: s.motherNameEn || sample.motherEn,
+              motherNid: s.motherNid || sample.nid.slice(0, -2) + '99',
+              motherPhone: s.motherPhone || phone,
+              guardianName: s.guardianName || fName,
+              guardianPhone: phone,
+              presentAddress: s.presentAddress || 'দক্ষিণগাঁও, সনমানিয়া, কাপাসিয়া, গাজীপুর।',
+            };
+          }
+        }
+        return s;
+      });
+      return updated;
+    });
+
+    return updatedCount;
+  };
+
+  const clearAllStudents = async () => {
+    setStudents([]);
+    setExamRecords({});
+    setAttendanceRecords({});
+    setFeeInvoices([]);
+    setFeeReceipts([]);
+    setSecurityLogs([]);
+
+    try {
+      localStorage.removeItem(`${STORAGE_KEY}_students`);
+      localStorage.removeItem(`${STORAGE_KEY}_exam_records`);
+      localStorage.removeItem(`${STORAGE_KEY}_attendance`);
+      localStorage.removeItem(`${STORAGE_KEY}_fee_invoices`);
+      localStorage.removeItem(`${STORAGE_KEY}_fee_receipts`);
+      localStorage.removeItem(`${STORAGE_KEY}_security_logs`);
+      await idbSet(`${STORAGE_KEY}_students`, []);
+      await idbSet(`${STORAGE_KEY}_security_logs`, []);
+    } catch (e) {
+      console.warn('Error clearing local storage caches:', e);
+    }
+
+    try {
+      await fetch('/api/students/clear-all', { method: 'POST' });
+      setServerSyncStatus('synced');
+      setLastSyncedTime(new Date().toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } catch (e) {
+      console.warn('Error calling /api/students/clear-all:', e);
+    }
+  };
+
+  const scanAndRecoverBrowserData = async (): Promise<{ studentCount: number; message: string }> => {
+    let recovered: Student[] = [];
+
+    // 1. Scan all localStorage keys
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        try {
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const studentItems = parsed.filter(
+              (item: any) => item && typeof item === 'object' && item.nameBn && (item.roll !== undefined || item.classId)
+            );
+            if (studentItems.length > 0) {
+              const nonDemo = studentItems.filter(
+                (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+              );
+              if (nonDemo.length > recovered.length) {
+                recovered = nonDemo;
+              }
+            }
+          }
+        } catch {
+          // Ignore non-JSON
+        }
+      }
+    } catch (e) {
+      console.warn('Error scanning localStorage:', e);
+    }
+
+    // 2. Scan IndexedDB
+    try {
+      const idbData = await idbGet<Student[]>(`${STORAGE_KEY}_students`);
+      if (idbData && Array.isArray(idbData)) {
+        const nonDemo = idbData.filter(
+          (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+        );
+        if (nonDemo.length > recovered.length) {
+          recovered = nonDemo;
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading IndexedDB during recovery:', e);
+    }
+
+    // 3. Scan sessionStorage
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (!key) continue;
+        try {
+          const raw = sessionStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const studentItems = parsed.filter(
+              (item: any) => item && typeof item === 'object' && item.nameBn && (item.roll !== undefined || item.classId)
+            );
+            const nonDemo = studentItems.filter(
+              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+            );
+            if (nonDemo.length > recovered.length) {
+              recovered = nonDemo;
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    } catch (e) {
+      console.warn('Error scanning sessionStorage:', e);
+    }
+
+    if (recovered.length > 0) {
+      setStudents(recovered);
+      await idbSet(`${STORAGE_KEY}_students`, recovered);
+      try {
+        localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(recovered));
+      } catch {
+        // Ignore
+      }
+      await fetch('/api/school-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...latestStateRef.current,
+          students: recovered,
+          _lastUpdated: new Date().toISOString(),
+        }),
+      });
+      return {
+        studentCount: recovered.length,
+        message: `${toBengaliNumber(recovered.length)} জন শিক্ষার্থীর তথ্য ব্রাউজার ক্যাশ থেকে উদ্ধার করে সার্ভারে সংরক্ষিত হয়েছে!`,
+      };
+    }
+
+    return {
+      studentCount: 0,
+      message: 'ব্রাউজারে পূর্বের সংরক্ষিত কোনো রেকর্ড পাওয়া যায়নি। অনুগ্রহ করে আপনার এক্সেল ফাইলটি পুনরায় আপলোড করুন।',
+    };
+  };
+
   const resetToDefaultData = () => {
     setSchoolInfo(DEFAULT_SCHOOL_INFO);
     setClasses(DEFAULT_CLASSES);
@@ -2126,6 +2587,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         securityLogs,
         addSecurityLog,
         clearSecurityLogs,
+        isServerSyncing,
+        serverSyncStatus,
+        lastSyncedTime,
+        forceServerSync,
+        seedParentDetailsForClass,
+        clearAllStudents,
+        scanAndRecoverBrowserData,
       }}
     >
       {children}

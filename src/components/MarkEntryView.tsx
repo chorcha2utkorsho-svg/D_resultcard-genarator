@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Save,
   CheckCircle2,
@@ -37,7 +37,7 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
 
   // Active Subject selection
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
-  const subjects = currentClass?.defaultSubjects || [];
+  const subjects = useMemo(() => currentClass?.defaultSubjects || [], [currentClass]);
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>(subjects[0]?.id || '');
 
   // Keep subject in sync when class changes

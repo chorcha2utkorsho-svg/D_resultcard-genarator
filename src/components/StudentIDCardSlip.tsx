@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { SchoolInfo, Student } from '../types';
 import { toBengaliRoll, toBengaliNumber } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
-import { User, ShieldCheck, Phone, Heart, Camera, CheckCircle2 } from 'lucide-react';
+import { User, ShieldCheck, Phone, Heart, Camera, CheckCircle2, Edit3 } from 'lucide-react';
 
 export interface StudentIDCardSlipProps {
   student: Student;
@@ -15,6 +15,7 @@ export interface StudentIDCardSlipProps {
   principalSignatureUrl?: string;
   academicYear?: string;
   onPhotoUpload?: (studentId: string, role: 'student' | 'father' | 'mother', base64: string) => void;
+  onEditDetails?: (student: Student) => void;
 }
 
 export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
@@ -27,6 +28,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
   principalSignatureUrl,
   academicYear = '২০২৬',
   onPhotoUpload,
+  onEditDetails,
 }) => {
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const studentFileRef = useRef<HTMLInputElement>(null);
@@ -107,6 +109,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
               padding: '6px 8px 5px',
               textAlign: 'center',
               borderBottom: '2px solid #d97706',
+              position: 'relative',
             }}
           >
             <div className="flex items-center justify-center gap-1.5">
@@ -118,6 +121,17 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
             <div className="text-[7.5px] text-amber-300 font-bold uppercase tracking-wider">
               {schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
             </div>
+            {onEditDetails && (
+              <button
+                type="button"
+                onClick={() => onEditDetails(student)}
+                className="no-print absolute right-1.5 top-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold px-1.5 py-0.5 rounded text-[7.5px] flex items-center gap-0.5 cursor-pointer shadow-xs transition"
+                title="পিতা ও মাতার নাম, মোবাইল নম্বর ও এনআইডি এডিট করতে ক্লিক করুন"
+              >
+                <Edit3 className="w-2.5 h-2.5" />
+                <span>এডিট</span>
+              </button>
+            )}
           </div>
 
           {/* Father Details */}
@@ -125,8 +139,8 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
             {/* Father Section */}
             <div className="border border-slate-300 rounded-lg p-1.5 bg-slate-50/90 space-y-1">
               <div className="flex items-center justify-between pb-0.5 border-b border-slate-200">
-                <span className="text-[8px] font-bold text-indigo-950 uppercase">
-                  পিতার পরিচিতি (Father)
+                <span className="text-[8px] font-bold text-indigo-950 uppercase flex items-center gap-1">
+                  <span>পিতার পরিচিতি (Father)</span>
                 </span>
                 <span className="text-[7px] text-slate-500 font-mono">
                   {student.fatherNid ? 'NID Verified' : ''}
@@ -153,20 +167,24 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
                   )}
                 </div>
 
-                <div className="flex-1 min-w-0 text-[8px] leading-tight space-y-0.5">
+                <div 
+                  onClick={() => onEditDetails && onEditDetails(student)}
+                  className={`flex-1 min-w-0 text-[8px] leading-tight space-y-0.5 ${onEditDetails ? 'cursor-pointer hover:bg-slate-100/60 p-0.5 rounded transition' : ''}`}
+                  title={onEditDetails ? 'পিতার তথ্য পরিবর্তন করতে ক্লিক করুন' : undefined}
+                >
                   <div className="font-bold text-indigo-950 text-[9px] truncate">
-                    {student.fatherNameBn || student.fatherName || 'পিতার নাম নেই'}
+                    {student.fatherNameBn || student.fatherName || student.guardianName || 'পিতার নাম দিন'}
                   </div>
                   <div className="text-slate-500 font-sans text-[7.5px] truncate">
                     {student.fatherNameEn || 'Father'}
                   </div>
                   <div className="text-slate-700">
                     <span className="text-slate-500 font-semibold">NID:</span>{' '}
-                    <span className="font-mono font-bold">{student.fatherNid || '-'}</span>
+                    <span className="font-mono font-bold">{student.fatherNid || student.guardianNid || '-'}</span>
                   </div>
                   <div className="text-slate-700">
                     <span className="text-slate-500 font-semibold">মোবাইল:</span>{' '}
-                    <span className="font-mono">{student.fatherPhone || student.guardianPhone || '-'}</span>
+                    <span className="font-mono">{student.fatherPhone || student.guardianPhone || student.emergencyPhone || '-'}</span>
                   </div>
                 </div>
               </div>
@@ -175,8 +193,8 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
             {/* Mother Section */}
             <div className="border border-slate-300 rounded-lg p-1.5 bg-slate-50/90 space-y-1">
               <div className="flex items-center justify-between pb-0.5 border-b border-slate-200">
-                <span className="text-[8px] font-bold text-rose-950 uppercase">
-                  মাতার পরিচিতি (Mother)
+                <span className="text-[8px] font-bold text-rose-950 uppercase flex items-center gap-1">
+                  <span>মাতার পরিচিতি (Mother)</span>
                 </span>
                 <span className="text-[7px] text-slate-500 font-mono">
                   {student.motherNid ? 'NID Verified' : ''}
@@ -203,9 +221,13 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
                   )}
                 </div>
 
-                <div className="flex-1 min-w-0 text-[8px] leading-tight space-y-0.5">
+                <div 
+                  onClick={() => onEditDetails && onEditDetails(student)}
+                  className={`flex-1 min-w-0 text-[8px] leading-tight space-y-0.5 ${onEditDetails ? 'cursor-pointer hover:bg-slate-100/60 p-0.5 rounded transition' : ''}`}
+                  title={onEditDetails ? 'মাতার তথ্য পরিবর্তন করতে ক্লিক করুন' : undefined}
+                >
                   <div className="font-bold text-rose-950 text-[9px] truncate">
-                    {student.motherNameBn || student.motherName || 'মাতার নাম নেই'}
+                    {student.motherNameBn || student.motherName || 'মাতার নাম দিন'}
                   </div>
                   <div className="text-slate-500 font-sans text-[7.5px] truncate">
                     {student.motherNameEn || 'Mother'}
@@ -216,7 +238,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
                   </div>
                   <div className="text-slate-700">
                     <span className="text-slate-500 font-semibold">মোবাইল:</span>{' '}
-                    <span className="font-mono">{student.motherPhone || '-'}</span>
+                    <span className="font-mono">{student.motherPhone || student.guardianPhone || '-'}</span>
                   </div>
                 </div>
               </div>
@@ -529,9 +551,22 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
               পিতা-মাতার ছবিসহ পরিচয় ও নিরাপত্তা তথ্য
             </span>
           </div>
-          <span style={{ fontSize: '8px', color: '#fde047', fontWeight: 'bold' }}>
-            {schoolInfo.name || 'ডি-লিকন একাডেমি'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: '8px', color: '#fde047', fontWeight: 'bold' }}>
+              {schoolInfo.name || 'ডি-লিকন একাডেমি'}
+            </span>
+            {onEditDetails && (
+              <button
+                type="button"
+                onClick={() => onEditDetails(student)}
+                className="no-print bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold px-1.5 py-0.5 rounded text-[7.5px] flex items-center gap-0.5 cursor-pointer shadow-xs transition"
+                title="তথ্য এডিট করুন"
+              >
+                <Edit3 className="w-2.5 h-2.5" />
+                <span>এডিট</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="p-2 grid grid-cols-2 gap-2 flex-1">
@@ -550,17 +585,20 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
                 </div>
               )}
             </div>
-            <div className="flex-1 min-w-0 text-[8px] leading-tight space-y-0.5">
+            <div 
+              onClick={() => onEditDetails && onEditDetails(student)}
+              className={`flex-1 min-w-0 text-[8px] leading-tight space-y-0.5 ${onEditDetails ? 'cursor-pointer hover:bg-slate-100/60 p-0.5 rounded transition' : ''}`}
+            >
               <div className="font-bold text-indigo-950 text-[8.5px] truncate">
-                {student.fatherNameBn || student.fatherName || 'পিতার নাম নেই'}
+                {student.fatherNameBn || student.fatherName || student.guardianName || 'পিতার নাম দিন'}
               </div>
               <div className="text-slate-700">
                 <span className="text-slate-500 font-semibold">NID:</span>{' '}
-                <span className="font-mono">{student.fatherNid || '-'}</span>
+                <span className="font-mono">{student.fatherNid || student.guardianNid || '-'}</span>
               </div>
               <div className="text-slate-700">
                 <span className="text-slate-500 font-semibold">মোবাইল:</span>{' '}
-                <span className="font-mono">{student.fatherPhone || student.guardianPhone || '-'}</span>
+                <span className="font-mono">{student.fatherPhone || student.guardianPhone || student.emergencyPhone || '-'}</span>
               </div>
             </div>
           </div>
@@ -580,9 +618,12 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
                 </div>
               )}
             </div>
-            <div className="flex-1 min-w-0 text-[8px] leading-tight space-y-0.5">
+            <div 
+              onClick={() => onEditDetails && onEditDetails(student)}
+              className={`flex-1 min-w-0 text-[8px] leading-tight space-y-0.5 ${onEditDetails ? 'cursor-pointer hover:bg-slate-100/60 p-0.5 rounded transition' : ''}`}
+            >
               <div className="font-bold text-rose-950 text-[8.5px] truncate">
-                {student.motherNameBn || student.motherName || 'মাতার নাম নেই'}
+                {student.motherNameBn || student.motherName || 'মাতার নাম দিন'}
               </div>
               <div className="text-slate-700">
                 <span className="text-slate-500 font-semibold">NID:</span>{' '}
@@ -590,7 +631,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
               </div>
               <div className="text-slate-700">
                 <span className="text-slate-500 font-semibold">মোবাইল:</span>{' '}
-                <span className="font-mono">{student.motherPhone || '-'}</span>
+                <span className="font-mono">{student.motherPhone || student.guardianPhone || '-'}</span>
               </div>
             </div>
           </div>

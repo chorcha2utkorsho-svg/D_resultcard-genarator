@@ -1,0 +1,3 @@
+# Disallow search engine crawlers from indexing private school and student data
+User-agent: *
+Disallow: /

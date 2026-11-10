@@ -92,11 +92,11 @@ export const StudentPaymentHistoryView: React.FC<StudentPaymentHistoryViewProps>
     if (initialStudentId) {
       setSelectedStudentId(initialStudentId);
       const targetStd = students.find((s) => s.id === initialStudentId);
-      if (targetStd) {
+      if (targetStd && targetStd.classId !== selectedClassId) {
         setSelectedClassId(targetStd.classId);
       }
     }
-  }, [initialStudentId, students]);
+  }, [initialStudentId, students, selectedClassId]);
 
   // Active view tab inside ledger
   const [activeLedgerTab, setActiveLedgerTab] = useState<'combined' | 'invoices' | 'receipts'>('combined');

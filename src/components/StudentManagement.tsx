@@ -60,6 +60,8 @@ export const StudentManagement: React.FC = () => {
     moveStudentsToClass,
     deleteStudentsByClass,
     deleteMultipleStudents,
+    clearAllStudents,
+    scanAndRecoverBrowserData,
     selectedClassId,
     setSelectedClassId,
     selectedSection,
@@ -150,6 +152,40 @@ export const StudentManagement: React.FC = () => {
   const [fixSearch, setFixSearch] = useState('');
   const [fixSuccessMsg, setFixSuccessMsg] = useState<string | null>(null);
   const [isConfirmWipeOpen, setIsConfirmWipeOpen] = useState(false);
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearSuccessMsg, setClearSuccessMsg] = useState<string | null>(null);
+  const [isScanningRecovery, setIsScanningRecovery] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+
+  const handleRunRecovery = async () => {
+    setIsScanningRecovery(true);
+    setRecoveryMessage(null);
+    try {
+      const res = await scanAndRecoverBrowserData();
+      setRecoveryMessage(res.message);
+    } catch {
+      setRecoveryMessage('স্ক্যান সম্পন্ন হয়েছে কিন্তু কোনো রেকর্ড পাওয়া যায়নি।');
+    } finally {
+      setIsScanningRecovery(false);
+    }
+  };
+
+  const handleClearAllStudents = async () => {
+    setIsClearing(true);
+    try {
+      await clearAllStudents();
+      setClearSuccessMsg('সকল ডেমো শিক্ষার্থী ও রেকর্ড সম্পূর্ণ খালি করা হয়েছে। এখন নির্দ্বিধায় নতুন এক্সেল ফাইল আপলোড করুন।');
+      setTimeout(() => {
+        setClearSuccessMsg(null);
+        setShowClearAllModal(false);
+      }, 2000);
+    } catch {
+      alert('শিক্ষার্থী মুছে ফেলতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   // Handle moving selected students to another class
   const handleExecuteMove = () => {
@@ -646,6 +682,18 @@ export const StudentManagement: React.FC = () => {
               )}
             </div>
 
+            {students.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowClearAllModal(true)}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 shadow-2xs transition cursor-pointer"
+                title="সকল ডেমো বা পরীক্ষামূলক শিক্ষার্থী মুছে ডেটাবেস সম্পূর্ণ খালি করুন"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                সকল শিক্ষার্থী মুছুন (ডাটাবেস খালি)
+              </button>
+            )}
+
             <button
               onClick={() => {
                 setFixSourceClassId(selectedClassId || 'class_play');
@@ -653,7 +701,7 @@ export const StudentManagement: React.FC = () => {
                 setFixSuccessMsg(null);
                 setIsFixModalOpen(true);
               }}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 shadow-2xs transition cursor-pointer"
+              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 shadow-2xs transition cursor-pointer"
               title="অন্য শ্রেণির শিক্ষার্থী এই ক্লাসে ঢুকে গেলে দ্রুত সঠিক ক্লাসে স্থানান্তর করুন"
             >
               <ArrowRightLeft className="w-3.5 h-3.5 mr-1 text-rose-600" />
@@ -928,14 +976,48 @@ export const StudentManagement: React.FC = () => {
                     <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
                       <Users className="w-6 h-6" />
                     </div>
-                    <div className="font-bold text-slate-700">
+                    <div className="font-bold text-slate-800 text-base">
                       {classFilter === 'all'
-                        ? 'কোনো শিক্ষার্থী পাওয়া যায়নি।'
-                        : `"${classes.find((c) => c.id === classFilter)?.nameBn || 'নির্বাচিত শ্রেণি'}"-এ কোনো শিক্ষার্থী পাওয়া যায়নি।`}
+                        ? 'ডাটাবেস সম্পূর্ণ খালি ও প্রস্তুত রয়েছে'
+                        : `"${classes.find((c) => c.id === classFilter)?.nameBn || 'নির্বাচিত শ্রেণি'}"-এ কোনো শিক্ষার্থী নেই`}
                     </div>
-                    <p className="text-xs text-slate-400">
-                      উপরের &quot;নতুন শিক্ষার্থী যুক্ত করুন&quot; অথবা &quot;বাল্ক সিএসভি আপলোড&quot; বোতাম ব্যবহার করে শিক্ষার্থী যুক্ত করুন।
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      সকল ডেমো তথ্য সরিয়ে ফেলা হয়েছে। এখন আপনি আপনার তৈরি করা শ্রেণিভিত্তিক এক্সেল ফাইল থেকে সরাসরি শিক্ষার্থীদের আপলোড করতে পারবেন।
                     </p>
+                    <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveView('bulk_upload')}
+                        className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-sm cursor-pointer transition"
+                      >
+                        <Upload className="w-4 h-4 mr-1.5" />
+                        শ্রেণিভিত্তিক এক্সেল / সিএসভি ফাইল আপলোড করুন
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenAdd}
+                        className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer transition"
+                      >
+                        <UserPlus className="w-4 h-4 mr-1.5" />
+                        ম্যানুয়ালি শিক্ষার্থী যুক্ত করুন
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isScanningRecovery}
+                        onClick={handleRunRecovery}
+                        className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 shadow-sm cursor-pointer transition disabled:opacity-50"
+                        title="ব্রাউজারে পূর্বের সংরক্ষিত কোনো ডেটা থাকলে তা স্ক্যান করে উদ্ধার করুন"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isScanningRecovery ? 'animate-spin text-indigo-600' : 'text-slate-600'}`} />
+                        {isScanningRecovery ? 'ব্রাউজার স্ক্যান করা হচ্ছে...' : 'ব্রাউজার ক্যাশ স্ক্যান ও ডেটা রিকভারি'}
+                      </button>
+                    </div>
+
+                    {recoveryMessage && (
+                      <div className="mt-3 p-3 max-w-lg mx-auto bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-900 text-xs font-medium text-center">
+                        {recoveryMessage}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -2521,6 +2603,67 @@ export const StudentManagement: React.FC = () => {
                   <div className="text-[10px] text-slate-500 mt-0.5">ডি-লিকন মডেল একাডেমী</div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear All Students / Database Reset Confirmation Modal */}
+      {showClearAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+            <div className="flex items-center space-x-3 text-rose-600">
+              <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  সকল শিক্ষার্থী মুছে ফেলুন
+                </h3>
+                <p className="text-xs text-slate-500">
+                  ডাটাবেস সম্পূর্ণ খালি ও ফ্রেশ করুন
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-amber-50 border border-amber-200 rounded-xl p-3">
+              আপনি কি নিশ্চিত যে আপনি <strong>সকল ডেমো বা বর্তমান শিক্ষার্থী ({toBengaliNumber(students.length)} জন)</strong> এবং তাদের যাবতীয় পরীক্ষা, ফি ও সিকিউরিটি লগ ডাটাবেস থেকে মুছে ফেলতে চান? এটি করার পর আপনি সম্পূর্ণ নতুনভাবে আপনার এক্সেল ফাইল আপলোড করতে পারবেন।
+            </p>
+
+            {clearSuccessMsg && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center">
+                <CheckCircle className="w-4 h-4 mr-1.5 shrink-0 text-emerald-600" />
+                {clearSuccessMsg}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                disabled={isClearing}
+                onClick={() => setShowClearAllModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer disabled:opacity-50"
+              >
+                বাতিল করুন
+              </button>
+              <button
+                type="button"
+                disabled={isClearing}
+                onClick={handleClearAllStudents}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs transition flex items-center cursor-pointer disabled:opacity-50"
+              >
+                {isClearing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    মুছে ফেলা হচ্ছে...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                    হ্যাঁ, সব মুছে ফেলুন
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

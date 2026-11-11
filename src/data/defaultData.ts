@@ -13,6 +13,7 @@ import {
   FeeInvoice,
   PaymentRecord,
 } from '../types';
+import bundledStudents from './bundledStudents.json';
 
 export const DEFAULT_SCHOOL_INFO: SchoolInfo = {
   name: 'ডি-লিকন মডেল একাডেমী',
@@ -186,7 +187,9 @@ export const DEFAULT_CLASSES: SchoolClass[] = [
   },
 ];
 
-export const INITIAL_STUDENTS: Student[] = [];
+export const INITIAL_STUDENTS: Student[] = Array.isArray(bundledStudents)
+  ? (bundledStudents as Student[])
+  : [];
 
 export const INITIAL_EXAM_RECORDS: StudentExamRecord[] = [];
 

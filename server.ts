@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -401,14 +402,17 @@ async function startServer() {
   });
 
   // =========================================================================
+  const httpServer = http.createServer(app);
+
+  // =========================================================================
   // VITE DEV MIDDLEWARE / STATIC PROD SERVING
   // =========================================================================
   if (!IS_PROD) {
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        host: '0.0.0.0',
-        port: PORT,
+        hmr: isHmrDisabled ? false : { server: httpServer },
       },
       appType: 'spa',
     });
@@ -421,7 +425,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] D-Likon Model Academy full-stack server running on http://0.0.0.0:${PORT}`);
     console.log(`[Server] Database file location: ${DB_FILE}`);
   });

@@ -280,8 +280,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const saved = localStorage.getItem(`${STORAGE_KEY}_students`);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id));
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = parsed.filter((s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id));
+          if (cleaned.length > 0) return cleaned;
         }
       }
       return INITIAL_STUDENTS;
@@ -744,7 +745,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     idbGet<Student[]>(`${STORAGE_KEY}_students`)
       .then((idbStudents) => {
         if (isMounted) {
-          if (idbStudents && Array.isArray(idbStudents)) {
+          if (idbStudents && Array.isArray(idbStudents) && idbStudents.length > 0) {
             const validStudents = idbStudents.filter(
               (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
             );
@@ -755,13 +756,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 }
                 return current;
               });
-            } else {
-              // Check if localStorage has any students to recover
-              scanAndRecoverBrowserData().catch(() => {});
+            } else if (INITIAL_STUDENTS.length > 0) {
+              setStudents(INITIAL_STUDENTS);
             }
-          } else {
-            // Check if localStorage has any students to recover
-            scanAndRecoverBrowserData().catch(() => {});
+          } else if (INITIAL_STUDENTS.length > 0) {
+            setStudents(INITIAL_STUDENTS);
           }
           setIsIdbInitialized(true);
         }

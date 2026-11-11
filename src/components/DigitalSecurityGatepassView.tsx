@@ -204,8 +204,9 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: cameraFacingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920, min: 720 },
+          height: { ideal: 1080, min: 480 },
+          advanced: [{ focusMode: 'continuous' } as any],
         },
         audio: false,
       };
@@ -498,27 +499,51 @@ export const DigitalSecurityGatepassView: React.FC = () => {
             }
           }
 
-          // 2. Fallback to jsQR decoder
+          // 2. High-Precision jsQR Decoder (Dual-Pass: Center Viewfinder 1:1 ROI + Full-Frame)
           if (!detectedCode && ctx) {
             const vw = video.videoWidth;
             const vh = video.videoHeight;
-            const scale = Math.min(1, 640 / Math.max(vw, vh));
-            const cw = Math.floor(vw * scale);
-            const ch = Math.floor(vh * scale);
 
-            if (canvas.width !== cw || canvas.height !== ch) {
-              canvas.width = cw;
-              canvas.height = ch;
+            // Pass A: Center Viewfinder ROI at FULL 1:1 Camera Resolution (crucial for small printed QR codes!)
+            const cropSize = Math.floor(Math.min(vw, vh) * 0.7);
+            const cropX = Math.floor((vw - cropSize) / 2);
+            const cropY = Math.floor((vh - cropSize) / 2);
+
+            if (canvas.width !== cropSize || canvas.height !== cropSize) {
+              canvas.width = cropSize;
+              canvas.height = cropSize;
             }
 
-            ctx.drawImage(video, 0, 0, cw, ch);
-            const imgData = ctx.getImageData(0, 0, cw, ch);
-            const qrResult = jsQR(imgData.data, cw, ch, {
+            ctx.drawImage(video, cropX, cropY, cropSize, cropSize, 0, 0, cropSize, cropSize);
+            const centerImgData = ctx.getImageData(0, 0, cropSize, cropSize);
+            let qrResult = jsQR(centerImgData.data, cropSize, cropSize, {
               inversionAttempts: 'attemptBoth',
             });
 
             if (qrResult && qrResult.data) {
               detectedCode = qrResult.data;
+            }
+
+            // Pass B: Full frame fallback at crisp 800px max scale
+            if (!detectedCode) {
+              const scale = Math.min(1, 800 / Math.max(vw, vh));
+              const cw = Math.floor(vw * scale);
+              const ch = Math.floor(vh * scale);
+
+              if (canvas.width !== cw || canvas.height !== ch) {
+                canvas.width = cw;
+                canvas.height = ch;
+              }
+
+              ctx.drawImage(video, 0, 0, cw, ch);
+              const fullImgData = ctx.getImageData(0, 0, cw, ch);
+              const fullResult = jsQR(fullImgData.data, cw, ch, {
+                inversionAttempts: 'attemptBoth',
+              });
+
+              if (fullResult && fullResult.data) {
+                detectedCode = fullResult.data;
+              }
             }
           }
 
@@ -1097,9 +1122,9 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                       ) : (
                         <>
                           <div className="w-full h-0.5 bg-rose-500 shadow-[0_0_12px_#ef4444] animate-bounce" />
-                          <div className="text-[9.5px] font-mono text-emerald-300 bg-slate-950/85 px-2.5 py-1 rounded-md mt-2 tracking-wider flex items-center gap-1.5 shadow-md">
+                          <div className="text-[10px] font-mono text-emerald-300 bg-slate-950/85 px-3 py-1.5 rounded-lg mt-2 tracking-wider flex items-center gap-1.5 shadow-md border border-emerald-500/40">
                             <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
-                            <span>[ কার্ডের কিউআর কোড ফোকাস করুন ]</span>
+                            <span>[ কার্ডের কিউআর কোড এই সবুজ বক্সে রাখুন • ১০-১৫ সেমি দূরত্বে ধরুন ]</span>
                           </div>
                         </>
                       )}

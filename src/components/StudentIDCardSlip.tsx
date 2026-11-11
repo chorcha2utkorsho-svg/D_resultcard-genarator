@@ -44,10 +44,11 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
   useEffect(() => {
     let isMounted = true;
     QRCode.toDataURL(qrPayload, {
-      width: 180,
+      width: 320,
       margin: 1,
+      errorCorrectionLevel: 'M',
       color: {
-        dark: '#091e42',
+        dark: '#000000',
         light: '#ffffff',
       },
     })
@@ -453,18 +454,18 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
           {/* Scannable Real QR Code & Seal */}
           <div className="flex items-center justify-between w-full px-2 pt-0.5">
             <div className="flex items-center gap-1.5">
-              <div className="w-[44px] h-[44px] bg-white p-0.5 rounded border border-indigo-900 flex items-center justify-center shadow-2xs">
+              <div className="w-[60px] h-[60px] bg-white p-0.5 rounded-md border-2 border-slate-900 flex items-center justify-center shadow-xs">
                 {qrCodeDataUrl ? (
                   <img src={qrCodeDataUrl} alt="QR Code" className="w-full h-full object-contain" />
                 ) : (
                   <div className="text-[6px] text-slate-400">QR</div>
                 )}
               </div>
-              <div className="text-left text-[7px] text-slate-500 leading-tight">
-                <div className="font-bold text-indigo-950 font-mono">
-                  {student.securityQrCode ? student.securityQrCode.slice(0, 8) : `ID:${student.roll}`}
+              <div className="text-left text-[7.5px] text-slate-600 leading-tight">
+                <div className="font-bold text-slate-950 font-mono text-[8.5px]">
+                  {student.securityQrCode ? student.securityQrCode.slice(0, 9) : `ID:${student.roll}`}
                 </div>
-                <div>ডিজিটাল গেটপাস</div>
+                <div className="text-[6.5px] font-semibold text-indigo-900">ডিজিটাল গেটপাস</div>
               </div>
             </div>
 
@@ -753,7 +754,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
         </div>
 
         <div className="flex flex-col items-center shrink-0">
-          <div className="w-[48px] h-[48px] bg-white p-0.5 rounded border border-indigo-900 flex items-center justify-center">
+          <div className="w-[60px] h-[60px] bg-white p-0.5 rounded-md border-2 border-slate-900 flex items-center justify-center shadow-xs">
             {qrCodeDataUrl ? (
               <img src={qrCodeDataUrl} alt="QR" className="w-full h-full object-contain" />
             ) : (

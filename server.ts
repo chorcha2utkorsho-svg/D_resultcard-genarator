@@ -280,6 +280,76 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // REAL-TIME SECURITY GATEPASS & GUARDIAN AUDIO ALARM ENDPOINTS
+  // =========================================================================
+
+  // POST new scan event from school gate (broadcasts immediately across devices)
+  app.post('/api/security/scan', (req, res) => {
+    try {
+      const { log } = req.body;
+      if (!log || !log.studentId) {
+        return res.status(400).json({ success: false, message: 'Valid gatepass log required' });
+      }
+
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+
+      const existingLogs = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+      // Prepend new log and keep latest 1000 logs
+      const updatedLogs = [log, ...existingLogs.slice(0, 999)];
+
+      const updatedDb = {
+        ...(memoryDb || {}),
+        securityLogs: updatedLogs,
+        _lastSecurityEvent: log,
+        _lastUpdated: new Date().toISOString(),
+      };
+
+      saveDatabaseToFile(updatedDb);
+
+      return res.json({
+        success: true,
+        message: 'Gatepass scan logged and synced across all devices',
+        log,
+      });
+    } catch (err: any) {
+      console.error('[Server API] Security scan log error:', err);
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // GET latest security logs since a timestamp, optionally filtered for a student
+  app.get('/api/security/latest-logs', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+
+      const since = Number(req.query.since) || 0;
+      const studentId = (req.query.studentId as string) || '';
+
+      const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+
+      const filtered = logs.filter((l) => {
+        const logTime = typeof l.timestamp === 'number' ? l.timestamp : new Date(l.timestamp).getTime() || 0;
+        const matchesTime = since > 0 ? logTime > since : true;
+        const matchesStudent = studentId ? l.studentId === studentId : true;
+        return matchesTime && matchesStudent;
+      });
+
+      return res.json({
+        success: true,
+        logs: filtered,
+        serverTime: Date.now(),
+        lastEvent: memoryDb?._lastSecurityEvent || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message });
+    }
+  });
+
   // GET list of available server backups
   app.get('/api/backups/list', (_req, res) => {
     try {

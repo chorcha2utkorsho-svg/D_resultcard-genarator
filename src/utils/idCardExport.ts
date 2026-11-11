@@ -95,7 +95,7 @@ export function generateIdCardsFullHtml(
       z-index: 9999;
     }
 
-    /* A4 Print Sheet Container: Exact 4-Cards (2x2 Grid) */
+    /* A4 Print Sheet Container: Exact 4-Cards (2x2 Grid for single-side OR 2 paired fold-units for duplex) */
     .id-card-a4-sheet {
       width: 210mm !important;
       max-width: 210mm !important;
@@ -108,18 +108,97 @@ export function generateIdCardsFullHtml(
       background: #ffffff !important;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
       box-sizing: border-box !important;
-      display: grid !important;
-      grid-template-columns: repeat(2, 1fr) !important;
-      grid-template-rows: repeat(2, 1fr) !important;
-      gap: 6mm !important;
-      justify-items: center !important;
-      align-items: center !important;
       page-break-after: always !important;
       break-after: page !important;
       page-break-inside: avoid !important;
       break-inside: avoid !important;
       position: relative !important;
       overflow: hidden !important;
+    }
+
+    /* Single side: 2x2 Grid */
+    .id-card-a4-sheet.grid-layout {
+      display: grid !important;
+      grid-template-columns: repeat(2, 1fr) !important;
+      grid-template-rows: repeat(2, 1fr) !important;
+      gap: 6mm !important;
+      justify-items: center !important;
+      align-items: center !important;
+    }
+
+    /* Duplex both sides: 2 vertical paired folding units touching seamlessly side-by-side */
+    .id-card-a4-sheet.fold-layout {
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-around !important;
+      align-items: center !important;
+      padding: 8mm 6mm !important;
+    }
+
+    .id-card-fold-unit {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 0 !important; /* Zero gap between Front and Back */
+      border: 1.5px dashed #475569 !important;
+      border-radius: 14px !important;
+      background: #ffffff !important;
+      position: relative !important;
+      box-sizing: border-box !important;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      padding: 0 !important;
+      margin: 0 auto !important;
+    }
+
+    .id-card-fold-half {
+      margin: 0 !important;
+      padding: 0 !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+    }
+
+    /* Center fold guide indicator */
+    .id-card-fold-center-line {
+      position: absolute !important;
+      top: 0 !important;
+      bottom: 0 !important;
+      left: 50% !important;
+      width: 0 !important;
+      border-left: 1.5px dashed #64748b !important;
+      z-index: 10 !important;
+      pointer-events: none !important;
+    }
+
+    .fold-badge-top {
+      position: absolute !important;
+      top: -12px !important;
+      left: 50% !important;
+      transform: translateX(-50%) !important;
+      font-size: 7.5px !important;
+      background: #091e42 !important;
+      color: #ffffff !important;
+      padding: 1px 6px !important;
+      border-radius: 4px !important;
+      white-space: nowrap !important;
+      font-weight: bold !important;
+      z-index: 20 !important;
+    }
+
+    .fold-badge-bottom {
+      position: absolute !important;
+      bottom: -11px !important;
+      left: 50% !important;
+      transform: translateX(-50%) !important;
+      font-size: 7.5px !important;
+      background: #091e42 !important;
+      color: #ffffff !important;
+      padding: 1px 6px !important;
+      border-radius: 4px !important;
+      white-space: nowrap !important;
+      font-weight: bold !important;
+      z-index: 20 !important;
     }
 
     .id-card-a4-sheet:last-of-type {
@@ -138,7 +217,6 @@ export function generateIdCardsFullHtml(
       position: relative !important;
     }
 
-    /* Subtle trim/cutting guide wrapper around each card */
     .id-card-slot-wrapper {
       position: relative !important;
       display: inline-block !important;
@@ -169,9 +247,9 @@ export function generateIdCardsFullHtml(
         width: 100% !important;
         max-width: 100% !important;
         min-width: 0 !important;
-        height: 280mm !important;
-        max-height: 280mm !important;
-        min-height: 280mm !important;
+        height: 275mm !important;
+        max-height: 275mm !important;
+        min-height: 275mm !important;
         padding: 4mm 2mm !important;
         margin: 0 !important;
         box-shadow: none !important;

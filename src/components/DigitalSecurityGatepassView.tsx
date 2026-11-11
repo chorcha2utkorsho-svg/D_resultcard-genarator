@@ -48,6 +48,7 @@ import { SchoolLogo } from './SchoolLogo';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { compressImageBase64 } from '../utils/imageCompressor';
 import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport';
+import { PWAInstallButton } from './PWAInstallButton';
 
 // Web Audio API beep sound generator for realistic barcode scanner beep
 const playScannerBeep = (freq = 1900, durationMs = 120) => {
@@ -323,19 +324,34 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       playScannerBeep();
     }
 
-    // 2. Add security log
-    addSecurityLog({
+    const newLogRecord: SecurityGatepassLog = {
+      id: `sec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       studentId: student.id,
       studentNameBn: student.nameBn,
       studentRoll: student.roll,
       classNameBn,
       action: gateAction,
+      timestamp: new Date().toISOString(),
       guardianPhone,
       voiceDispatched: voiceEnabled,
       smsDispatched: smsSimulationEnabled,
       status: 'verified',
       operatorNote: `${actionLabel} সফলভাবে সম্পন্ন হয়েছে`,
-    });
+    };
+
+    // 2. Add security log locally
+    addSecurityLog(newLogRecord);
+
+    // 2b. Broadcast to central server for real-time guardian smartphone audio alarm
+    try {
+      fetch('/api/security/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ log: newLogRecord }),
+      }).catch((err) => console.warn('Gate log sync error:', err));
+    } catch {
+      // Non-fatal
+    }
 
     setRecentScannedStudent(student);
     setLiveAnnouncement(voiceMsg);
@@ -611,6 +627,88 @@ export const DigitalSecurityGatepassView: React.FC = () => {
 
   const latestChildAlarm = guardianChildLogs[0] || null;
 
+  // Guardian Real-Time Live Audio Alarm & Background Polling
+  const [guardianAudioEnabled, setGuardianAudioEnabled] = useState<boolean>(true);
+  const [guardianAudioTested, setGuardianAudioTested] = useState<boolean>(false);
+  const [isGuardianAlarmRinging, setIsGuardianAlarmRinging] = useState<boolean>(false);
+  const lastKnownSecurityTimestampRef = useRef<number>(Date.now() - 30000);
+  const lastAlarmFiredIdRef = useRef<string>('');
+
+  const handleTestGuardianAudio = () => {
+    setGuardianAudioTested(true);
+    setGuardianAudioEnabled(true);
+    setIsGuardianAlarmRinging(true);
+    playAlarmChime();
+    const childName = loggedInGuardianStudent?.nameBn || 'শিক্ষার্থী';
+    const msg = `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। ${childName}-এর কার্ড প্রধান ফটকে স্ক্যান হওয়া মাত্রই আপনার ফোনে তাৎক্ষণিক এলার্ম ও ভয়েস মেসেজ বেজে উঠবে।`;
+    speakBengali(msg);
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate([150, 60, 150]);
+      } catch {}
+    }
+    setTimeout(() => setIsGuardianAlarmRinging(false), 3500);
+  };
+
+  // Poll server every 2.5 seconds for new gatepass scan events for this child
+  useEffect(() => {
+    if (!loggedInGuardianStudent) return;
+
+    let isSubscribed = true;
+    const pollInterval = setInterval(async () => {
+      try {
+        const sinceTime = lastKnownSecurityTimestampRef.current - 1000;
+        const res = await fetch(
+          `/api/security/latest-logs?since=${sinceTime}&studentId=${encodeURIComponent(
+            loggedInGuardianStudent.id
+          )}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!isSubscribed || !data || !Array.isArray(data.logs) || data.logs.length === 0) return;
+
+        // Process logs
+        for (const log of data.logs) {
+          if (log.studentId === loggedInGuardianStudent.id) {
+            const logMillis = new Date(log.timestamp).getTime();
+            if (logMillis > lastKnownSecurityTimestampRef.current && log.id !== lastAlarmFiredIdRef.current) {
+              lastKnownSecurityTimestampRef.current = logMillis;
+              lastAlarmFiredIdRef.current = log.id;
+
+              // Append to local store if not already present
+              addSecurityLog(log);
+
+              // Ring chime and speak voice announcement!
+              if (guardianAudioEnabled) {
+                setIsGuardianAlarmRinging(true);
+                playAlarmChime();
+                const actionVerb =
+                  log.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় হতে নিরাপদে প্রস্থান করেছে';
+                const announcement = `সম্মানিত অভিভাবক, আপনার সন্তান ${loggedInGuardianStudent.nameBn}, শ্রেণি ${log.classNameBn}, রোল ${toBengaliNumber(loggedInGuardianStudent.roll)}, এইমাত্র ${actionVerb}।`;
+                speakBengali(announcement);
+                setTimeout(() => setIsGuardianAlarmRinging(false), 4500);
+              }
+
+              if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                try {
+                  navigator.vibrate([200, 100, 200, 100, 400]);
+                } catch {}
+              }
+              break;
+            }
+          }
+        }
+      } catch {
+        // Quiet failure on transient network issues
+      }
+    }, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollInterval);
+    };
+  }, [loggedInGuardianStudent, guardianAudioEnabled, addSecurityLog]);
+
   // =========================================================================
   // PART 3: DOUBLE-SIDED ID CARD GENERATOR STATES
   // =========================================================================
@@ -630,7 +728,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     return students.filter((s) => s.classId === idCardClassFilter);
   }, [students, idCardClassFilter]);
 
-  // Compute exact 4-cards-per-A4-page chunks (2x2 grid layout)
+  // Compute exact 4-cards-per-A4-page chunks (2x2 grid layout OR 2 fold-units for duplex)
   interface IdCardPrintSlot {
     student: Student;
     side: 'front' | 'back';
@@ -639,6 +737,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
 
   interface IdCardPrintSheet {
     sheetIndex: number;
+    students: Student[];
     slots: IdCardPrintSlot[];
   }
 
@@ -647,36 +746,44 @@ export const DigitalSecurityGatepassView: React.FC = () => {
 
     if (idCardSideView === 'both') {
       // Both sides: 2 students per A4 sheet (2 front + 2 back = 4 cards per sheet)
+      // Front and Back touch side-by-side with zero gap (fold layout)
       for (let i = 0; i < idCardFilteredStudents.length; i += 2) {
         const slots: IdCardPrintSlot[] = [];
+        const sheetStudents: Student[] = [];
         const std1 = idCardFilteredStudents[i];
         if (std1) {
+          sheetStudents.push(std1);
           slots.push({ student: std1, side: 'front', studentIndex: i });
           slots.push({ student: std1, side: 'back', studentIndex: i });
         }
         const std2 = idCardFilteredStudents[i + 1];
         if (std2) {
+          sheetStudents.push(std2);
           slots.push({ student: std2, side: 'front', studentIndex: i + 1 });
           slots.push({ student: std2, side: 'back', studentIndex: i + 1 });
         }
         sheets.push({
           sheetIndex: sheets.length,
+          students: sheetStudents,
           slots,
         });
       }
     } else {
-      // Single side (front or back): 4 students per A4 sheet
+      // Single side (front or back): 4 students per A4 sheet in standard 2x2 grid
       const side = idCardSideView;
       for (let i = 0; i < idCardFilteredStudents.length; i += 4) {
         const slots: IdCardPrintSlot[] = [];
+        const sheetStudents: Student[] = [];
         for (let j = 0; j < 4; j++) {
           const std = idCardFilteredStudents[i + j];
           if (std) {
+            sheetStudents.push(std);
             slots.push({ student: std, side, studentIndex: i + j });
           }
         }
         sheets.push({
           sheetIndex: sheets.length,
+          students: sheetStudents,
           slots,
         });
       }
@@ -696,7 +803,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     }
     const modeDesc =
       idCardSideView === 'both'
-        ? `এপিঠ ও ওপিঠ (প্রতি পাতায় ২ জন = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        ? `এপিঠ ও ওপিঠ স্পর্শমান ভাজ মোড (প্রতি পাতায় ২ জনের স্পর্শমান এপিঠ-ওপিঠ = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
         : idCardSideView === 'front'
         ? `১ম পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
         : `২য় পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`;
@@ -713,7 +820,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     }
     const modeDesc =
       idCardSideView === 'both'
-        ? `এপিঠ ও ওপিঠ (প্রতি পাতায় ২ জন = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
+        ? `এপিঠ ও ওপিঠ স্পর্শমান ভাজ মোড (প্রতি পাতায় ২ জনের স্পর্শমান এপিঠ-ওপিঠ = ৪টি কার্ড, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
         : idCardSideView === 'front'
         ? `১ম পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`
         : `২য় পৃষ্ঠা (প্রতি পাতায় ৪ জন, মোট ${toBengaliNumber(idCardPrintSheets.length)} পাতা)`;
@@ -1451,6 +1558,71 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                 </div>
               </div>
 
+              {/* Guardian PWA Install Banner */}
+              <PWAInstallButton variant="banner" />
+
+              {/* Smartphone Audio Alarm Activator Card */}
+              <div className="bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-amber-500/10 border-2 border-amber-400/50 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xs">
+                <div className="flex items-center space-x-3">
+                  <div
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-white shadow-md transition-all ${
+                      guardianAudioTested ? 'bg-emerald-600' : 'bg-amber-500 animate-pulse'
+                    }`}
+                  >
+                    <Volume2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900 font-serif flex items-center gap-2">
+                      <span>স্মার্টফোন অডিও এলার্ম ও ভয়েস নোটিফিকেশন</span>
+                      {guardianAudioTested ? (
+                        <span className="text-[10.5px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full border border-emerald-300">
+                          ✓ অডিও সক্রিয়
+                        </span>
+                      ) : (
+                        <span className="text-[10.5px] bg-amber-100 text-amber-900 font-bold px-2.5 py-0.5 rounded-full border border-amber-300">
+                          ! সাউন্ড টেস্ট প্রয়োজন
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      মোবাইল ব্রাউজারে স্বয়ংক্রিয় শব্দ ও বাংলা ভয়েস বার্তা বাজানোর জন্য নিচের বাটনে একবার চাপ দিয়ে টেস্ট করে নিন।
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setGuardianAudioEnabled(!guardianAudioEnabled)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                      guardianAudioEnabled
+                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                        : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                    }`}
+                  >
+                    {guardianAudioEnabled ? (
+                      <Volume2 className="w-4 h-4 text-indigo-600" />
+                    ) : (
+                      <VolumeX className="w-4 h-4 text-slate-400" />
+                    )}
+                    <span>{guardianAudioEnabled ? 'সাউন্ড চালু' : 'মিউট করা'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleTestGuardianAudio}
+                    className={`px-4 py-2 text-xs font-black rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer ${
+                      isGuardianAlarmRinging
+                        ? 'bg-rose-600 text-white animate-pulse'
+                        : 'bg-amber-500 hover:bg-amber-600 text-slate-950'
+                    }`}
+                  >
+                    <BellRing className={`w-4 h-4 ${isGuardianAlarmRinging ? 'animate-bounce' : ''}`} />
+                    <span>সাউন্ড টেস্ট ও এলার্ম সক্রিয় করুন</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Live Alarm / Alert Status Card for Guardian */}
               <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 rounded-3xl p-6 text-white shadow-lg border border-slate-800 space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
@@ -1986,40 +2158,85 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* 2x2 Grid of 4 Cards */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 justify-items-center items-center py-2 bg-slate-50/60 rounded-xl p-4 border border-dashed border-slate-200">
-                      {sheet.slots.map((slot, sIdx) => {
-                        const cls = classes.find((c) => c.id === slot.student.classId);
-                        const classNameBn = cls?.nameBn || 'শ্রেণি';
-
-                        return (
-                          <div
-                            key={`preview-slot-${slot.student.id}-${slot.side}-${sIdx}`}
-                            className="flex flex-col items-center p-2 rounded-xl border border-dashed border-slate-300 bg-white shadow-2xs relative group"
-                          >
-                            <div className="text-[10px] font-bold text-slate-400 mb-1 flex items-center justify-between w-full px-1">
-                              <span>
-                                {slot.side === 'front' ? '১ম পৃষ্ঠা (এপিঠ)' : '২য় পৃষ্ঠা (ওপিঠ)'}
-                              </span>
-                              <span className="font-mono text-indigo-800">
-                                রোল: {toBengaliRoll(slot.student.roll)}
-                              </span>
+                    {/* Sheet Content: Either 2 folding units touching seamlessly or 2x2 grid */}
+                    {idCardSideView === 'both' ? (
+                      <div className="flex flex-col items-center gap-6 py-4 bg-slate-50/70 rounded-xl p-4 border border-dashed border-slate-300">
+                        {sheet.students.map((student, sIdx) => {
+                          const cls = classes.find((c) => c.id === student.classId);
+                          const classNameBn = cls?.nameBn || 'শ্রেণি';
+                          return (
+                            <div key={`sheet-fold-${student.id}-${sIdx}`} className="flex flex-col items-center">
+                              <div className="text-[10.5px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-0.5 rounded-full mb-1 flex items-center gap-1.5 shadow-2xs">
+                                <FlipHorizontal className="w-3 h-3 text-indigo-600" />
+                                <span>
+                                  শিক্ষার্থী {toBengaliNumber(sIdx + 1)}: {student.nameBn} (রোল {toBengaliRoll(student.roll)}) • স্পর্শমান এপিঠ-ওপিঠ ভাজ ইউনিট
+                                </span>
+                              </div>
+                              <div className="relative inline-flex items-center justify-center p-0.5 border-2 border-dashed border-slate-500 rounded-2xl bg-white shadow-sm overflow-hidden">
+                                <div className="absolute top-1 left-1/2 -translate-x-1/2 z-20 bg-slate-900 text-white text-[9px] font-bold px-2 py-0.5 rounded shadow pointer-events-none">
+                                  ▼ ভাঁজ রেখা (Fold Line) ▼
+                                </div>
+                                <div className="shrink-0">
+                                  <StudentIDCardSlip
+                                    student={student}
+                                    classNameBn={classNameBn}
+                                    schoolInfo={schoolInfo}
+                                    side="front"
+                                    orientation={idCardOrientation}
+                                    academicYear={selectedYear || '২০২৬'}
+                                  />
+                                </div>
+                                <div className="w-0 self-stretch border-r-2 border-dashed border-slate-400 z-10 mx-0 my-1 pointer-events-none" />
+                                <div className="shrink-0">
+                                  <StudentIDCardSlip
+                                    student={student}
+                                    classNameBn={classNameBn}
+                                    schoolInfo={schoolInfo}
+                                    side="back"
+                                    orientation={idCardOrientation}
+                                    academicYear={selectedYear || '২০২৬'}
+                                  />
+                                </div>
+                              </div>
                             </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 justify-items-center items-center py-2 bg-slate-50/60 rounded-xl p-4 border border-dashed border-slate-200">
+                        {sheet.slots.map((slot, sIdx) => {
+                          const cls = classes.find((c) => c.id === slot.student.classId);
+                          const classNameBn = cls?.nameBn || 'শ্রেণি';
 
-                            <StudentIDCardSlip
-                              student={slot.student}
-                              classNameBn={classNameBn}
-                              schoolInfo={schoolInfo}
-                              side={slot.side}
-                              orientation={idCardOrientation}
-                              academicYear={selectedYear || '২০২৬'}
-                              onPhotoUpload={handleIdCardPhotoUpload}
-                              onEditDetails={(target) => setQuickEditStudent(target)}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
+                          return (
+                            <div
+                              key={`preview-slot-${slot.student.id}-${slot.side}-${sIdx}`}
+                              className="flex flex-col items-center p-2 rounded-xl border border-dashed border-slate-300 bg-white shadow-2xs relative group"
+                            >
+                              <div className="text-[10px] font-bold text-slate-400 mb-1 flex items-center justify-between w-full px-1">
+                                <span>
+                                  {slot.side === 'front' ? '১ম পৃষ্ঠা (এপিঠ)' : '২য় পৃষ্ঠা (ওপিঠ)'}
+                                </span>
+                                <span className="font-mono text-indigo-800">
+                                  রোল: {toBengaliRoll(slot.student.roll)}
+                                </span>
+                              </div>
+
+                              <StudentIDCardSlip
+                                student={slot.student}
+                                classNameBn={classNameBn}
+                                schoolInfo={schoolInfo}
+                                side={slot.side}
+                                orientation={idCardOrientation}
+                                academicYear={selectedYear || '২০২৬'}
+                                onPhotoUpload={handleIdCardPhotoUpload}
+                                onEditDetails={(target) => setQuickEditStudent(target)}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2072,45 +2289,77 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                     </div>
 
                     {/* RENDER SIDES BASED ON TOGGLE & ORIENTATION */}
-                    <div className="flex flex-wrap items-center justify-center gap-4 flex-1">
-                      {/* Front Side */}
-                      {(idCardSideView === 'both' || idCardSideView === 'front') && (
-                        <div className="flex flex-col items-center">
-                          <span className="no-print text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                            ১ম পৃষ্ঠা • এপিঠ (FRONT)
-                          </span>
-                          <StudentIDCardSlip
-                            student={std}
-                            classNameBn={classNameBn}
-                            schoolInfo={schoolInfo}
-                            side="front"
-                            orientation={idCardOrientation}
-                            academicYear={selectedYear || '২০২৬'}
-                            onPhotoUpload={handleIdCardPhotoUpload}
-                            onEditDetails={(target) => setQuickEditStudent(target)}
-                          />
+                    {idCardSideView === 'both' ? (
+                      <div className="flex flex-col items-center">
+                        <div className="no-print text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-full mb-2 flex items-center gap-1.5 shadow-2xs">
+                          <FlipHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>স্পর্শমান এপিঠ-ওপিঠ (Zero-Gap) • প্রিন্ট করে মাঝের দাগে ভাঁজ করলেই লেমিনেটিং রেডি</span>
                         </div>
-                      )}
 
-                      {/* Back Side */}
-                      {(idCardSideView === 'both' || idCardSideView === 'back') && (
+                        {/* Touching Pair Unit */}
+                        <div className="relative inline-flex flex-row items-center justify-center p-0.5 border-2 border-dashed border-slate-500 rounded-2xl bg-white shadow-md overflow-hidden">
+                          {/* Top Fold Indicator Badge */}
+                          <div className="no-print absolute top-1 left-1/2 -translate-x-1/2 z-20 bg-slate-900 text-white text-[9.5px] font-bold px-2 py-0.5 rounded shadow pointer-events-none">
+                            ▼ ভাঁজ রেখা (Fold Line) ▼
+                          </div>
+
+                          {/* Front Side */}
+                          <div className="shrink-0 flex flex-col items-center">
+                            <span className="no-print text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 pt-0.5">
+                              ১ম পৃষ্ঠা (এপিঠ)
+                            </span>
+                            <StudentIDCardSlip
+                              student={std}
+                              classNameBn={classNameBn}
+                              schoolInfo={schoolInfo}
+                              side="front"
+                              orientation={idCardOrientation}
+                              academicYear={selectedYear || '২০২৬'}
+                              onPhotoUpload={handleIdCardPhotoUpload}
+                              onEditDetails={(target) => setQuickEditStudent(target)}
+                            />
+                          </div>
+
+                          {/* Center Fold Line */}
+                          <div className="w-0 self-stretch border-r-2 border-dashed border-slate-400 z-10 mx-0 my-1 pointer-events-none" />
+
+                          {/* Back Side */}
+                          <div className="shrink-0 flex flex-col items-center">
+                            <span className="no-print text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5 pt-0.5">
+                              ২য় পৃষ্ঠা (ওপিঠ)
+                            </span>
+                            <StudentIDCardSlip
+                              student={std}
+                              classNameBn={classNameBn}
+                              schoolInfo={schoolInfo}
+                              side="back"
+                              orientation={idCardOrientation}
+                              academicYear={selectedYear || '২০২৬'}
+                              onPhotoUpload={handleIdCardPhotoUpload}
+                              onEditDetails={(target) => setQuickEditStudent(target)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-center gap-4 flex-1">
                         <div className="flex flex-col items-center">
                           <span className="no-print text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                            ২য় পৃষ্ঠা • ওপিঠ (BACK)
+                            {idCardSideView === 'front' ? '১ম পৃষ্ঠা • এপিঠ (FRONT)' : '২য় পৃষ্ঠা • ওপিঠ (BACK)'}
                           </span>
                           <StudentIDCardSlip
                             student={std}
                             classNameBn={classNameBn}
                             schoolInfo={schoolInfo}
-                            side="back"
+                            side={idCardSideView}
                             orientation={idCardOrientation}
                             academicYear={selectedYear || '২০২৬'}
                             onPhotoUpload={handleIdCardPhotoUpload}
                             onEditDetails={(target) => setQuickEditStudent(target)}
                           />
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2130,35 +2379,79 @@ export const DigitalSecurityGatepassView: React.FC = () => {
             aria-hidden="true"
           >
             {idCardPrintSheets.map((sheet) => (
-              <div
-                key={`print-sheet-${sheet.sheetIndex}`}
-                className="id-card-a4-sheet"
-              >
-                {sheet.slots.map((slot, sIdx) => {
-                  const cls = classes.find((c) => c.id === slot.student.classId);
-                  const classNameBn = cls?.nameBn || 'শ্রেণি';
-                  return (
-                    <div
-                      key={`slot-${slot.student.id}-${slot.side}-${sIdx}`}
-                      className="id-card-print-slot"
-                    >
-                      <div className="id-card-slot-wrapper">
-                        <StudentIDCardSlip
-                          student={slot.student}
-                          classNameBn={classNameBn}
-                          schoolInfo={schoolInfo}
-                          side={slot.side}
-                          orientation={idCardOrientation}
-                          academicYear={selectedYear || '২০২৬'}
-                        />
+              idCardSideView === 'both' ? (
+                <div
+                  key={`print-sheet-${sheet.sheetIndex}`}
+                  className="id-card-a4-sheet fold-layout"
+                >
+                  {sheet.students.map((student, sIdx) => {
+                    const cls = classes.find((c) => c.id === student.classId);
+                    const classNameBn = cls?.nameBn || 'শ্রেণি';
+                    return (
+                      <div
+                        key={`fold-unit-${student.id}-${sIdx}`}
+                        className="id-card-fold-unit"
+                      >
+                        <div className="fold-badge-top">▼ ভাজ রেখা (Fold Line) ▼</div>
+                        <div className="id-card-fold-half">
+                          <StudentIDCardSlip
+                            student={student}
+                            classNameBn={classNameBn}
+                            schoolInfo={schoolInfo}
+                            side="front"
+                            orientation={idCardOrientation}
+                            academicYear={selectedYear || '২০২৬'}
+                          />
+                        </div>
+                        <div className="id-card-fold-center-line"></div>
+                        <div className="id-card-fold-half">
+                          <StudentIDCardSlip
+                            student={student}
+                            classNameBn={classNameBn}
+                            schoolInfo={schoolInfo}
+                            side="back"
+                            orientation={idCardOrientation}
+                            academicYear={selectedYear || '২০২৬'}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-                <div className="sheet-watermark">
-                  পাতা: {toBengaliNumber(sheet.sheetIndex + 1)} / {toBengaliNumber(idCardPrintSheets.length)} • {schoolInfo.name}
+                    );
+                  })}
+                  <div className="sheet-watermark">
+                    পাতা: {toBengaliNumber(sheet.sheetIndex + 1)} / {toBengaliNumber(idCardPrintSheets.length)} • {schoolInfo.name}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div
+                  key={`print-sheet-${sheet.sheetIndex}`}
+                  className="id-card-a4-sheet grid-layout"
+                >
+                  {sheet.slots.map((slot, sIdx) => {
+                    const cls = classes.find((c) => c.id === slot.student.classId);
+                    const classNameBn = cls?.nameBn || 'শ্রেণি';
+                    return (
+                      <div
+                        key={`slot-${slot.student.id}-${slot.side}-${sIdx}`}
+                        className="id-card-print-slot"
+                      >
+                        <div className="id-card-slot-wrapper">
+                          <StudentIDCardSlip
+                            student={slot.student}
+                            classNameBn={classNameBn}
+                            schoolInfo={schoolInfo}
+                            side={slot.side}
+                            orientation={idCardOrientation}
+                            academicYear={selectedYear || '২০২৬'}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="sheet-watermark">
+                    পাতা: {toBengaliNumber(sheet.sheetIndex + 1)} / {toBengaliNumber(idCardPrintSheets.length)} • {schoolInfo.name}
+                  </div>
+                </div>
+              )
             ))}
           </div>
         </div>

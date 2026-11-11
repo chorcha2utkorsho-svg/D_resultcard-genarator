@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavbarProps {
   currentTab: string;
@@ -85,8 +86,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
             </div>
           </div>
 
-          {/* Quick Actions (Sync, Backup & Settings) on Desktop */}
+          {/* Quick Actions (Install PWA, Sync, Backup & Settings) on Desktop */}
           <div className="hidden lg:flex items-center space-x-2">
+            <PWAInstallButton variant="badge" />
             <button
               onClick={async () => {
                 await forceServerSync();
@@ -121,6 +123,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
 
           {/* Mobile menu button */}
           <div className="flex items-center lg:hidden space-x-2">
+            <PWAInstallButton variant="badge" />
             <button
               onClick={onOpenSettings}
               className="p-1.5 text-amber-300 hover:text-amber-200 rounded-lg hover:bg-indigo-800"

@@ -592,7 +592,8 @@
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
-      "securityQrCode": "DLIKON-CLASS_PLAY-1-WPXC"
+      "securityQrCode": "DLIKON-CLASS_PLAY-1-WPXC",
+      "futurePlan": null
     },
     {
       "roll": 2,
@@ -5642,18 +5643,60 @@
   ],
   "feeInvoices": [],
   "feeReceipts": [],
-  "securityLogs": [],
-  "_lastUpdated": "2026-11-11T11:06:52.448Z",
-  "_lastSecurityEvent": {
-    "studentId": "test-std-1",
-    "studentNameBn": "টেস্ট শিক্ষার্থী",
-    "studentRoll": 1,
-    "classNameBn": "প্লে শ্রেণি",
-    "action": "entry",
-    "timestamp": 1794395209200,
-    "guardianPhone": "01700000000",
-    "voiceDispatched": true,
-    "smsDispatched": false,
-    "status": "verified"
-  }
+  "securityLogs": [
+    {
+      "id": "verify-clock-skew-1",
+      "studentId": "std_1794322963381_0_wpxc",
+      "studentNameBn": "মোঃ মাজিদ",
+      "studentRoll": 1,
+      "classNameBn": "চতুর্থ শ্রেণি",
+      "action": "entry",
+      "timestamp": "2026-11-12T20:24:35.728Z",
+      "guardianPhone": "01700000000",
+      "voiceDispatched": true,
+      "smsDispatched": true,
+      "status": "verified",
+      "serverTimestamp": 1794515195748,
+      "guardianAcknowledged": false
+    }
+  ],
+  "_lastUpdated": "2026-11-12T20:35:32.301Z",
+  "staffAccounts": [
+    {
+      "id": "staff_admin_default",
+      "staffCode": "DL-ADMIN",
+      "role": "official",
+      "nameBn": "প্রধান প্রশাসক ও অধ্যক্ষ",
+      "designationBn": "প্রধান শিক্ষক / পরিচালক",
+      "phone": "০১৩১৩১৫৯৪৫৯",
+      "email": "contact.dlikonmodelacademy@gmail.com",
+      "password": "admin123",
+      "department": "administration",
+      "status": "active",
+      "createdAt": "2026-11-12T20:35:50.456Z"
+    },
+    {
+      "id": "staff_emp_default",
+      "staffCode": "DL-EMP-01",
+      "role": "employee",
+      "nameBn": "সহকারী শিক্ষক (একাডেমিক ও গেট)",
+      "designationBn": "সহকারী শিক্ষক",
+      "phone": "01711000001",
+      "email": "teacher@dlikon.edu.bd",
+      "password": "emp123",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "status": "active",
+      "createdAt": "2026-11-12T20:35:50.456Z"
+    }
+  ]
 }

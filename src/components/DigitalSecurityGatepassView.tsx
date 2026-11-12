@@ -39,23 +39,76 @@ import {
   ExternalLink,
   Save,
   Zap,
+  Share2,
+  Copy,
+  MessageSquare,
+  CheckCheck,
+  Calendar,
+  Globe,
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
 import { Student, SecurityGatepassLog } from '../types';
-import { toBengaliNumber, toBengaliRoll, formatBengaliDate } from '../utils/bengali';
+import { toBengaliNumber, toBengaliRoll, formatBengaliDate, getStudentPortalId } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { compressImageBase64 } from '../utils/imageCompressor';
 import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport';
 import { PWAInstallButton } from './PWAInstallButton';
+import { StudentPersonalDashboard } from './StudentPersonalDashboard';
+
+// Shared Web Audio API context so background async polls can play alarm chimes on mobile after user gesture unlock
+let sharedAudioCtx: AudioContext | null = null;
+const getSharedAudioContext = (): AudioContext | null => {
+  try {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
+      sharedAudioCtx = new AudioCtx();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+      sharedAudioCtx.resume().catch(() => {});
+    }
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+};
+
+// Unlock mobile Chrome / iOS Safari audio & speech synthesis during a user click gesture
+const unlockMobileAudioAndSpeech = (skipSpeechPrime = false) => {
+  try {
+    const ctx = getSharedAudioContext();
+    if (ctx) {
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+    }
+    if (!skipSpeechPrime && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      // Prime speech engine quietly so async voice playback is allowed later
+      if (!window.speechSynthesis.speaking) {
+        const silentUtter = new SpeechSynthesisUtterance(' ');
+        silentUtter.volume = 0;
+        silentUtter.lang = 'bn-BD';
+        window.speechSynthesis.speak(silentUtter);
+      }
+    }
+  } catch {
+    // Safe fallback
+  }
+};
 
 // Web Audio API beep sound generator for realistic barcode scanner beep
 const playScannerBeep = (freq = 1900, durationMs = 120) => {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
 
@@ -69,7 +122,7 @@ const playScannerBeep = (freq = 1900, durationMs = 120) => {
 
     osc.start();
     osc.stop(ctx.currentTime + durationMs / 1000);
-  } catch (err) {
+  } catch {
     // Audio might be blocked until user gesture
   }
 };
@@ -77,9 +130,8 @@ const playScannerBeep = (freq = 1900, durationMs = 120) => {
 // Play siren / alarm chime for guardian alert
 const playAlarmChime = () => {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -108,14 +160,28 @@ const playAlarmChime = () => {
   }
 };
 
-export const DigitalSecurityGatepassView: React.FC = () => {
+interface DigitalSecurityGatepassViewProps {
+  initialTab?: 'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs';
+  restrictedMode?: 'full' | 'student_only' | 'employee_scanner';
+  forcedStudentId?: string;
+  onRoleLogout?: () => void;
+}
+
+export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewProps> = ({
+  initialTab,
+  restrictedMode = 'full',
+  forcedStudentId,
+  onRoleLogout,
+}) => {
   const {
     schoolInfo,
+    updateSchoolInfo,
     classes,
     students,
     updateStudent,
     securityLogs,
     addSecurityLog,
+    acknowledgeSecurityLog,
     clearSecurityLogs,
     selectedClassId,
     selectedYear,
@@ -126,12 +192,39 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     seedParentDetailsForClass,
   } = useSchool();
 
+  const initialUrlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const urlGuardianParam = initialUrlParams?.get('guardian') || '';
+  const urlTabParam = initialUrlParams?.get('tab') || '';
+  const hasSavedGuardianSession =
+    typeof window !== 'undefined' &&
+    localStorage.getItem('dlikon_pwa_guardian_mode') === 'true' &&
+    Boolean(localStorage.getItem('dlikon_guardian_paired_student_id'));
+
   // Top-Level Active Tab for the 3 core parts mandated by user:
-  // Part 1: guardian_portal (অভিভাবক একাউন্ট ও ড্যাশবোর্ড)
+  // Part 1: guardian_portal (শিক্ষার্থী ও অভিভাবক ড্যাশবোর্ড)
   // Part 2: barcode_scanner (স্মার্ট ফোনের মাধ্যমে বারকোড স্ক্যানার)
   // Part 3: idcard_generator (কিউআর কোড যুক্ত এপিঠ ওপিঠ আইডিকার্ড জেনারেটর)
   // Part 4: audit_logs (গেটপাস অডিট ও অ্যাক্সেস লগ)
-  const [activeTab, setActiveTab] = useState<'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs'>('barcode_scanner');
+  const [activeTab, setActiveTab] = useState<'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs'>(
+    restrictedMode === 'student_only'
+      ? 'guardian_portal'
+      : restrictedMode === 'employee_scanner'
+      ? 'barcode_scanner'
+      : initialTab ||
+        (urlGuardianParam || urlTabParam === 'guardian_portal' || hasSavedGuardianSession
+          ? 'guardian_portal'
+          : 'barcode_scanner')
+  );
+
+  useEffect(() => {
+    if (restrictedMode === 'student_only') {
+      setActiveTab('guardian_portal');
+    } else if (restrictedMode === 'employee_scanner') {
+      setActiveTab('barcode_scanner');
+    } else if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, restrictedMode]);
 
   // =========================================================================
   // PART 2: SMARTPHONE SCANNER & GATE AUTOMATION STATES
@@ -276,23 +369,43 @@ export const DigitalSecurityGatepassView: React.FC = () => {
     }
   }, [cameraFacingMode]);
 
-  // Bengali Voice Synthesis helper
-  const speakBengali = (text: string) => {
-    if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+  // Default & Dynamic Daily School Schedule for Guardian Voice Announcement
+  const activeDailySchedule = useMemo(
+    () =>
+      schoolInfo.dailySchedule || {
+        ptStartTimeBn: 'আটটা পঞ্চান্ন মিনিটে',
+        classStartTimeBn: 'নয়টা বিশ মিনিটে',
+        breakTimeBn: 'দুপুর একটা দশ মিনিটে',
+        dismissalTimeBn: 'বিকাল চারটায়',
+      },
+    [schoolInfo.dailySchedule]
+  );
+
+  const buildGuardianVoiceMessage = (student: Student, action: 'entry' | 'exit') => {
+    if (action === 'entry') {
+      return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গনে প্রবেশ করেছে। আজকে পিটি শুরু হবে ${activeDailySchedule.ptStartTimeBn}, ক্লাস শুরু হবে ${activeDailySchedule.classStartTimeBn}। প্রথমবার বিরতি থাকবে ${activeDailySchedule.breakTimeBn}। ছুটি ${activeDailySchedule.dismissalTimeBn}।`;
+    }
+    return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গন থেকে নিরাপদে প্রস্থান করেছে।`;
+  };
+
+  // Bengali Voice Synthesis helper (forceSpeak=true allows guardian phone playback independent of gate mute)
+  const speakBengali = (text: string, forceSpeak: boolean = false) => {
+    if ((!forceSpeak && !voiceEnabled) || typeof window === 'undefined' || !('speechSynthesis' in window)) {
       return;
     }
 
     try {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.95;
-      utterance.pitch = 1.05;
+      utterance.rate = 0.92;
+      utterance.pitch = 1.02;
       utterance.lang = 'bn-BD';
 
       const voices = window.speechSynthesis.getVoices();
-      const bnVoice = voices.find(
-        (v) => v.lang.startsWith('bn') || v.lang.includes('Bengali') || v.lang.includes('Bangla')
-      );
+      const bnVoice =
+        voices.find((v) => v.lang.toLowerCase() === 'bn-bd') ||
+        voices.find((v) => v.lang.toLowerCase().startsWith('bn')) ||
+        voices.find((v) => v.name.includes('Bengali') || v.name.includes('Bangla'));
       if (bnVoice) {
         utterance.voice = bnVoice;
       }
@@ -591,57 +704,190 @@ export const DigitalSecurityGatepassView: React.FC = () => {
   // =========================================================================
   // PART 1: GUARDIAN ACCOUNT LOGIN & PRIVATE DASHBOARD STATES
   // =========================================================================
+  const [guardianLoginClassId, setGuardianLoginClassId] = useState<string>('all');
   const [guardianLoginIdentifier, setGuardianLoginIdentifier] = useState<string>('');
   const [guardianLoginPin, setGuardianLoginPin] = useState<string>('');
   const [loggedInGuardianStudent, setLoggedInGuardianStudent] = useState<Student | null>(null);
   const [guardianLoginError, setGuardianLoginError] = useState<string | null>(null);
-  const [guardianLeaveNote, setGuardianLeaveNote] = useState<string>('');
-  const [guardianLeaveSubmitted, setGuardianLeaveSubmitted] = useState<boolean>(false);
 
-  // Authenticate Guardian
-  const handleGuardianLogin = (identifier: string, pin: string) => {
+  // Guardian Response / Acknowledgement & Admin Pairing Link States
+  const [guardianReplyText, setGuardianReplyText] = useState<string>('');
+  const [isSubmittingAck, setIsSubmittingAck] = useState<boolean>(false);
+  const [ackSuccessFeedback, setAckSuccessFeedback] = useState<string | null>(null);
+  const [guardianShareClassId, setGuardianShareClassId] = useState<string>('class_4');
+  const [copiedGuardianLinkId, setCopiedGuardianLinkId] = useState<string | null>(null);
+  const [showAdminPairingPanel, setShowAdminPairingPanel] = useState<boolean>(false);
+  const [showScheduleEditor, setShowScheduleEditor] = useState<boolean>(false);
+  const [scheduleDraft, setScheduleDraft] = useState({
+    ptStartTimeBn: activeDailySchedule.ptStartTimeBn,
+    classStartTimeBn: activeDailySchedule.classStartTimeBn,
+    breakTimeBn: activeDailySchedule.breakTimeBn,
+    dismissalTimeBn: activeDailySchedule.dismissalTimeBn,
+  });
+
+  useEffect(() => {
+    setScheduleDraft(activeDailySchedule);
+  }, [activeDailySchedule]);
+
+  // Auto-restore paired guardian session from forcedStudentId, URL (?guardian=...), or saved smartphone session
+  useEffect(() => {
+    if (students.length === 0) return;
+
+    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const urlGuardian = params?.get('guardian');
+    const savedPairedId =
+      typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
+    const targetId = forcedStudentId || urlGuardian || savedPairedId;
+
+    if (targetId && (!loggedInGuardianStudent || (forcedStudentId && loggedInGuardianStudent.id !== forcedStudentId))) {
+      const found = students.find(
+        (s) =>
+          s.id === targetId ||
+          (s.securityQrCode && s.securityQrCode.toLowerCase() === targetId.toLowerCase())
+      );
+      if (found) {
+        setLoggedInGuardianStudent(found);
+        setGuardianLoginClassId(found.classId);
+        setGuardianLoginIdentifier(String(found.roll));
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('dlikon_guardian_paired_student_id', found.id);
+          if (urlGuardian || forcedStudentId) {
+            localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
+          }
+        }
+      }
+    }
+  }, [students, loggedInGuardianStudent, forcedStudentId]);
+
+  // Helper to convert Bengali numerals to English digits for reliable matching
+  const normalizeDigits = (val: string) => {
+    const bnMap: Record<string, string> = {
+      '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+      '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+    };
+    return val.replace(/[০-৯]/g, (d) => bnMap[d] || d);
+  };
+
+  // Always keep signed-in student object synced with live updates (photo, futurePlan, achievements, PIN)
+  const activeSignedInStudent = useMemo(() => {
+    if (!loggedInGuardianStudent) return null;
+    return students.find((s) => s.id === loggedInGuardianStudent.id) || loggedInGuardianStudent;
+  }, [loggedInGuardianStudent, students]);
+
+  // Authenticate Guardian/Student (Strictly isolated per student via Portal ID, Class+Roll, or Phone + Password)
+  const handleGuardianLogin = (identifier: string, pin: string, classIdFilter: string = guardianLoginClassId) => {
     setGuardianLoginError(null);
-    const cleanId = identifier.trim().toLowerCase();
-    const cleanPin = pin.trim();
+    const rawTrim = identifier.trim();
+    const cleanId = normalizeDigits(rawTrim).toLowerCase();
+    const cleanPin = normalizeDigits(pin.trim());
 
     if (!cleanId) {
-      setGuardianLoginError('অনুগ্রহ করে শিক্ষার্থীর রোল অথবা অভিভাবকের মোবাইল নম্বর লিখুন।');
+      setGuardianLoginError('অনুগ্রহ করে শিক্ষার্থীর ইউনিক আইডি (যেমন: DL-C4-01), রোল অথবা মোবাইল নম্বর লিখুন।');
       return;
     }
 
-    // Match student
-    const matched = students.find((s) => {
-      const matchRoll = String(s.roll) === cleanId || toBengaliNumber(s.roll) === cleanId;
-      const matchPhone =
-        (s.guardianPhone && s.guardianPhone.replace(/\D/g, '').includes(cleanId.replace(/\D/g, ''))) ||
-        (s.fatherPhone && s.fatherPhone.replace(/\D/g, '').includes(cleanId.replace(/\D/g, ''))) ||
-        (s.motherPhone && s.motherPhone.replace(/\D/g, '').includes(cleanId.replace(/\D/g, '')));
-      const matchId = s.id.toLowerCase() === cleanId;
-      return matchRoll || matchPhone || matchId;
+    const pool =
+      classIdFilter && classIdFilter !== 'all'
+        ? students.filter((s) => s.classId === classIdFilter)
+        : students;
+
+    const cleanDigits = cleanId.replace(/\D/g, '');
+    const isLikelyRoll = cleanDigits.length > 0 && cleanDigits.length <= 3 && !cleanId.includes('-');
+
+    // First check exact unique matches (Portal ID like DL-C4-01 / Student ID / QR Code / Phone number)
+    const cleanUpper = rawTrim.toUpperCase();
+    let matched: Student | undefined = students.find((s) => {
+      const portalCode = getStudentPortalId(s).toUpperCase();
+      return portalCode === cleanUpper || s.id.toLowerCase() === cleanId || (s.securityQrCode && s.securityQrCode.toLowerCase() === cleanId);
     });
 
     if (!matched) {
-      setGuardianLoginError('প্রদত্ত রোল বা মোবাইল নম্বরের কোনো শিক্ষার্থী পাওয়া যায়নি।');
+      matched = pool.find((s) => {
+        const matchPhone =
+          cleanDigits.length >= 6 &&
+          ((s.guardianPhone && normalizeDigits(s.guardianPhone).replace(/\D/g, '').endsWith(cleanDigits.slice(-8))) ||
+            (s.fatherPhone && normalizeDigits(s.fatherPhone).replace(/\D/g, '').endsWith(cleanDigits.slice(-8))) ||
+            (s.motherPhone && normalizeDigits(s.motherPhone).replace(/\D/g, '').endsWith(cleanDigits.slice(-8))) ||
+            (s.emergencyPhone && normalizeDigits(s.emergencyPhone).replace(/\D/g, '').endsWith(cleanDigits.slice(-8))));
+        return matchPhone;
+      });
+    }
+
+    if (!matched && isLikelyRoll) {
+      const rollMatches = pool.filter((s) => String(s.roll) === String(Number(cleanDigits)));
+      if (rollMatches.length > 1 && (!classIdFilter || classIdFilter === 'all')) {
+        setGuardianLoginError(
+          `রোল নম্বর ${toBengaliRoll(Number(cleanDigits))} একাধিক শ্রেণিতে রয়েছে (${rollMatches.length} জন)! অনুগ্রহ করে উপর থেকে আপনার সন্তানের নির্দিষ্ট "শ্রেণি" নির্বাচন করুন অথবা ইউনিক আইডি (যেমন: DL-C4-01) দিন।`
+        );
+        return;
+      }
+      matched = rollMatches[0];
+    }
+
+    if (!matched) {
+      // Fallback exact name match within selected class
+      if (classIdFilter && classIdFilter !== 'all') {
+        matched = pool.find((s) => s.nameBn.toLowerCase().includes(rawTrim.toLowerCase()));
+      }
+    }
+
+    if (!matched) {
+      setGuardianLoginError('প্রদত্ত ইউনিক আইডি, শ্রেণি, রোল বা মোবাইল নম্বরের কোনো শিক্ষার্থী পাওয়া যায়নি।');
       return;
     }
 
-    // Default PIN is '1234' if none set
-    const expectedPin = matched.guardianPin || '1234';
-    if (cleanPin && cleanPin !== expectedPin && cleanPin !== '1234') {
-      setGuardianLoginError('ভুল পিন কোড! ডিফল্ট পিন: 1234');
+    // Strict Password/PIN check (falls back to '1234' only if custom password hasn't been set yet)
+    const expectedPin = normalizeDigits((matched.guardianPin || '1234').trim()).toLowerCase();
+    if (!cleanPin || cleanPin.toLowerCase() !== expectedPin) {
+      setGuardianLoginError('ভুল পাসওয়ার্ড/পিন কোড! সঠিক ব্যক্তিগত পাসওয়ার্ড দিন (প্রথমবার হলে ডিফল্ট পিন: 1234)।');
       return;
     }
 
     setLoggedInGuardianStudent(matched);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('dlikon_guardian_paired_student_id', matched.id);
+      localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
+    }
+    unlockMobileAudioAndSpeech();
     playAlarmChime();
+  };
+
+  // Logout & Clear Guardian Device Pairing
+  const handleGuardianLogout = () => {
+    setLoggedInGuardianStudent(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('dlikon_guardian_paired_student_id');
+      localStorage.removeItem('dlikon_pwa_guardian_mode');
+    }
   };
 
   // Quick 1-click test login for user convenience
   const handleQuickTestGuardianLogin = (std: Student) => {
     setLoggedInGuardianStudent(std);
+    setGuardianLoginClassId(std.classId);
     setGuardianLoginIdentifier(std.guardianPhone || String(std.roll));
     setGuardianLoginPin(std.guardianPin || '1234');
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('dlikon_guardian_paired_student_id', std.id);
+      localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
+    }
+    unlockMobileAudioAndSpeech();
     playAlarmChime();
+  };
+
+  // Build Personal Guardian Direct Pairing URL
+  const getGuardianDirectUrl = (student: Student) => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(student.id)}`;
+  };
+
+  const handleCopyGuardianLink = (student: Student) => {
+    const url = getGuardianDirectUrl(student);
+    if (navigator.clipboard && url) {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+    setCopiedGuardianLinkId(student.id);
+    setTimeout(() => setCopiedGuardianLinkId(null), 2500);
   };
 
   // Filter logs strictly for logged in guardian's child
@@ -652,87 +898,226 @@ export const DigitalSecurityGatepassView: React.FC = () => {
 
   const latestChildAlarm = guardianChildLogs[0] || null;
 
-  // Guardian Real-Time Live Audio Alarm & Background Polling
+  // Guardian Response Counts across all security logs (counted in DB)
+  const guardianResponseStats = useMemo(() => {
+    const totalScans = securityLogs.length;
+    const totalResponded = securityLogs.filter((l) => l.guardianAcknowledged).length;
+    const pendingCount = totalScans - totalResponded;
+    return { totalScans, totalResponded, pendingCount };
+  }, [securityLogs]);
+
+  // Handle Guardian Acknowledgement / Response to Voice Message
+  const handleGuardianAcknowledge = async (log: SecurityGatepassLog, customResponseText?: string) => {
+    if (!loggedInGuardianStudent) return;
+    setIsSubmittingAck(true);
+    const responder =
+      loggedInGuardianStudent.fatherNameBn ||
+      loggedInGuardianStudent.guardianName ||
+      loggedInGuardianStudent.motherNameBn ||
+      'অভিভাবক';
+    const text =
+      (customResponseText || guardianReplyText).trim() || 'মেসেজ শুনেছি ও নিশ্চিত করলাম (ধন্যবাদ)';
+    await acknowledgeSecurityLog(log.id, text, responder);
+    playScannerBeep(1400, 100);
+    setGuardianReplyText('');
+    setIsSubmittingAck(false);
+    setAckSuccessFeedback('✓ আপনার রেসপন্স স্কুলের ডাটাবেজে সফলভাবে কাউন্ট ও সংরক্ষিত হয়েছে!');
+    setTimeout(() => setAckSuccessFeedback(null), 4000);
+  };
+
+  // Guardian Real-Time Live Audio Alarm & Background Polling (Server-Clock Synced)
   const [guardianAudioEnabled, setGuardianAudioEnabled] = useState<boolean>(true);
   const [guardianAudioTested, setGuardianAudioTested] = useState<boolean>(false);
   const [isGuardianAlarmRinging, setIsGuardianAlarmRinging] = useState<boolean>(false);
-  const lastKnownSecurityTimestampRef = useRef<number>(Date.now() - 30000);
-  const lastAlarmFiredIdRef = useRef<string>('');
+  const lastServerTimeRef = useRef<number>(0);
+  const hasBaselinePollRef = useRef<boolean>(false);
+  const seenLogIdsRef = useRef<Set<string>>(new Set());
 
   const handleTestGuardianAudio = () => {
+    unlockMobileAudioAndSpeech(true);
     setGuardianAudioTested(true);
     setGuardianAudioEnabled(true);
     setIsGuardianAlarmRinging(true);
     playAlarmChime();
-    const childName = loggedInGuardianStudent?.nameBn || 'শিক্ষার্থী';
-    const msg = `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। ${childName}-এর কার্ড প্রধান ফটকে স্ক্যান হওয়া মাত্রই আপনার ফোনে তাৎক্ষণিক এলার্ম ও ভয়েস মেসেজ বেজে উঠবে।`;
-    speakBengali(msg);
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+    const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
+    const msg = targetStudent
+      ? buildGuardianVoiceMessage(targetStudent, 'entry')
+      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। আজকে পিটি শুরু হবে ${activeDailySchedule.ptStartTimeBn}, ক্লাস শুরু হবে ${activeDailySchedule.classStartTimeBn}।`;
+    speakBengali(msg, true);
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
       } catch {}
     }
-    setTimeout(() => setIsGuardianAlarmRinging(false), 3500);
+    setTimeout(() => setIsGuardianAlarmRinging(false), 4500);
   };
+
+  // Keep latest signed-in student ref synced without resetting the 2.5s poll timer on profile edits
+  const activeSignedInStudentRef = useRef<Student | null>(null);
+  activeSignedInStudentRef.current = activeSignedInStudent || loggedInGuardianStudent;
+
+  // Reset poll baseline whenever the signed-in student changes
+  useEffect(() => {
+    hasBaselinePollRef.current = false;
+    lastServerTimeRef.current = 0;
+    seenLogIdsRef.current = new Set();
+  }, [loggedInGuardianStudent?.id]);
 
   // Poll server every 2.5 seconds for new gatepass scan events for this child
   useEffect(() => {
-    if (!loggedInGuardianStudent) return;
+    const signedStudentId = loggedInGuardianStudent?.id;
+    if (!signedStudentId) return;
 
     let isSubscribed = true;
-    const pollInterval = setInterval(async () => {
+
+    const triggerVoiceAlarmForLog = (studentObj: Student, log: SecurityGatepassLog) => {
+      if (guardianAudioEnabled) {
+        setIsGuardianAlarmRinging(true);
+        playAlarmChime();
+        const announcement = buildGuardianVoiceMessage(studentObj, log.action);
+        speakBengali(announcement, true);
+
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(`${schoolInfo.name} • লাইভ গেটপাস`, {
+              body: announcement,
+              icon: '/pwa-192x192.png',
+            });
+          } catch {}
+        }
+
+        setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+      }
+
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate([200, 100, 200, 100, 400]);
+        } catch {}
+      }
+    };
+
+    const pollServerForScans = async () => {
+      const signedStudent = activeSignedInStudentRef.current;
+      if (!signedStudent) return;
+
       try {
-        const sinceTime = lastKnownSecurityTimestampRef.current - 1000;
+        const sinceParam =
+          hasBaselinePollRef.current && lastServerTimeRef.current > 0
+            ? Math.max(0, lastServerTimeRef.current - 5000)
+            : 0;
         const res = await fetch(
-          `/api/security/latest-logs?since=${sinceTime}&studentId=${encodeURIComponent(
-            loggedInGuardianStudent.id
-          )}`
+          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}`
         );
         if (!res.ok) return;
         const data = await res.json();
-        if (!isSubscribed || !data || !Array.isArray(data.logs) || data.logs.length === 0) return;
+        if (!isSubscribed || !data) return;
 
-        // Process logs
-        for (const log of data.logs) {
-          if (log.studentId === loggedInGuardianStudent.id) {
-            const logMillis = new Date(log.timestamp).getTime();
-            if (logMillis > lastKnownSecurityTimestampRef.current && log.id !== lastAlarmFiredIdRef.current) {
-              lastKnownSecurityTimestampRef.current = logMillis;
-              lastAlarmFiredIdRef.current = log.id;
+        const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
+        const serverLogs: any[] = Array.isArray(data.logs) ? data.logs : [];
 
-              // Append to local store if not already present
+        if (!hasBaselinePollRef.current) {
+          hasBaselinePollRef.current = true;
+          lastServerTimeRef.current = serverNow;
+
+          // Sync existing logs silently on login; only ring if a scan happened within last 8s of server time
+          let newestLogToAlert: any = null;
+          for (const log of serverLogs) {
+            if (log.studentId === signedStudent.id) {
               addSecurityLog(log);
-
-              // Ring chime and speak voice announcement!
-              if (guardianAudioEnabled) {
-                setIsGuardianAlarmRinging(true);
-                playAlarmChime();
-                const actionVerb =
-                  log.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় হতে নিরাপদে প্রস্থান করেছে';
-                const announcement = `সম্মানিত অভিভাবক, আপনার সন্তান ${loggedInGuardianStudent.nameBn}, শ্রেণি ${log.classNameBn}, রোল ${toBengaliNumber(loggedInGuardianStudent.roll)}, এইমাত্র ${actionVerb}।`;
-                speakBengali(announcement);
-                setTimeout(() => setIsGuardianAlarmRinging(false), 4500);
+              seenLogIdsRef.current.add(log.id);
+              const sTime =
+                typeof log.serverTimestamp === 'number'
+                  ? log.serverTimestamp
+                  : new Date(log.timestamp).getTime() || 0;
+              if (!newestLogToAlert && sTime >= serverNow - 8000) {
+                newestLogToAlert = log;
               }
-
-              if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                try {
-                  navigator.vibrate([200, 100, 200, 100, 400]);
-                } catch {}
-              }
-              break;
             }
           }
+          if (newestLogToAlert) {
+            triggerVoiceAlarmForLog(signedStudent, newestLogToAlert);
+          }
+          return;
+        }
+
+        let maxSeenTime = lastServerTimeRef.current;
+        let freshLogToAlert: any = null;
+
+        for (const log of serverLogs) {
+          if (log.studentId === signedStudent.id) {
+            addSecurityLog(log);
+            const sTime =
+              typeof log.serverTimestamp === 'number'
+                ? log.serverTimestamp
+                : new Date(log.timestamp).getTime() || serverNow;
+            if (sTime > maxSeenTime) {
+              maxSeenTime = sTime;
+            }
+            if (!seenLogIdsRef.current.has(log.id)) {
+              seenLogIdsRef.current.add(log.id);
+              if (!freshLogToAlert) {
+                freshLogToAlert = log;
+              }
+            }
+          }
+        }
+
+        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, maxSeenTime, serverNow - 2000);
+        if (freshLogToAlert) {
+          triggerVoiceAlarmForLog(signedStudent, freshLogToAlert);
         }
       } catch {
         // Quiet failure on transient network issues
       }
-    }, 2500);
+    };
+
+    // Immediate baseline check + 2.5s interval
+    pollServerForScans();
+    const pollInterval = setInterval(pollServerForScans, 2500);
 
     return () => {
       isSubscribed = false;
       clearInterval(pollInterval);
     };
-  }, [loggedInGuardianStudent, guardianAudioEnabled, addSecurityLog]);
+  }, [
+    loggedInGuardianStudent?.id,
+    guardianAudioEnabled,
+    addSecurityLog,
+    activeDailySchedule,
+    schoolInfo.name,
+  ]);
+
+  // Also poll server every 3.5 seconds when school staff is viewing Scanner or Audit Logs
+  // so guardian responses from Saudi Arabia / mobile phones appear and count live!
+  useEffect(() => {
+    if (activeTab !== 'barcode_scanner' && activeTab !== 'audit_logs') return;
+
+    let isSubscribed = true;
+    const syncLogsFromServer = async () => {
+      try {
+        const res = await fetch('/api/security/latest-logs');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!isSubscribed || !data || !Array.isArray(data.logs)) return;
+        for (const serverLog of data.logs.slice(0, 50)) {
+          addSecurityLog(serverLog);
+        }
+      } catch {
+        // Non-fatal
+      }
+    };
+
+    syncLogsFromServer();
+    const timer = setInterval(syncLogsFromServer, 3500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(timer);
+    };
+  }, [activeTab, addSecurityLog]);
 
   // =========================================================================
   // PART 3: DOUBLE-SIDED ID CARD GENERATOR STATES
@@ -948,7 +1333,8 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       className="space-y-6 pb-16"
       style={{ fontFamily: "'Kalpurush', 'Hind Siliguri', sans-serif" }}
     >
-      {/* 1. Header Hero Banner */}
+      {/* 1. Header Hero Banner (Hidden in student_only mode for clean personal experience) */}
+      {restrictedMode === 'full' && (
       <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-blue-950 rounded-2xl shadow-md border border-slate-800 text-white p-4 sm:p-6 overflow-hidden relative">
         <div className="flex flex-wrap items-center justify-between gap-4 relative z-10">
           <div className="flex items-center space-x-3.5">
@@ -1006,7 +1392,7 @@ export const DigitalSecurityGatepassView: React.FC = () => {
             <span>পার্ট ২: স্মার্টফোন ক্যামেরা ও বারকোড স্ক্যানার</span>
           </button>
 
-          {/* Part 1: Guardian Portal */}
+          {/* Part 1: Student & Guardian Portal */}
           <button
             type="button"
             onClick={() => setActiveTab('guardian_portal')}
@@ -1017,8 +1403,8 @@ export const DigitalSecurityGatepassView: React.FC = () => {
             }`}
           >
             <Lock className="w-4 h-4" />
-            <span>পার্ট ১: অভিভাবক একাউন্ট ও এলার্ম ড্যাশবোর্ড</span>
-            {latestChildAlarm && loggedInGuardianStudent && (
+            <span>পার্ট ১: শিক্ষার্থী ও অভিভাবক ড্যাশবোর্ড</span>
+            {latestChildAlarm && activeSignedInStudent && (
               <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
             )}
           </button>
@@ -1052,6 +1438,28 @@ export const DigitalSecurityGatepassView: React.FC = () => {
           </button>
         </div>
       </div>
+      )}
+
+      {restrictedMode === 'employee_scanner' && (
+        <div className="bg-teal-950 rounded-2xl border border-teal-800 text-white p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-500 text-slate-950 shrink-0">
+              <Smartphone className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="font-serif font-bold text-lg text-white">
+                এমপ্লয়ী গেটপাস ক্যামেরা স্ক্যানার
+              </h2>
+              <p className="text-xs text-teal-200">
+                আইডি কার্ডের QR কোড স্ক্যান করে শিক্ষার্থীদের বিদ্যালয়ে প্রবেশ ও প্রস্থান নিশ্চিত করুন
+              </p>
+            </div>
+          </div>
+          <div className="text-xs font-mono text-amber-300 bg-black/30 px-3 py-1.5 rounded-lg">
+            {currentTime}
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* PART 2: SMARTPHONE CAMERA & BARCODE SCANNER VIEW                          */}
@@ -1322,28 +1730,128 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                 )}
 
                 {/* Quick Simulation Barcode Buttons */}
-                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold text-slate-700">
-                      দ্রুত স্ক্যান সিমুলেশন (শিক্ষার্থীদের ১-ক্লিক গেট স্ক্যান টেস্ট):
+                      দ্রুত স্ক্যান সিমুলেশন (১-ক্লিক গেট স্ক্যান টেস্ট):
                     </span>
-                    <span className="text-[10px] text-slate-500">মোট {toBengaliNumber(students.length)} জন শিক্ষার্থী</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {students.slice(0, 15).map((std) => (
-                      <button
-                        key={std.id}
-                        type="button"
-                        onClick={() => handleVerifyStudent(std)}
-                        className="px-2.5 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-lg text-xs text-slate-800 transition flex items-center gap-1.5 cursor-pointer shadow-2xs font-medium"
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={guardianShareClassId}
+                        onChange={(e) => setGuardianShareClassId(e.target.value)}
+                        className="text-[11px] font-bold bg-white border border-slate-300 rounded-lg px-2 py-1 text-slate-800"
                       >
-                        <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded text-[11px]">
-                          {toBengaliRoll(std.roll)}
-                        </span>
-                        <span>{std.nameBn.split(' ')[0]}</span>
-                      </button>
-                    ))}
+                        <option value="all">সকল শ্রেণি</option>
+                        {classes.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nameBn}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[10px] text-slate-500 font-bold">
+                        ({toBengaliNumber(students.filter((s) => guardianShareClassId === 'all' || s.classId === guardianShareClassId).length)} জন)
+                      </span>
+                    </div>
                   </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {students
+                      .filter((s) => guardianShareClassId === 'all' || s.classId === guardianShareClassId)
+                      .slice(0, 18)
+                      .map((std) => (
+                        <button
+                          key={std.id}
+                          type="button"
+                          onClick={() => handleVerifyStudent(std)}
+                          className="px-2.5 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-lg text-xs text-slate-800 transition flex items-center gap-1.5 cursor-pointer shadow-2xs font-medium"
+                        >
+                          <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded text-[11px]">
+                            {toBengaliRoll(std.roll)}
+                          </span>
+                          <span>{std.nameBn.split(' ')[0]}</span>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Live Guardian Response Counter & Daily School Schedule Config */}
+                <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-950">
+                      <CheckCheck className="w-4 h-4 text-emerald-600" />
+                      <span>অভিভাবক রেসপন্স কাউন্ট (ডাটাবেজ):</span>
+                      <span className="bg-emerald-600 text-white px-2.5 py-0.5 rounded-full font-mono text-[11px]">
+                        সাড়া দিয়েছেন: {toBengaliNumber(guardianResponseStats.totalResponded)} / {toBengaliNumber(guardianResponseStats.totalScans)}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowScheduleEditor(!showScheduleEditor)}
+                      className="px-2.5 py-1 bg-white hover:bg-indigo-100 border border-indigo-300 rounded-lg text-[11px] font-bold text-indigo-900 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>{showScheduleEditor ? 'সময়সূচি লুকান' : 'ভয়েস সময়সূচি সেটিংস'}</span>
+                    </button>
+                  </div>
+
+                  {showScheduleEditor && (
+                    <div className="bg-white rounded-xl p-3 border border-indigo-200 space-y-2.5 text-xs">
+                      <div className="font-bold text-slate-800">
+                        অভিভাবকের স্মার্টফোনে প্রচারিতব্য দৈনিক স্কুল সময়সূচি (বাংলা ভয়েস টেমপ্লেট):
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10.5px] font-bold text-slate-600 mb-0.5">পিটি শুরু:</label>
+                          <input
+                            type="text"
+                            value={scheduleDraft.ptStartTimeBn}
+                            onChange={(e) => setScheduleDraft({ ...scheduleDraft, ptStartTimeBn: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10.5px] font-bold text-slate-600 mb-0.5">ক্লাস শুরু:</label>
+                          <input
+                            type="text"
+                            value={scheduleDraft.classStartTimeBn}
+                            onChange={(e) => setScheduleDraft({ ...scheduleDraft, classStartTimeBn: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10.5px] font-bold text-slate-600 mb-0.5">প্রথমবার বিরতি:</label>
+                          <input
+                            type="text"
+                            value={scheduleDraft.breakTimeBn}
+                            onChange={(e) => setScheduleDraft({ ...scheduleDraft, breakTimeBn: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10.5px] font-bold text-slate-600 mb-0.5">ছুটি:</label>
+                          <input
+                            type="text"
+                            value={scheduleDraft.dismissalTimeBn}
+                            onChange={(e) => setScheduleDraft({ ...scheduleDraft, dismissalTimeBn: e.target.value })}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateSchoolInfo({ dailySchedule: scheduleDraft });
+                            setShowScheduleEditor(false);
+                          }}
+                          className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>সময়সূচি সেভ করুন</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1459,391 +1967,208 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       {/* ========================================================================= */}
       {activeTab === 'guardian_portal' && (
         <div className="space-y-6">
-          {!loggedInGuardianStudent ? (
-            /* GUARDIAN LOGIN SCREEN */
-            <div className="max-w-xl mx-auto bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 space-y-6">
-              <div className="text-center space-y-2">
-                <div className="w-16 h-16 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
-                  <Lock className="w-8 h-8" />
-                </div>
-                <h2 className="text-2xl font-bold text-slate-900 font-serif">
-                  অভিভাবক একাউন্ট লগইন পোর্টাল
-                </h2>
-                <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
-                  আপনার সন্তানের আইডি/রোল এবং গোপন পিন দিয়ে লগইন করুন। এখানে আপনি শুধুমাত্র আপনার সন্তানের বিদ্যালয়ে আসা-যাওয়ার লাইভ এলার্ম ও গেটপাস নোটিশ পাবেন।
-                </p>
-              </div>
-
-              {guardianLoginError && (
-                <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-rose-950 text-xs font-bold flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{guardianLoginError}</span>
-                </div>
-              )}
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleGuardianLogin(guardianLoginIdentifier, guardianLoginPin);
-                }}
-                className="space-y-4"
-              >
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    শিক্ষার্থীর রোল নম্বর অথবা অভিভাবকের মোবাইল নম্বর *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="যেমন: ০১ অথবা ০১৭০০-xxxxxx"
-                    value={guardianLoginIdentifier}
-                    onChange={(e) => setGuardianLoginIdentifier(e.target.value)}
-                    className="w-full text-sm p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-100 font-medium"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-bold text-slate-700">গোপন পিন কোড (Security PIN) *</label>
-                    <span className="text-[11px] text-slate-400">ডিফল্ট পিন: 1234</span>
+          {!activeSignedInStudent ? (
+            /* STUDENT & GUARDIAN LOGIN SCREEN */
+            <div className="space-y-6">
+              <div className="max-w-xl mx-auto bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8 space-y-5">
+                <div className="text-center space-y-2">
+                  <div className="w-16 h-16 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+                    <Lock className="w-8 h-8" />
                   </div>
-                  <input
-                    type="password"
-                    required
-                    placeholder="৪ ডিজিটের পিন (ডিফল্ট: 1234)"
-                    value={guardianLoginPin}
-                    onChange={(e) => setGuardianLoginPin(e.target.value)}
-                    className="w-full text-sm p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-100 font-mono tracking-widest"
-                  />
+                  <h2 className="text-2xl font-bold text-slate-900 font-serif">
+                    শিক্ষার্থী ও অভিভাবক ব্যক্তিগত ড্যাশবোর্ড লগইন
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                    প্রতিটি শিক্ষার্থীর জন্য রয়েছে স্বতন্ত্র <strong>ইউনিক আইডি (যেমন: DL-C4-01)</strong> ও পাসওয়ার্ড। সাইন-ইন করলে ছবিযুক্ত ব্যক্তিগত ড্যাশবোর্ড, একাডেমিক প্রগ্রেস, ভবিষ্যৎ পরিকল্পনা, কৃতিত্বের স্মৃতি এবং লাইভ গেটপাস অডিও নোটিফিকেশন পাবেন।
+                  </p>
                 </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-sm rounded-xl transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                {guardianLoginError && (
+                  <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-rose-950 text-xs font-bold flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{guardianLoginError}</span>
+                  </div>
+                )}
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleGuardianLogin(guardianLoginIdentifier, guardianLoginPin, guardianLoginClassId);
+                  }}
+                  className="space-y-4"
                 >
-                  <LogIn className="w-4 h-4" />
-                  <span>অভিভাবক একাউন্টে প্রবেশ করুন</span>
-                </button>
-              </form>
-
-              {/* 1-Click Fast Login for Testing (No typing needed!) */}
-              <div className="pt-4 border-t border-slate-200 space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
-                  <span>বা এক ক্লিকে যেকোনো শিক্ষার্থীর অভিভাবক হিসেবে টেস্ট করুন:</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {students.slice(0, 8).map((std) => (
-                    <button
-                      key={std.id}
-                      type="button"
-                      onClick={() => handleQuickTestGuardianLogin(std)}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-amber-100 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-semibold text-slate-800 transition flex items-center gap-1.5 cursor-pointer"
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ১. সন্তানের শ্রেণি নির্বাচন করুন (শুধুমাত্র রোল দিয়ে লগইন করলে আবশ্যক)
+                    </label>
+                    <select
+                      value={guardianLoginClassId}
+                      onChange={(e) => setGuardianLoginClassId(e.target.value)}
+                      className="w-full text-sm p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-100 font-bold bg-white text-slate-800"
                     >
-                      <User className="w-3.5 h-3.5 text-amber-600" />
-                      <span>{std.nameBn}</span>
-                      <span className="text-[10px] text-slate-500 font-mono">({toBengaliRoll(std.roll)})</span>
-                    </button>
-                  ))}
+                      <option value="all">-- শ্রেণি নির্বাচন করুন (অথবা নিচে ইউনিক আইডি / ফোন দিন) --</option>
+                      {classes.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nameBn}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ২. ইউনিক লগইন আইডি (যেমন: DL-C4-01), রোল নম্বর অথবা মোবাইল নম্বর *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="যেমন: DL-C4-01 অথবা ১ অথবা 01700-xxxxxx"
+                      value={guardianLoginIdentifier}
+                      onChange={(e) => setGuardianLoginIdentifier(e.target.value)}
+                      className="w-full text-sm p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-100 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700">৩. ব্যক্তিগত পাসওয়ার্ড / পিন কোড *</label>
+                      <span className="text-[11px] text-slate-400">প্রথমবার হলে ডিফল্ট পিন: 1234</span>
+                    </div>
+                    <input
+                      type="password"
+                      required
+                      placeholder="পাসওয়ার্ড / পিন দিন (প্রথমবার হলে 1234)"
+                      value={guardianLoginPin}
+                      onChange={(e) => setGuardianLoginPin(e.target.value)}
+                      className="w-full text-sm p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 focus:ring-2 focus:ring-amber-100 font-mono tracking-widest"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-sm rounded-xl transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>ব্যক্তিগত ড্যাশবোর্ডে সাইন-ইন করুন</span>
+                  </button>
+                </form>
+
+                {/* Admin Helper: Individual Guardian Link & PIN Generator */}
+                <div className="pt-4 border-t border-slate-200 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPairingPanel(!showAdminPairingPanel)}
+                    className="w-full py-2.5 px-4 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-900 flex items-center justify-between cursor-pointer transition"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Share2 className="w-4 h-4 text-indigo-600" />
+                      <span>স্কুল অ্যাডমিন টুল: প্রতিটি শিক্ষার্থীর ইউনিক আইডি, পাসওয়ার্ড ও ডাইরেক্ট লিংক</span>
+                    </span>
+                    <span>{showAdminPairingPanel ? '▲ বন্ধ করুন' : '▼ দেখুন'}</span>
+                  </button>
+
+                  {showAdminPairingPanel && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-bold text-slate-800">
+                          প্রবাসী বা দূরবর্তী অভিভাবক ও শিক্ষার্থীকে নিজস্ব আইডি-পিন বা লিংক পাঠান:
+                        </div>
+                        <select
+                          value={guardianShareClassId}
+                          onChange={(e) => setGuardianShareClassId(e.target.value)}
+                          className="text-xs font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-1"
+                        >
+                          {classes.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nameBn}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                        {students
+                          .filter((s) => s.classId === guardianShareClassId)
+                          .sort((a, b) => a.roll - b.roll)
+                          .map((std) => {
+                            const portalId = getStudentPortalId(std);
+                            return (
+                              <div
+                                key={std.id}
+                                className="bg-white p-2.5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs"
+                              >
+                                <div>
+                                  <div className="font-bold text-slate-900">
+                                    রোল {toBengaliRoll(std.roll)}: {std.nameBn}
+                                  </div>
+                                  <div className="text-[11px] text-slate-600 font-mono mt-0.5">
+                                    ইউনিক আইডি: <strong className="text-indigo-800">{portalId}</strong> · পাসওয়ার্ড: <strong>{std.guardianPin || '1234'}</strong> · ফোন: {std.guardianPhone || std.fatherPhone || 'নেই'}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyGuardianLink(std)}
+                                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition ${
+                                      copiedGuardianLinkId === std.id
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-indigo-100 hover:bg-indigo-200 text-indigo-900'
+                                    }`}
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                    <span>{copiedGuardianLinkId === std.id ? 'কপি হয়েছে!' : 'লিংক কপি'}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickTestGuardianLogin(std)}
+                                    className="px-2.5 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-950 rounded-lg text-[11px] font-bold cursor-pointer"
+                                  >
+                                    ড্যাশবোর্ড প্রিভিউ
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           ) : (
-            /* GUARDIAN DASHBOARD VIEW */
-            <div className="space-y-6">
-              {/* Guardian Top Bar */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 font-bold shrink-0">
-                    <UserCheck className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">
-                        অভিভাবক পোর্টাল • স্বাগতম
-                      </span>
-                      <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.2 rounded-full border border-emerald-300">
-                        লগইন সক্রিয়
-                      </span>
-                    </div>
-                    <h2 className="text-lg font-bold text-slate-900 font-serif">
-                      {loggedInGuardianStudent.fatherNameBn || loggedInGuardianStudent.motherNameBn || 'সম্মানিত অভিভাবক'} (সন্তান: {loggedInGuardianStudent.nameBn})
-                    </h2>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setLoggedInGuardianStudent(null)}
-                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>লগআউট ও সন্তান পরিবর্তন</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Guardian PWA Install Banner */}
-              <PWAInstallButton variant="banner" />
-
-              {/* Smartphone Audio Alarm Activator Card */}
-              <div className="bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-amber-500/10 border-2 border-amber-400/50 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xs">
-                <div className="flex items-center space-x-3">
-                  <div
-                    className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-white shadow-md transition-all ${
-                      guardianAudioTested ? 'bg-emerald-600' : 'bg-amber-500 animate-pulse'
-                    }`}
-                  >
-                    <Volume2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900 font-serif flex items-center gap-2">
-                      <span>স্মার্টফোন অডিও এলার্ম ও ভয়েস নোটিফিকেশন</span>
-                      {guardianAudioTested ? (
-                        <span className="text-[10.5px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full border border-emerald-300">
-                          ✓ অডিও সক্রিয়
-                        </span>
-                      ) : (
-                        <span className="text-[10.5px] bg-amber-100 text-amber-900 font-bold px-2.5 py-0.5 rounded-full border border-amber-300">
-                          ! সাউন্ড টেস্ট প্রয়োজন
-                        </span>
-                      )}
-                    </h4>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      মোবাইল ব্রাউজারে স্বয়ংক্রিয় শব্দ ও বাংলা ভয়েস বার্তা বাজানোর জন্য নিচের বাটনে একবার চাপ দিয়ে টেস্ট করে নিন।
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setGuardianAudioEnabled(!guardianAudioEnabled)}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
-                      guardianAudioEnabled
-                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
-                        : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
-                    }`}
-                  >
-                    {guardianAudioEnabled ? (
-                      <Volume2 className="w-4 h-4 text-indigo-600" />
-                    ) : (
-                      <VolumeX className="w-4 h-4 text-slate-400" />
-                    )}
-                    <span>{guardianAudioEnabled ? 'সাউন্ড চালু' : 'মিউট করা'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleTestGuardianAudio}
-                    className={`px-4 py-2 text-xs font-black rounded-xl transition shadow-sm flex items-center gap-2 cursor-pointer ${
-                      isGuardianAlarmRinging
-                        ? 'bg-rose-600 text-white animate-pulse'
-                        : 'bg-amber-500 hover:bg-amber-600 text-slate-950'
-                    }`}
-                  >
-                    <BellRing className={`w-4 h-4 ${isGuardianAlarmRinging ? 'animate-bounce' : ''}`} />
-                    <span>সাউন্ড টেস্ট ও এলার্ম সক্রিয় করুন</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Live Alarm / Alert Status Card for Guardian */}
-              <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 rounded-3xl p-6 text-white shadow-lg border border-slate-800 space-y-5">
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                  <div className="flex items-center space-x-2.5">
-                    <div className="p-2 bg-rose-500 text-white rounded-xl shadow-md animate-bounce">
-                      <BellRing className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-bold text-white font-serif">
-                        সন্তানের রিয়েল-টাইম গেটপাস ও নিরাপত্তা এলার্ম (Live Alarm)
-                      </h3>
-                      <p className="text-xs text-slate-400">
-                        বিদ্যালয়ের প্রধান ফটকে কার্ড স্ক্যান করলেই এখানে স্বয়ংক্রিয় এলার্ম ও ভয়েস বাজবে
-                      </p>
-                    </div>
-                  </div>
-
-                  <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full text-xs font-bold">
-                    ● লাইভ কানেক্টেড
-                  </span>
-                </div>
-
-                {latestChildAlarm ? (
-                  <div className="bg-slate-800/90 rounded-2xl p-5 border-2 border-emerald-500/60 space-y-4 shadow-md">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center space-x-2">
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
-                            latestChildAlarm.action === 'entry'
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'bg-amber-500 text-slate-950'
-                          }`}
-                        >
-                          {latestChildAlarm.action === 'entry' ? '↓ বিদ্যালয়ে প্রবেশ সম্পন্ন' : '↑ বিদ্যালয় থেকে প্রস্থান সম্পন্ন'}
-                        </span>
-                        <span className="text-xs text-slate-400 font-mono">
-                          সময়: {new Date(latestChildAlarm.timestamp).toLocaleTimeString('bn-BD')}
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          playAlarmChime();
-                          const msg = `সম্মানিত অভিভাবক, আপনার সন্তান ${loggedInGuardianStudent.nameBn}, ${latestChildAlarm.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় থেকে নিরাপদে প্রস্থান করেছে'}।`;
-                          speakBengali(msg);
-                        }}
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-                      >
-                        <Volume2 className="w-4 h-4 text-amber-300" />
-                        <span>ভয়েস এলার্ম পুনরায় শুনুন</span>
-                      </button>
-                    </div>
-
-                    <div className="text-sm sm:text-base font-medium text-slate-100 leading-relaxed bg-slate-900/80 p-4 rounded-xl border border-slate-700">
-                      প্রিয় অভিভাবক, আপনার সন্তান <strong>{loggedInGuardianStudent.nameBn}</strong> (শ্রেণি: {classes.find((c) => c.id === loggedInGuardianStudent.classId)?.nameBn}, রোল: {toBengaliRoll(loggedInGuardianStudent.roll)}) আজ{' '}
-                      <span className="text-emerald-400 font-bold font-mono">
-                        {new Date(latestChildAlarm.timestamp).toLocaleTimeString('bn-BD')}
-                      </span>{' '}
-                      মিনিটে {latestChildAlarm.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় হতে নিরাপদে প্রস্থান করেছে'}।
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 bg-slate-900/60 rounded-2xl border border-slate-800 space-y-2">
-                    <ShieldCheck className="w-10 h-10 mx-auto text-emerald-400" />
-                    <div className="text-sm font-bold text-white">আজকের কোনো নতুন গেটপাস এলার্ম নেই</div>
-                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                      শিক্ষার্থী বিদ্যালয়ের ফটকে আইডি কার্ড স্ক্যান করলেই মুহূর্তের মধ্যে আপনার এই পোর্টালে নোটিফিকেশন ও অডিও এলার্ম পৌঁছে যাবে।
-                    </p>
-                  </div>
-                )}
-
-                {/* All Alarm History for Child */}
-                {guardianChildLogs.length > 0 && (
-                  <div className="space-y-2 pt-2">
-                    <div className="text-xs font-bold text-slate-300">
-                      পূর্ববর্তী এলার্ম হিস্ট্রি ({toBengaliNumber(guardianChildLogs.length)} টি):
-                    </div>
-                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
-                      {guardianChildLogs.map((log) => (
-                        <div
-                          key={log.id}
-                          className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between text-xs"
-                        >
-                          <div className="flex items-center space-x-2">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                log.action === 'entry' ? 'bg-emerald-400' : 'bg-amber-400'
-                              }`}
-                            />
-                            <span className="font-bold text-slate-200">
-                              {log.action === 'entry' ? 'বিদ্যালয়ে প্রবেশ' : 'বিদ্যালয় হতে প্রস্থান'}
-                            </span>
-                            <span className="text-slate-400 font-mono text-[11px]">
-                              {new Date(log.timestamp).toLocaleTimeString('bn-BD')}
-                            </span>
-                          </div>
-                          <span className="text-emerald-400 text-[11px] font-bold">✓ ডেলিভার্ড</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Child's ID Card & Family Verification Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Child ID Badge (Front) */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 flex flex-col items-center">
-                  <div className="w-full flex items-center justify-between pb-2 border-b border-slate-200">
-                    <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                      <CreditCard className="w-4 h-4 text-indigo-600" />
-                      <span>সন্তানের আইডি কার্ড (এপিঠ)</span>
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      ROLL: {toBengaliRoll(loggedInGuardianStudent.roll)}
-                    </span>
-                  </div>
-
-                  <StudentIDCardSlip
-                    student={loggedInGuardianStudent}
-                    classNameBn={classes.find((c) => c.id === loggedInGuardianStudent.classId)?.nameBn || 'শ্রেণি'}
-                    schoolInfo={schoolInfo}
-                    side="front"
-                    academicYear={selectedYear || '২০২৬'}
-                    onPhotoUpload={handleIdCardPhotoUpload}
-                  />
-                </div>
-
-                {/* Parents Identity Card (Back) */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3 flex flex-col items-center">
-                  <div className="w-full flex items-center justify-between pb-2 border-b border-slate-200">
-                    <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                      <Heart className="w-4 h-4 text-rose-600" />
-                      <span>পিতা-মাতার পরিচয় কার্ড (ওপিঠ)</span>
-                    </span>
-                    <span className="text-[10px] text-slate-500">জরুরি যোগাযোগ কার্ড</span>
-                  </div>
-
-                  <StudentIDCardSlip
-                    student={loggedInGuardianStudent}
-                    classNameBn={classes.find((c) => c.id === loggedInGuardianStudent.classId)?.nameBn || 'শ্রেণি'}
-                    schoolInfo={schoolInfo}
-                    side="back"
-                    academicYear={selectedYear || '২০২৬'}
-                    onPhotoUpload={handleIdCardPhotoUpload}
-                  />
-                </div>
-              </div>
-
-              {/* Guardian Leave / Permission Message Form */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-3">
-                <h4 className="font-bold text-sm text-slate-900 font-serif flex items-center gap-1.5">
-                  <Send className="w-4 h-4 text-emerald-600" />
-                  <span>বিদ্যালয় কর্তৃপক্ষ বরাবর ছুটি বা জরুরি বার্তা পাঠান</span>
-                </h4>
-                <p className="text-xs text-slate-500">
-                  সন্তানের অসুস্থতা বা অগ্রিম ছুটির আবেদন সরাসরি প্রধান শিক্ষকের কাছে জমা দিন।
-                </p>
-
-                {guardianLeaveSubmitted ? (
-                  <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 text-xs font-bold flex items-center justify-between">
-                    <span>✓ আপনার বার্তাটি প্রধান শিক্ষকের ডেস্কে সফলভাবে পাঠানো হয়েছে!</span>
-                    <button
-                      type="button"
-                      onClick={() => setGuardianLeaveSubmitted(false)}
-                      className="text-emerald-800 underline text-[11px]"
-                    >
-                      নতুন বার্তা
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <textarea
-                      rows={2}
-                      value={guardianLeaveNote}
-                      onChange={(e) => setGuardianLeaveNote(e.target.value)}
-                      placeholder="ছুটির কারণ বা জরুরি বার্তা লিখুন..."
-                      className="w-full text-sm border border-slate-300 rounded-xl p-3 focus:ring-2 focus:ring-amber-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!guardianLeaveNote.trim()) return;
-                        setGuardianLeaveSubmitted(true);
-                        setGuardianLeaveNote('');
-                      }}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>প্রধান শিক্ষককে বার্তা প্রেরণ করুন</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+            <StudentPersonalDashboard
+              student={activeSignedInStudent}
+              portalId={getStudentPortalId(activeSignedInStudent)}
+              latestChildAlarm={latestChildAlarm}
+              guardianChildLogs={guardianChildLogs}
+              guardianAudioEnabled={guardianAudioEnabled}
+              setGuardianAudioEnabled={(val) => {
+                if (val) unlockMobileAudioAndSpeech(false);
+                setGuardianAudioEnabled(val);
+              }}
+              guardianAudioTested={guardianAudioTested}
+              isGuardianAlarmRinging={isGuardianAlarmRinging}
+              ackSuccessFeedback={ackSuccessFeedback}
+              isSubmittingAck={isSubmittingAck}
+              guardianReplyText={guardianReplyText}
+              setGuardianReplyText={setGuardianReplyText}
+              onTestAudio={handleTestGuardianAudio}
+              onReplayAlarm={(log) => {
+                unlockMobileAudioAndSpeech(true);
+                playAlarmChime();
+                const msg = buildGuardianVoiceMessage(activeSignedInStudent, log.action);
+                speakBengali(msg, true);
+              }}
+              onAcknowledgeAlarm={handleGuardianAcknowledge}
+              buildGuardianVoiceMessage={buildGuardianVoiceMessage}
+              copiedLink={copiedGuardianLinkId === activeSignedInStudent.id}
+              onCopyDirectLink={() => handleCopyGuardianLink(activeSignedInStudent)}
+              onLogout={() => {
+                handleGuardianLogout();
+                if (onRoleLogout) onRoleLogout();
+              }}
+              onPhotoUpload={handleIdCardPhotoUpload}
+            />
           )}
         </div>
       )}
@@ -2486,21 +2811,32 @@ export const DigitalSecurityGatepassView: React.FC = () => {
       {/* PART 4: AUDIT LOGS & GATEPASS HISTORY VIEW                                */}
       {/* ========================================================================= */}
       {activeTab === 'audit_logs' && (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden space-y-3">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden space-y-4">
           <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70">
             <div className="flex items-center space-x-2">
               <History className="w-5 h-5 text-indigo-600" />
               <div>
                 <h3 className="font-bold text-base text-slate-900 font-serif">
-                  গেটপাস অডিট ও অ্যাক্সেস লগ (Gatepass Access Log)
+                  গেটপাস অডিট ও অভিভাবক রেসপন্স কাউন্ট (Database Count)
                 </h3>
                 <p className="text-xs text-slate-500">
-                  সকল শিক্ষার্থী প্রবেশ ও প্রস্থানের সময়, অভিভাবক নোটিফিকেশন ও ভেরিফিকেশন রেকর্ড
+                  সকল শিক্ষার্থী প্রবেশ ও প্রস্থানের সময় এবং গার্ডিয়ান মেসেজ শোনার পর প্রদত্ত রেসপন্স কাউন্ট
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-bold">
+                মোট স্ক্যান: {toBengaliNumber(guardianResponseStats.totalScans)}
+              </div>
+              <div className="px-3 py-1.5 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-black flex items-center gap-1">
+                <CheckCheck className="w-3.5 h-3.5 text-emerald-700" />
+                <span>অভিভাবক রেসপন্স কাউন্ট: {toBengaliNumber(guardianResponseStats.totalResponded)}</span>
+              </div>
+              <div className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold">
+                অপেক্ষমাণ: {toBengaliNumber(guardianResponseStats.pendingCount)}
+              </div>
+
               {securityLogs.length > 0 && (
                 <button
                   type="button"
@@ -2527,17 +2863,16 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                   <th className="py-2.5 px-3">শিক্ষার্থীর নাম</th>
                   <th className="py-2.5 px-3 text-center w-20">রোল</th>
                   <th className="py-2.5 px-3 text-center w-28">শ্রেণি</th>
-                  <th className="py-2.5 px-3 text-center w-28">মুভমেন্ট</th>
+                  <th className="py-2.5 px-3 text-center w-24">মুভমেন্ট</th>
                   <th className="py-2.5 px-3">অভিভাবক ফোন</th>
-                  <th className="py-2.5 px-3 text-center w-24">ভয়েস ঘোষণা</th>
-                  <th className="py-2.5 px-3 text-center w-24">মেসেজ স্ট্যাটাস</th>
+                  <th className="py-2.5 px-3">অভিভাবকের সাড়া (Response Count)</th>
                   <th className="py-2.5 px-3 text-center w-20">অ্যাকশন</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {securityLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-12 text-center text-slate-400">
+                    <td colSpan={9} className="py-12 text-center text-slate-400">
                       <ShieldCheck className="w-10 h-10 mx-auto text-slate-300 mb-2" />
                       <div className="font-bold text-slate-700">আজকের কোনো গেটপাস লগ পাওয়া যায়নি।</div>
                       <p className="text-xs text-slate-400 mt-0.5">
@@ -2586,28 +2921,36 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                         <td className="py-2.5 px-3 font-mono text-slate-700 text-[11px]">
                           {toBengaliNumber(log.guardianPhone)}
                         </td>
-                        <td className="py-2.5 px-3 text-center">
-                          {log.voiceDispatched ? (
-                            <span className="text-indigo-600 font-bold text-[11px]">✓ ঘোষিত</span>
+                        <td className="py-2.5 px-3">
+                          {log.guardianAcknowledged ? (
+                            <div className="space-y-0.5">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold">
+                                <CheckCheck className="w-3 h-3 text-emerald-700" />
+                                <span>সাড়া দিয়েছেন ({log.acknowledgedBy || 'অভিভাবক'})</span>
+                              </span>
+                              {log.guardianResponse && (
+                                <div className="text-[11px] text-slate-600 font-medium">
+                                  "{log.guardianResponse}"
+                                </div>
+                              )}
+                            </div>
                           ) : (
-                            <span className="text-slate-400 text-[11px]">নিষ্ক্রিয়</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          {log.smsDispatched ? (
-                            <span className="text-emerald-600 font-bold text-[11px]">✓ প্রেরিত</span>
-                          ) : (
-                            <span className="text-slate-400 text-[11px]">নিষ্ক্রিয়</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">
+                              ⏳ অপেক্ষমাণ
+                            </span>
                           )}
                         </td>
                         <td className="py-2.5 px-3 text-center">
                           <button
                             type="button"
                             onClick={() => {
-                              const replayMsg = `শিক্ষার্থী ${log.studentNameBn}, ${log.classNameBn}, রোল নম্বর ${toBengaliNumber(log.studentRoll)}, ${log.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় থেকে সফলভাবে প্রস্থান করেছে'}।`;
-                              speakBengali(replayMsg);
+                              const targetStd = students.find((s) => s.id === log.studentId);
+                              const replayMsg = targetStd
+                                ? buildGuardianVoiceMessage(targetStd, log.action)
+                                : `শিক্ষার্থী ${log.studentNameBn}, ${log.classNameBn}, রোল নম্বর ${toBengaliNumber(log.studentRoll)}, ${log.action === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় থেকে সফলভাবে প্রস্থান করেছে'}।`;
+                              speakBengali(replayMsg, true);
                             }}
-                            className="p-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition"
+                            className="p-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition cursor-pointer"
                             title="ভয়েস ঘোষণা শুনুন"
                           >
                             <Volume2 className="w-3.5 h-3.5" />
@@ -2867,22 +3210,60 @@ export const DigitalSecurityGatepassView: React.FC = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    বর্তমান ঠিকানা (ঠিকানা কার্ডের পেছনে মুদ্রিত হবে)
-                  </label>
-                  <input
-                    type="text"
-                    value={quickEditStudent.presentAddress || ''}
-                    onChange={(e) =>
-                      setQuickEditStudent({
-                        ...quickEditStudent,
-                        presentAddress: e.target.value,
-                      })
-                    }
-                    placeholder="উদা: দক্ষিণগাঁও, সনমানিয়া, কাপাসিয়া, গাজীপুর।"
-                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">
+                      বর্তমান ঠিকানা (ঠিকানা কার্ডের পেছনে মুদ্রিত হবে)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.presentAddress || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          presentAddress: e.target.value,
+                        })
+                      }
+                      placeholder="উদা: দক্ষিণগাঁও, সনমানিয়া, কাপাসিয়া, গাজীপুর।"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-indigo-900 font-bold mb-1">
+                      শিক্ষার্থীর ইউনিক লগইন আইডি (Portal ID)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.portalUserId ?? getStudentPortalId(quickEditStudent)}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          portalUserId: e.target.value.trim().toUpperCase(),
+                        })
+                      }
+                      placeholder="উদা: DL-C4-01"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50/50 font-mono font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-indigo-900 font-bold mb-1">
+                      ব্যক্তিগত পাসওয়ার্ড / পিন (Portal PIN)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.guardianPin || '1234'}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          guardianPin: e.target.value.trim(),
+                        })
+                      }
+                      placeholder="উদা: 1234 বা 4401"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50/50 font-mono font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 

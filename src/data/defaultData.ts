@@ -21,6 +21,12 @@ export const DEFAULT_SCHOOL_INFO: SchoolInfo = {
   established: 'স্থাপিত:২০১৮',
   phone: '০১৩১৩১৫৯৪৫৯',
   email: 'contact.dlikonmodelacademy@gmail.com',
+  dailySchedule: {
+    ptStartTimeBn: 'আটটা পঞ্চান্ন মিনিটে',
+    classStartTimeBn: 'নয়টা বিশ মিনিটে',
+    breakTimeBn: 'দুপুর একটা দশ মিনিটে',
+    dismissalTimeBn: 'বিকাল চারটায়',
+  },
 };
 
 export const DEFAULT_EXAM_TERMS: ExamTerm[] = [

@@ -237,7 +237,14 @@ interface SchoolContextType {
   };
   // Digital Security & Gatepass Module
   securityLogs: SecurityGatepassLog[];
-  addSecurityLog: (log: Omit<SecurityGatepassLog, 'id' | 'timestamp'>) => SecurityGatepassLog;
+  addSecurityLog: (
+    log: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
+  ) => SecurityGatepassLog;
+  acknowledgeSecurityLog: (
+    logId: string,
+    guardianResponse: string,
+    acknowledgedBy?: string
+  ) => Promise<void>;
   clearSecurityLogs: () => void;
   clearAllStudents: () => Promise<void>;
   scanAndRecoverBrowserData: () => Promise<{ studentCount: number; message: string }>;
@@ -704,7 +711,30 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (Array.isArray(db.securityLogs)) {
             setSecurityLogs((prev) => {
               if (prev.length === 0 && db.securityLogs.length === 0) return prev;
-              return db.securityLogs;
+              const mergedMap = new Map<string, SecurityGatepassLog>();
+              for (const item of prev) {
+                if (item && item.id) mergedMap.set(item.id, item);
+              }
+              for (const item of db.securityLogs as SecurityGatepassLog[]) {
+                if (item && item.id) {
+                  const existing = mergedMap.get(item.id);
+                  if (existing) {
+                    mergedMap.set(item.id, {
+                      ...existing,
+                      ...item,
+                      guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+                      acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+                      guardianResponse: item.guardianResponse || existing.guardianResponse,
+                      acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+                    });
+                  } else {
+                    mergedMap.set(item.id, item);
+                  }
+                }
+              }
+              return Array.from(mergedMap.values())
+                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                .slice(0, 1000);
             });
           }
 
@@ -1038,10 +1068,26 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const qrCode = student.securityQrCode || `DLIKON-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
     const studentWithQr = { ...student, securityQrCode: qrCode };
 
+    const pushProfileToServer = (payload: Student) => {
+      try {
+        fetch('/api/student/profile-update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ studentId: payload.id, updates: payload }),
+        }).catch(() => {});
+      } catch {
+        // Non-fatal fallback to standard sync
+      }
+    };
+
     if (student.avatarUrl && student.avatarUrl.length > 50000) {
       compressImageBase64(student.avatarUrl).then((compressed) => {
-        setStudents((prev) => prev.map((s) => (s.id === student.id ? { ...s, avatarUrl: compressed } : s)));
+        const finalStudent = { ...studentWithQr, avatarUrl: compressed };
+        setStudents((prev) => prev.map((s) => (s.id === student.id ? finalStudent : s)));
+        pushProfileToServer(finalStudent);
       });
+    } else {
+      pushProfileToServer(studentWithQr);
     }
 
     setStudents((prev) => prev.map((s) => (s.id === student.id ? studentWithQr : s)));
@@ -1051,15 +1097,77 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setStudents((prev) => prev.filter((s) => s.id !== studentId));
   };
 
-  const addSecurityLog = (logData: Omit<SecurityGatepassLog, 'id' | 'timestamp'>): SecurityGatepassLog => {
-    const newLog: SecurityGatepassLog = {
-      ...logData,
-      id: `seclog_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      timestamp: new Date().toISOString(),
-    };
-    setSecurityLogs((prev) => [newLog, ...prev]);
-    return newLog;
-  };
+  const addSecurityLog = useCallback(
+    (
+      logData: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
+    ): SecurityGatepassLog => {
+      const newLog: SecurityGatepassLog = {
+        ...logData,
+        id: logData.id || `seclog_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: logData.timestamp || new Date().toISOString(),
+      };
+      setSecurityLogs((prev) => {
+        const existingIdx = prev.findIndex((l) => l.id === newLog.id);
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            ...newLog,
+            guardianAcknowledged: Boolean(
+              updated[existingIdx].guardianAcknowledged || newLog.guardianAcknowledged
+            ),
+            acknowledgedAt: newLog.acknowledgedAt || updated[existingIdx].acknowledgedAt,
+            guardianResponse: newLog.guardianResponse || updated[existingIdx].guardianResponse,
+            acknowledgedBy: newLog.acknowledgedBy || updated[existingIdx].acknowledgedBy,
+          };
+          return updated;
+        }
+        return [newLog, ...prev].slice(0, 1000);
+      });
+      return newLog;
+    },
+    []
+  );
+
+  const acknowledgeSecurityLog = useCallback(
+    async (logId: string, guardianResponse: string, acknowledgedBy?: string) => {
+      const ackTime = new Date().toISOString();
+      const responseText = guardianResponse.trim() || 'মেসেজ শুনেছি ও নিশ্চিত করলাম';
+      let targetStudentId = '';
+
+      setSecurityLogs((prev) =>
+        prev.map((l) => {
+          if (l.id === logId) {
+            targetStudentId = l.studentId;
+            return {
+              ...l,
+              guardianAcknowledged: true,
+              acknowledgedAt: ackTime,
+              guardianResponse: responseText,
+              acknowledgedBy: acknowledgedBy || 'অভিভাবক',
+            };
+          }
+          return l;
+        })
+      );
+
+      try {
+        await fetch('/api/security/acknowledge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            logId,
+            studentId: targetStudentId,
+            guardianResponse: responseText,
+            acknowledgedBy: acknowledgedBy || 'অভিভাবক',
+          }),
+        });
+      } catch (err) {
+        console.warn('Could not sync guardian acknowledgement to server:', err);
+      }
+    },
+    []
+  );
 
   const clearSecurityLogs = () => {
     setSecurityLogs([]);
@@ -2585,6 +2693,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         getClassDueOverview,
         securityLogs,
         addSecurityLog,
+        acknowledgeSecurityLog,
         clearSecurityLogs,
         isServerSyncing,
         serverSyncStatus,

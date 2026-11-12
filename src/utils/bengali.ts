@@ -126,3 +126,33 @@ export function formatBengaliDate(isoDateString: string | null | undefined): str
   return toBengaliNumber(isoDateString);
 }
 
+export function getStudentPortalId(student: {
+  id: string;
+  classId: string;
+  roll: number;
+  portalUserId?: string;
+}): string {
+  if (student.portalUserId && student.portalUserId.trim()) {
+    return student.portalUserId.trim().toUpperCase();
+  }
+  const classCodeMap: Record<string, string> = {
+    class_play: 'PL',
+    class_nursery: 'NU',
+    class_kg: 'KG',
+    class_1: 'C1',
+    class_2: 'C2',
+    class_3: 'C3',
+    class_4: 'C4',
+    class_5: 'C5',
+    class_6: 'C6',
+    class_7: 'C7',
+    class_8: 'C8',
+    class_9: 'C9',
+    class_10: 'C10',
+  };
+  const clsCode = classCodeMap[student.classId] || student.classId.replace('class_', '').toUpperCase().slice(0, 3) || 'ST';
+  const rollStr = String(student.roll).padStart(2, '0');
+  return `DL-${clsCode}-${rollStr}`;
+}
+
+

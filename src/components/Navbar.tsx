@@ -3,6 +3,7 @@ import {
   GraduationCap,
   FileCheck2,
   TableProperties,
+  User,
   Users,
   BookOpen,
   FileText,
@@ -24,33 +25,46 @@ import {
   LayoutGrid,
   FileBadge,
   RefreshCw,
+  LogOut,
+  Briefcase,
+  QrCode,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
+import { PortalAuthSession } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavbarProps {
+  session: PortalAuthSession;
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   onOpenSettings: () => void;
+  onLogout: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpenSettings }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  session,
+  currentTab,
+  setCurrentTab,
+  onOpenSettings,
+  onLogout,
+}) => {
   const { schoolInfo, exportDatabaseBackup, isServerSyncing, serverSyncStatus, forceServerSync } = useSchool();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const navItems = [
-    { id: 'dashboard', label: 'ড্যাশবোর্ড', icon: GraduationCap },
+  const officialNavItems = [
+    { id: 'dashboard', label: 'অফিসিয়াল ড্যাশবোর্ড', icon: GraduationCap },
+    { id: 'daily_report', label: 'দৈনিক আদায় রিপোর্ট', icon: Receipt },
+    { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
+    { id: 'defaulters', label: 'খেলাপি তালিকা', icon: ShieldAlert },
+    { id: 'staff_management', label: 'স্টাফ ও সাইন-আপ', icon: Briefcase },
+    { id: 'digital_security', label: 'ডিজিটাল সিকিউরিটি', icon: ShieldCheck },
     { id: 'subjects', label: 'বিষয় ব্যবস্থাপনা', icon: BookMarked },
     { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
     { id: 'results', label: 'রেজাল্ট ও কার্ড', icon: Printer },
     { id: 'admit_card', label: 'এডমিট কার্ড', icon: FileBadge },
     { id: 'seat_plan', label: 'আসন বিন্যাস', icon: LayoutGrid },
-    { id: 'digital_security', label: 'ডিজিটাল সিকিউরিটি', icon: ShieldCheck },
     { id: 'tabulation', label: 'ট্যাবুল্যাশন শিট', icon: TableProperties },
-    { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
-    { id: 'daily_report', label: 'দৈনিক রিপোর্ট', icon: Receipt },
-    { id: 'defaulters', label: 'খেলাপি তালিকা', icon: ShieldAlert },
     { id: 'attendance', label: 'উপস্থিতি ও হাজিরা', icon: CalendarCheck },
     { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
     { id: 'sms', label: 'এসএমএস নোটিশ', icon: MessageSquare },
@@ -61,87 +75,147 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
     { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
   ];
 
+  const employeeNavItems = [
+    { id: 'dashboard', label: 'এমপ্লয়ী ড্যাশবোর্ড', icon: Briefcase },
+    { id: 'attendance', label: 'শিক্ষার্থী হাজিরা', icon: CalendarCheck },
+    { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
+    { id: 'employee_scanner', label: 'গেটপাস স্ক্যানার', icon: QrCode },
+    { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
+    { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
+    { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
+    { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+  ];
+
+  const studentNavItems = [
+    { id: 'dashboard', label: 'আমার ড্যাশবোর্ড ও গেটপাস', icon: User },
+    { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+  ];
+
+  const navItems =
+    session.role === 'official'
+      ? officialNavItems
+      : session.role === 'employee'
+      ? employeeNavItems
+      : studentNavItems;
+
+  const headerThemeClass =
+    session.role === 'official'
+      ? 'bg-gradient-to-r from-[#0B1733] via-indigo-950 to-blue-950 border-indigo-700/50'
+      : session.role === 'employee'
+      ? 'bg-gradient-to-r from-[#0A2E31] via-[#0F4347] to-[#0A2E31] border-teal-700/50'
+      : 'bg-gradient-to-r from-[#093225] via-emerald-950 to-[#093225] border-emerald-700/50';
+
+  const roleBadgeLabel =
+    session.role === 'official'
+      ? 'অফিসিয়াল পোর্টাল'
+      : session.role === 'employee'
+      ? 'এমপ্লয়ী পোর্টাল'
+      : 'শিক্ষার্থী পোর্টাল';
+
   return (
-    <header className="no-print bg-gradient-to-r from-blue-900 via-indigo-900 to-indigo-950 text-white shadow-lg sticky top-0 z-40 border-b border-indigo-700/50">
+    <header className={`no-print ${headerThemeClass} text-white shadow-lg sticky top-0 z-40 border-b`}>
       {/* Top Banner Bar */}
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 sm:h-20">
+        <div className="flex items-center justify-between h-16 sm:h-20 gap-3">
           {/* Logo & School Title */}
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setCurrentTab('dashboard')}>
-            <div className="bg-white p-1 rounded-full shadow-md">
-              <SchoolLogo customLogoUrl={schoolInfo.logoUrl} size={42} />
+          <div className="flex items-center space-x-3 cursor-pointer min-w-0" onClick={() => setCurrentTab('dashboard')}>
+            <div className="bg-white p-1 rounded-full shadow-md shrink-0">
+              <SchoolLogo customLogoUrl={schoolInfo.logoUrl} size={40} />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center space-x-2">
-                <span className="font-bold text-lg sm:text-2xl tracking-wide font-serif text-amber-300 drop-shadow-sm">
+                <span className="font-bold text-base sm:text-xl tracking-wide font-serif text-amber-300 truncate">
                   {schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
                 </span>
-                <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-600/80 text-emerald-100 border border-emerald-400/30">
-                  <ShieldCheck className="w-3 h-3 mr-1" /> সুরক্ষিত
+                <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-white/15 text-amber-200 border border-white/20 whitespace-nowrap shrink-0">
+                  {roleBadgeLabel}
                 </span>
               </div>
-              <p className="text-xs text-indigo-200 hidden sm:block truncate max-w-md">
-                {schoolInfo.address || 'দক্ষিণগাঁও, গণি মার্কেট, সনমানিয়া, কাপাসিয়া, গাজীপুর।'}
+              <p className="text-xs text-slate-200/90 hidden sm:block truncate max-w-md">
+                {session.displayName} · {session.subLabel}
               </p>
             </div>
           </div>
 
-          {/* Quick Actions (Install PWA, Sync, Backup & Settings) on Desktop */}
-          <div className="hidden lg:flex items-center space-x-2">
+          {/* Right Quick Actions (Role-Scoped) */}
+          <div className="hidden lg:flex items-center space-x-2 shrink-0">
             <PWAInstallButton variant="badge" />
+
+            {session.role === 'official' && (
+              <>
+                <button
+                  onClick={async () => {
+                    await forceServerSync();
+                    alert('কেন্দ্রীয় ডাটাবেজের সাথে সকল ডিভাইসের তথ্য সফলভাবে সিঙ্ক হয়েছে!');
+                  }}
+                  title="সকল সংযুক্ত ডিভাইস ও কম্পিউটারের সাথে ডাটা সিঙ্ক করুন"
+                  className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer whitespace-nowrap ${
+                    serverSyncStatus === 'synced'
+                      ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/80'
+                      : 'bg-amber-950/70 text-amber-300 border-amber-500/50 hover:bg-amber-900/80'
+                  }`}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isServerSyncing ? 'animate-spin text-amber-400' : 'text-emerald-400'}`} />
+                  <span>{serverSyncStatus === 'synced' ? 'সিঙ্ক সংযুক্ত' : 'সিঙ্ক হচ্ছে...'}</span>
+                </button>
+                <button
+                  onClick={exportDatabaseBackup}
+                  title="সম্পূর্ণ ডাটাবেস ব্যাকআপ ডাউনলোড করুন"
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-800/80 hover:bg-indigo-700 text-indigo-100 border border-indigo-600 transition cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                  ব্যাকআপ
+                </button>
+                <button
+                  onClick={onOpenSettings}
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 transition shadow-sm cursor-pointer whitespace-nowrap"
+                >
+                  <Settings className="w-3.5 h-3.5 mr-1 text-slate-950" />
+                  সেটিংস
+                </button>
+              </>
+            )}
+
             <button
-              onClick={async () => {
-                await forceServerSync();
-                alert('কেন্দ্রীয় ডাটাবেজের সাথে সকল ডিভাইসের তথ্য সফলভাবে সিঙ্ক হয়েছে!');
-              }}
-              title="সকল সংযুক্ত ডিভাইস ও কম্পিউটারের সাথে ডাটা সিঙ্ক করুন"
-              className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer ${
-                serverSyncStatus === 'synced'
-                  ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/80'
-                  : 'bg-amber-950/70 text-amber-300 border-amber-500/50 hover:bg-amber-900/80'
-              }`}
+              onClick={onLogout}
+              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600/90 hover:bg-rose-600 text-white transition shadow-xs cursor-pointer whitespace-nowrap"
             >
-              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isServerSyncing ? 'animate-spin text-amber-400' : 'text-emerald-400'}`} />
-              <span>{serverSyncStatus === 'synced' ? 'ক্লাউড ডাটাবেজ সংযুক্ত' : 'সিঙ্ক হচ্ছে...'}</span>
-            </button>
-            <button
-              onClick={exportDatabaseBackup}
-              title="সম্পূর্ণ ডাটাবেস ব্যাকআপ ডাউনলোড করুন"
-              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-800/80 hover:bg-indigo-700 text-indigo-100 border border-indigo-600 transition"
-            >
-              <Download className="w-3.5 h-3.5 mr-1 text-emerald-400" />
-              ব্যাকআপ
-            </button>
-            <button
-              onClick={onOpenSettings}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold transition shadow-sm"
-            >
-              <Settings className="w-3.5 h-3.5 mr-1 text-slate-950" />
-              সেটিংস ও লোগো
+              <LogOut className="w-3.5 h-3.5 mr-1.5" />
+              সাইন আউট
             </button>
           </div>
 
           {/* Mobile menu button */}
-          <div className="flex items-center lg:hidden space-x-2">
+          <div className="flex items-center lg:hidden space-x-2 shrink-0">
             <PWAInstallButton variant="badge" />
+            {session.role === 'official' && (
+              <button
+                onClick={onOpenSettings}
+                className="p-1.5 text-amber-300 hover:text-amber-200 rounded-lg hover:bg-white/10"
+                title="সেটিংস"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
+            )}
             <button
-              onClick={onOpenSettings}
-              className="p-1.5 text-amber-300 hover:text-amber-200 rounded-lg hover:bg-indigo-800"
-              title="সেটিংস"
+              onClick={onLogout}
+              className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1"
+              title="সাইন আউট"
             >
-              <Settings className="w-5 h-5" />
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">সাইন আউট</span>
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-lg text-indigo-200 hover:text-white hover:bg-indigo-800 focus:outline-none"
+              className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 focus:outline-none"
             >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
           </div>
         </div>
 
-        {/* Desktop Navigation Links */}
-        <nav className="hidden lg:flex space-x-1 pb-2 pt-1 border-t border-indigo-800/60 overflow-x-auto scrollbar-none">
+        {/* Desktop Navigation Links (Role-Scoped) */}
+        <nav className="hidden lg:flex space-x-1 pb-2 pt-1 border-t border-white/10 overflow-x-auto scrollbar-none">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentTab === item.id;
@@ -149,13 +223,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
               <button
                 key={item.id}
                 onClick={() => setCurrentTab(item.id)}
-                className={`inline-flex items-center px-3.5 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap ${
+                className={`inline-flex items-center px-3.5 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap shrink-0 cursor-pointer ${
                   isActive
                     ? 'bg-amber-400 text-slate-950 font-bold shadow-sm'
-                    : 'text-indigo-100 hover:bg-indigo-800/70 hover:text-white'
+                    : 'text-slate-100 hover:bg-white/10 hover:text-white'
                 }`}
               >
-                <Icon className={`w-4 h-4 mr-1.5 ${isActive ? 'text-slate-950' : 'text-indigo-300'}`} />
+                <Icon className={`w-4 h-4 mr-1.5 ${isActive ? 'text-slate-950' : 'text-amber-300/90'}`} />
                 {item.label}
               </button>
             );
@@ -165,7 +239,10 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden bg-indigo-950 border-t border-indigo-800 px-3 pt-2 pb-4 space-y-1 shadow-2xl">
+        <div className="lg:hidden bg-slate-950/95 border-t border-white/10 px-3 pt-2 pb-4 space-y-2 shadow-2xl">
+          <div className="px-2 py-1 text-xs text-amber-200 font-semibold border-b border-white/10 pb-2">
+            {roleBadgeLabel}: {session.displayName} ({session.subLabel})
+          </div>
           <div className="grid grid-cols-2 gap-1.5 pb-2">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -180,36 +257,50 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
                   className={`flex items-center px-3 py-2.5 rounded-lg text-xs font-medium transition ${
                     isActive
                       ? 'bg-amber-400 text-slate-950 font-bold'
-                      : 'bg-indigo-900/60 text-indigo-100 hover:bg-indigo-800'
+                      : 'bg-white/10 text-slate-100 hover:bg-white/15'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 mr-2 ${isActive ? 'text-slate-950' : 'text-amber-400'}`} />
-                  {item.label}
+                  <Icon className={`w-4 h-4 mr-2 shrink-0 ${isActive ? 'text-slate-950' : 'text-amber-400'}`} />
+                  <span className="truncate">{item.label}</span>
                 </button>
               );
             })}
           </div>
 
-          <div className="pt-2 border-t border-indigo-800/80 flex items-center justify-between">
+          <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
+            {session.role === 'official' && (
+              <>
+                <button
+                  onClick={() => {
+                    exportDatabaseBackup();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-700 text-white"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1" />
+                  ব্যাকআপ
+                </button>
+                <button
+                  onClick={() => {
+                    onOpenSettings();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950"
+                >
+                  <Settings className="w-3.5 h-3.5 mr-1" />
+                  সেটিংস
+                </button>
+              </>
+            )}
             <button
               onClick={() => {
-                exportDatabaseBackup();
                 setMobileMenuOpen(false);
+                onLogout();
               }}
-              className="flex-1 mr-2 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-700 text-white"
+              className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-rose-600 text-white"
             >
-              <Download className="w-3.5 h-3.5 mr-1" />
-              ব্যাকআপ ডাউনলোড
-            </button>
-            <button
-              onClick={() => {
-                onOpenSettings();
-                setMobileMenuOpen(false);
-              }}
-              className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950"
-            >
-              <Settings className="w-3.5 h-3.5 mr-1" />
-              সেটিংস
+              <LogOut className="w-3.5 h-3.5 mr-1" />
+              সাইন আউট
             </button>
           </div>
         </div>
@@ -217,3 +308,4 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, onOpe
     </header>
   );
 };
+

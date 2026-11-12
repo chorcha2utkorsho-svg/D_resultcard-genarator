@@ -592,7 +592,8 @@
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
-      "securityQrCode": "DLIKON-CLASS_PLAY-1-WPXC"
+      "securityQrCode": "DLIKON-CLASS_PLAY-1-WPXC",
+      "futurePlan": null
     },
     {
       "roll": 2,
@@ -5642,6 +5643,22 @@
   ],
   "feeInvoices": [],
   "feeReceipts": [],
-  "securityLogs": [],
-  "_lastUpdated": "2026-11-11T10:50:38.550Z"
+  "securityLogs": [
+    {
+      "id": "verify-clock-skew-1",
+      "studentId": "std_1794322963381_0_wpxc",
+      "studentNameBn": "মোঃ মাজিদ",
+      "studentRoll": 1,
+      "classNameBn": "চতুর্থ শ্রেণি",
+      "action": "entry",
+      "timestamp": "2026-11-12T20:24:35.728Z",
+      "guardianPhone": "01700000000",
+      "voiceDispatched": true,
+      "smsDispatched": true,
+      "status": "verified",
+      "serverTimestamp": 1794515195748,
+      "guardianAcknowledged": false
+    }
+  ],
+  "_lastUpdated": "2026-11-12T20:35:32.301Z"
 }

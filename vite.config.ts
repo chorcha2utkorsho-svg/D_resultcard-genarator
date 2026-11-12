@@ -60,9 +60,9 @@ export default defineConfig(() => {
       },
     },
     server: {
-      hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      hmr: process.env.DISABLE_HMR === 'true' || process.env.ENABLE_HMR !== 'true' ? false : undefined,
+      // Disable file watching when HMR is disabled to save CPU during agent edits.
+      watch: process.env.DISABLE_HMR === 'true' || process.env.ENABLE_HMR !== 'true' ? null : {},
     },
   };
 });

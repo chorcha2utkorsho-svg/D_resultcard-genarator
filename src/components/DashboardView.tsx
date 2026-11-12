@@ -23,6 +23,7 @@ import {
   ShieldAlert,
   LayoutGrid,
   FileBadge,
+  Briefcase,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -58,6 +59,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
   const totalDueAmount = feeInvoices.reduce((sum, inv) => sum + (inv.dueAmount || 0), 0);
 
   const quickActions = [
+    {
+      id: 'staff_management',
+      title: 'অফিসিয়াল, এমপ্লয়ী ও সাইন-আপ অনুমোদন',
+      desc: 'শিক্ষক ও স্টাফ অ্যাকাউন্ট তৈরি, স্টাফ হাজিরা এবং নতুন শিক্ষার্থীর সাইন-আপ আবেদন অনুমোদন',
+      icon: Briefcase,
+      color: 'bg-[#0F1E3D] text-white',
+      badge: 'স্টাফ ও অনুমোদন',
+    },
     {
       id: 'defaulters',
       title: 'ফি খেলাপি তালিকা (৩০+ দিন বকেয়া)',

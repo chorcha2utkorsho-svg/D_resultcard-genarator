@@ -1,3 +1,10 @@
+export interface SchoolDailySchedule {
+  ptStartTimeBn: string;
+  classStartTimeBn: string;
+  breakTimeBn: string;
+  dismissalTimeBn: string;
+}
+
 export interface SchoolInfo {
   name: string;
   address: string;
@@ -7,6 +14,7 @@ export interface SchoolInfo {
   logoUrl?: string;
   principalSignatureUrl?: string;
   sealUrl?: string;
+  dailySchedule?: SchoolDailySchedule;
 }
 
 export interface Student {
@@ -60,8 +68,42 @@ export interface Student {
   fatherName?: string;
   motherName?: string;
 
+  // পোর্টালে নিজস্ব ড্যাশবোর্ড লগইন ও ব্যক্তিগত প্রগ্রেস ডেটা
+  portalUserId?: string; // ইউনিক লগইন আইডি (যেমন: DL-4-01)
+  futurePlan?: StudentFuturePlan;
+  achievements?: StudentAchievement[];
+
   // ডিজিটাল সিকিউরিটি ও স্মার্ট আইডি কিউআর কোড
   securityQrCode?: string; // সিকিউর কিউআর কোড টোকেন
+}
+
+export interface StudentMilestone {
+  id: string;
+  title: string;
+  targetYear: string;
+  category: 'academic' | 'skill' | 'character' | 'sports' | 'other';
+  status: 'planned' | 'in_progress' | 'achieved';
+  note?: string;
+}
+
+export interface StudentFuturePlan {
+  dreamCareer: string;
+  motto: string;
+  focusSubjects?: string[];
+  dailyStudyHoursGoal?: number;
+  milestones: StudentMilestone[];
+  updatedAt?: string;
+}
+
+export interface StudentAchievement {
+  id: string;
+  title: string;
+  date: string;
+  category: 'academic' | 'sports' | 'cultural' | 'character' | 'memory';
+  awardedBy?: string;
+  description: string;
+  photoUrl?: string;
+  createdAt: string;
 }
 
 export interface SecurityGatepassLog {
@@ -77,6 +119,10 @@ export interface SecurityGatepassLog {
   smsDispatched: boolean;
   status: 'verified' | 'flagged';
   operatorNote?: string;
+  guardianAcknowledged?: boolean;
+  acknowledgedAt?: string;
+  guardianResponse?: string;
+  acknowledgedBy?: string;
 }
 
 export interface Subject {
@@ -391,6 +437,58 @@ export interface StudentDueSummary {
   receipts: PaymentRecord[];
   status: FeeInvoiceStatus;
   lastPaymentDate?: string;
+}
+
+// ==================== 3-PORTAL AUTH & ROLE TYPES ====================
+
+export type PortalRole = 'official' | 'student' | 'employee';
+
+export interface StaffAccount {
+  id: string;
+  staffCode: string; // e.g. 'DL-ADMIN' or 'DL-EMP-01'
+  role: 'official' | 'employee';
+  nameBn: string;
+  designationBn: string;
+  phone: string;
+  email?: string;
+  password: string;
+  department?: 'administration' | 'academic' | 'accounts' | 'security' | 'office';
+  assignedClassIds?: string[];
+  status: 'active' | 'pending';
+  avatarUrl?: string;
+  createdAt: string;
+}
+
+export interface StaffAttendanceRecord {
+  id: string; // `${staffId}_${date}`
+  staffId: string;
+  staffNameBn: string;
+  designationBn: string;
+  date: string; // YYYY-MM-DD
+  checkInTime: string;
+  checkOutTime?: string;
+  status: 'present' | 'late' | 'leave';
+  note?: string;
+}
+
+export interface AdmissionSignupRequest {
+  id: string;
+  studentNameBn: string;
+  classId: string;
+  desiredRoll?: number;
+  guardianNameBn: string;
+  guardianPhone: string;
+  password: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
+export interface PortalAuthSession {
+  role: PortalRole;
+  accountId: string;
+  displayName: string;
+  subLabel: string;
+  staffCode?: string;
 }
 
 

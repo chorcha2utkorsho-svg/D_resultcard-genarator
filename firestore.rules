@@ -1,0 +1,313 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'chorcho2utkosho@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.createdAt is timestamp &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 200));
+    }
+
+    function isValidSchoolProfile(data) {
+      return data.keys().hasAll(['schoolId', 'name', 'ownerUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'name', 'address', 'phone', 'email', 'ownerUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.schoolId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 300)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 150)) &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStudentRecord(data) {
+      return data.keys().hasAll(['id', 'nameBn', 'roll', 'classId', 'ownerUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'nameBn', 'roll', 'classId', 'section', 'portalUserId',
+          'guardianPhone', 'guardianNameBn', 'guardianPin', 'ownerUid',
+          'guardianUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 160 &&
+        data.roll is number && data.roll >= 0 && data.roll <= 9999 &&
+        data.classId is string && data.classId.size() >= 1 && data.classId.size() <= 64 &&
+        (!('section' in data) || (data.section is string && data.section.size() <= 32)) &&
+        (!('portalUserId' in data) || (data.portalUserId is string && data.portalUserId.size() <= 64)) &&
+        (!('guardianPhone' in data) || (data.guardianPhone is string && data.guardianPhone.size() <= 32)) &&
+        (!('guardianNameBn' in data) || (data.guardianNameBn is string && data.guardianNameBn.size() <= 160)) &&
+        (!('guardianPin' in data) || (data.guardianPin is string && data.guardianPin.size() <= 32)) &&
+        isValidId(data.ownerUid) &&
+        (!('guardianUid' in data) || (data.guardianUid is string && data.guardianUid.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityLog(data) {
+      return data.keys().hasAll([
+          'id', 'studentId', 'studentNameBn', 'studentRoll', 'classNameBn',
+          'action', 'timestamp', 'status', 'ownerUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'studentId', 'studentNameBn', 'studentRoll', 'classNameBn',
+          'action', 'timestamp', 'serverTimestamp', 'status', 'voiceDispatched',
+          'smsDispatched', 'guardianAcknowledged', 'guardianResponse',
+          'acknowledgedAt', 'acknowledgedBy', 'ownerUid', 'guardianUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.studentId) &&
+        data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 160 &&
+        data.studentRoll is number && data.studentRoll >= 0 && data.studentRoll <= 9999 &&
+        data.classNameBn is string && data.classNameBn.size() >= 1 && data.classNameBn.size() <= 80 &&
+        data.action in ['entry', 'exit'] &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64 &&
+        (!('serverTimestamp' in data) || data.serverTimestamp is number) &&
+        data.status in ['verified', 'flagged'] &&
+        (!('voiceDispatched' in data) || data.voiceDispatched is bool) &&
+        (!('smsDispatched' in data) || data.smsDispatched is bool) &&
+        (!('guardianAcknowledged' in data) || data.guardianAcknowledged is bool) &&
+        (!('guardianResponse' in data) || (data.guardianResponse is string && data.guardianResponse.size() <= 300)) &&
+        (!('acknowledgedAt' in data) || (data.acknowledgedAt is string && data.acknowledgedAt.size() <= 64)) &&
+        (!('acknowledgedBy' in data) || (data.acknowledgedBy is string && data.acknowledgedBy.size() <= 160)) &&
+        isValidId(data.ownerUid) &&
+        (!('guardianUid' in data) || (data.guardianUid is string && data.guardianUid.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAccount(data) {
+      return data.keys().hasAll([
+          'id', 'staffCode', 'role', 'nameBn', 'designationBn', 'phone',
+          'status', 'ownerUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'staffCode', 'role', 'nameBn', 'designationBn', 'phone',
+          'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40 &&
+        data.role in ['official', 'employee'] &&
+        data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 160 &&
+        data.designationBn is string && data.designationBn.size() >= 1 && data.designationBn.size() <= 120 &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 32 &&
+        data.status in ['active', 'pending'] &&
+        isValidId(data.ownerUid) &&
+        (!('staffUid' in data) || (data.staffUid is string && data.staffUid.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStaffAttendance(data) {
+      return data.keys().hasAll([
+          'id', 'staffId', 'staffNameBn', 'date', 'checkInTime',
+          'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'staffId', 'staffNameBn', 'designationBn', 'date', 'checkInTime',
+          'checkOutTime', 'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.staffId) &&
+        data.staffNameBn is string && data.staffNameBn.size() >= 1 && data.staffNameBn.size() <= 160 &&
+        (!('designationBn' in data) || (data.designationBn is string && data.designationBn.size() <= 120)) &&
+        data.date is string && data.date.size() >= 1 && data.date.size() <= 24 &&
+        data.checkInTime is string && data.checkInTime.size() >= 1 && data.checkInTime.size() <= 40 &&
+        (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 40)) &&
+        data.status in ['present', 'late', 'leave'] &&
+        isValidId(data.ownerUid) &&
+        isValidId(data.staffUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /admins/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create, update: if isBootstrappedAdmin() && isValidId(uid) && isValidAdminUser(incoming());
+      allow delete: if isBootstrappedAdmin() && isValidId(uid);
+    }
+
+    match /test/{docId} {
+      allow get: if isSignedIn() && isValidId(docId);
+      allow list, create, update, delete: if false;
+    }
+
+    match /schools/{schoolId} {
+      allow get: if isSignedIn() && isValidId(schoolId) && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(schoolId) && isValidSchoolProfile(incoming()) &&
+        incoming().schoolId == schoolId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(schoolId) && isValidSchoolProfile(incoming()) &&
+        incoming().schoolId == existing().schoolId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (
+          existing().ownerUid == request.auth.uid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'updatedAt'])
+        ));
+      allow delete: if isAdmin() && isValidId(schoolId);
+
+      match /students/{studentId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.guardianUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&
+          isValidStudentRecord(incoming()) &&
+          incoming().id == studentId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          (isAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&
+          isValidStudentRecord(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'nameBn', 'roll', 'classId', 'section', 'portalUserId',
+              'guardianPhone', 'guardianNameBn', 'guardianPin', 'guardianUid', 'updatedAt'
+            ])
+          ));
+        allow delete: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid);
+      }
+
+      match /securityLogs/{logId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(logId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.guardianUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(logId) &&
+          isValidSecurityLog(incoming()) &&
+          incoming().id == logId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          (isAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(logId) &&
+          isValidSecurityLog(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().studentId == existing().studentId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().action == existing().action &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              existing().ownerUid == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'guardianAcknowledged', 'guardianResponse', 'acknowledgedAt', 'acknowledgedBy',
+                'voiceDispatched', 'smsDispatched', 'status', 'updatedAt'
+              ])
+            ) ||
+            (
+              existing().guardianUid == request.auth.uid &&
+              existing().guardianAcknowledged != true &&
+              incoming().guardianAcknowledged == true &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'guardianAcknowledged', 'guardianResponse', 'acknowledgedAt', 'acknowledgedBy', 'updatedAt'
+              ])
+            )
+          );
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(logId);
+      }
+
+      match /staffAccounts/{staffId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
+          isValidStaffAccount(incoming()) &&
+          incoming().id == staffId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          (isAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
+          isValidStaffAccount(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'nameBn', 'designationBn', 'phone', 'status', 'staffUid', 'updatedAt'
+            ])
+          ));
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(staffId);
+      }
+
+      match /staffAttendance/{attId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          isValidStaffAttendance(incoming()) &&
+          incoming().id == attId &&
+          incoming().staffUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/schools/$(schoolId));
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          isValidStaffAttendance(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().staffId == existing().staffId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().staffUid == existing().staffUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            (existing().staffUid == request.auth.uid || existing().ownerUid == request.auth.uid) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['checkOutTime', 'status', 'updatedAt'])
+          ));
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(attId);
+      }
+    }
+  }
+}

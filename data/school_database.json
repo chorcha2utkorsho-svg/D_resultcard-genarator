@@ -5649,7 +5649,23 @@
   ],
   "feeInvoices": [],
   "feeReceipts": [],
-  "securityLogs": [],
+  "securityLogs": [
+    {
+      "id": "verify-clock-skew-1",
+      "studentId": "std_1794322963381_0_wpxc",
+      "studentNameBn": "মোঃ মাজিদ",
+      "studentRoll": 1,
+      "classNameBn": "চতুর্থ শ্রেণি",
+      "action": "entry",
+      "timestamp": "2026-11-12T20:24:35.728Z",
+      "guardianPhone": "01700000000",
+      "voiceDispatched": true,
+      "smsDispatched": true,
+      "status": "verified",
+      "serverTimestamp": 1794515195748,
+      "guardianAcknowledged": false
+    }
+  ],
   "staffAccounts": [
     {
       "id": "staff_admin_default",
@@ -5690,6 +5706,5 @@
   ],
   "staffAttendance": [],
   "admissionRequests": [],
-  "_lastUpdated": "2026-11-13T06:37:50.132Z",
-  "isExplicitClearLogs": true
+  "_lastUpdated": "2026-11-13T06:58:33.426Z"
 }

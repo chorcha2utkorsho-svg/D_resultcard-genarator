@@ -28,6 +28,8 @@ import {
   LogOut,
   Briefcase,
   QrCode,
+  Cloud,
+  CloudOff,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession } from '../types';
@@ -49,8 +51,20 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSettings,
   onLogout,
 }) => {
-  const { schoolInfo, exportDatabaseBackup, isServerSyncing, serverSyncStatus, forceServerSync } = useSchool();
+  const {
+    schoolInfo,
+    exportDatabaseBackup,
+    isServerSyncing,
+    serverSyncStatus,
+    forceServerSync,
+    cloudUser,
+    cloudSyncError,
+    cloudUnauthorizedDomain,
+    connectCloudSync,
+    disconnectCloudSync,
+  } = useSchool();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   const officialNavItems = [
     { id: 'dashboard', label: 'অফিসিয়াল ড্যাশবোর্ড', icon: GraduationCap },
@@ -141,12 +155,46 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="hidden lg:flex items-center space-x-2 shrink-0">
             <PWAInstallButton variant="badge" />
 
+            <button
+              type="button"
+              onClick={async () => {
+                if (cloudUser) {
+                  await disconnectCloudSync();
+                  setSyncNotice('ক্লাউড সিঙ্ক বিচ্ছিন্ন করা হয়েছে।');
+                } else {
+                  const ok = await connectCloudSync();
+                  if (ok) {
+                    setSyncNotice('✓ রিয়েল-টাইম ক্লাউড সিঙ্ক (Firebase) সক্রিয় হয়েছে!');
+                  }
+                }
+                setTimeout(() => setSyncNotice(null), 4500);
+              }}
+              title={
+                cloudUser
+                  ? `ক্লাউড সিঙ্ক সক্রিয় (${cloudUser.email}) — বিচ্ছিন্ন করতে ক্লিক করুন`
+                  : 'সকল ডিভাইসে (Vercel / মোবাইল) লাইভ সিঙ্ক চালু করতে ক্লিক করুন'
+              }
+              className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer whitespace-nowrap ${
+                cloudUser
+                  ? 'bg-emerald-950/75 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/80'
+                  : 'bg-sky-950/70 text-sky-200 border-sky-400/50 hover:bg-sky-900/80'
+              }`}
+            >
+              {cloudUser ? (
+                <Cloud className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
+              ) : (
+                <CloudOff className="w-3.5 h-3.5 mr-1.5 text-sky-300" />
+              )}
+              <span>{cloudUser ? 'ক্লাউড সিঙ্ক সক্রিয়' : 'ক্লাউড সিঙ্ক চালু'}</span>
+            </button>
+
             {session.role === 'official' && (
               <>
                 <button
                   onClick={async () => {
                     await forceServerSync();
-                    alert('কেন্দ্রীয় ডাটাবেজের সাথে সকল ডিভাইসের তথ্য সফলভাবে সিঙ্ক হয়েছে!');
+                    setSyncNotice('✓ কেন্দ্রীয় ডাটাবেজের সাথে তথ্য সিঙ্ক সম্পন্ন!');
+                    setTimeout(() => setSyncNotice(null), 3500);
                   }}
                   title="সকল সংযুক্ত ডিভাইস ও কম্পিউটারের সাথে ডাটা সিঙ্ক করুন"
                   className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer whitespace-nowrap ${
@@ -237,6 +285,23 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
       </div>
 
+      {(syncNotice || cloudSyncError) && (
+        <div
+          className={`px-4 py-2 text-xs text-center font-medium border-t ${
+            cloudSyncError
+              ? 'bg-amber-950 text-amber-200 border-amber-700/60'
+              : 'bg-emerald-950 text-emerald-200 border-emerald-700/60'
+          }`}
+        >
+          <span>{cloudSyncError || syncNotice}</span>
+          {cloudUnauthorizedDomain && (
+            <span className="ml-2 underline font-mono">
+              Firebase Console → Authentication → Settings → Authorized domains → Add "{cloudUnauthorizedDomain}"
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="lg:hidden bg-slate-950/95 border-t border-white/10 px-3 pt-2 pb-4 space-y-2 shadow-2xl">
@@ -267,7 +332,30 @@ export const Navbar: React.FC<NavbarProps> = ({
             })}
           </div>
 
-          <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
+          <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                if (cloudUser) {
+                  await disconnectCloudSync();
+                } else {
+                  await connectCloudSync();
+                }
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold border ${
+                cloudUser
+                  ? 'bg-emerald-900/80 text-emerald-200 border-emerald-500/50'
+                  : 'bg-sky-800/80 text-white border-sky-500/50'
+              }`}
+            >
+              {cloudUser ? (
+                <Cloud className="w-3.5 h-3.5 mr-1.5 text-emerald-300" />
+              ) : (
+                <CloudOff className="w-3.5 h-3.5 mr-1.5 text-sky-200" />
+              )}
+              {cloudUser ? `ক্লাউড সিঙ্ক সক্রিয় (${cloudUser.email})` : 'ক্লাউড সিঙ্ক (Google / Vercel) চালু করুন'}
+            </button>
             {session.role === 'official' && (
               <>
                 <button

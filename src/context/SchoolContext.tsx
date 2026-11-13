@@ -45,6 +45,20 @@ import {
 } from '../data/defaultData';
 import { calculateGrade, formatGpa, getOverallGradeFromGpa, toBengaliOrdinal, toBengaliNumber } from '../utils/bengali';
 import { numberToBengaliWords } from '../utils/bengaliWords';
+import {
+  auth,
+  onAuthStateChanged,
+  signInWithGoogleCloudSync,
+  signOutCloudSync,
+  User,
+} from '../firebase';
+import {
+  acknowledgeSecurityLogInFirestore,
+  ensureSchoolDocument,
+  pushSecurityLogToFirestore,
+  subscribeCloudSecurityLogs,
+  syncStudentRecordToFirestore,
+} from '../services/firestoreSyncService';
 
 interface SchoolContextType {
   schoolInfo: SchoolInfo;
@@ -254,6 +268,13 @@ interface SchoolContextType {
   lastSyncedTime: string;
   forceServerSync: () => Promise<void>;
   seedParentDetailsForClass: (classId: string) => number;
+  // Real-time Firebase Cloud Sync (works across Vercel, PC & mobile PWA)
+  cloudUser: User | null;
+  cloudSyncError: string | null;
+  cloudUnauthorizedDomain: string | null;
+  connectCloudSync: () => Promise<boolean>;
+  disconnectCloudSync: () => Promise<void>;
+  broadcastSecurityLogToCloud: (log: SecurityGatepassLog) => Promise<void>;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -542,6 +563,86 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [lastSyncedTime, setLastSyncedTime] = useState<string>('');
   const lastSyncTimestampRef = useRef<number>(0);
   const isInitialServerLoadDone = useRef<boolean>(false);
+
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const [cloudUnauthorizedDomain, setCloudUnauthorizedDomain] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setCloudUser(user);
+      if (user) {
+        setCloudSyncError(null);
+        setCloudUnauthorizedDomain(null);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!cloudUser || !cloudUser.emailVerified) return;
+    ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+    const unsub = subscribeCloudSecurityLogs(cloudUser, (cloudLogs) => {
+      setServerSyncStatus('synced');
+      setLastSyncedTime(
+        new Date().toLocaleTimeString('bn-BD', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+      if (cloudLogs.length === 0) return;
+      setSecurityLogs((prev) => {
+        const mergedMap = new Map<string, SecurityGatepassLog>();
+        for (const item of prev) {
+          if (item && item.id) mergedMap.set(item.id, item);
+        }
+        for (const item of cloudLogs) {
+          if (item && item.id) {
+            const existing = mergedMap.get(item.id);
+            if (existing) {
+              mergedMap.set(item.id, {
+                ...existing,
+                ...item,
+                guardianPhone: existing.guardianPhone || item.guardianPhone,
+                guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+                acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+                guardianResponse: item.guardianResponse || existing.guardianResponse,
+                acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+              });
+            } else {
+              mergedMap.set(item.id, item);
+            }
+          }
+        }
+        return Array.from(mergedMap.values())
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+          .slice(0, 1000);
+      });
+    });
+    return () => unsub();
+  }, [cloudUser]);
+
+  const connectCloudSync = useCallback(async (): Promise<boolean> => {
+    setCloudSyncError(null);
+    setCloudUnauthorizedDomain(null);
+    const res = await signInWithGoogleCloudSync();
+    if (!res.ok) {
+      setCloudSyncError(res.message || 'ক্লাউড সিঙ্ক ব্যর্থ হয়েছে।');
+      if (res.unauthorizedDomain) {
+        setCloudUnauthorizedDomain(res.unauthorizedDomain);
+      }
+      return false;
+    }
+    if (res.user) {
+      await ensureSchoolDocument(res.user, latestStateRef.current.schoolInfo).catch(() => {});
+    }
+    return true;
+  }, []);
+
+  const disconnectCloudSync = useCallback(async (): Promise<void> => {
+    await signOutCloudSync();
+  }, []);
 
   // Keep a reference to latest state so pushToServer doesn't need to recreate on every render
   const latestStateRef = useRef({
@@ -1078,6 +1179,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch {
         // Non-fatal fallback to standard sync
       }
+      if (cloudUser && cloudUser.emailVerified) {
+        syncStudentRecordToFirestore(payload, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      }
     };
 
     if (student.avatarUrl && student.avatarUrl.length > 50000) {
@@ -1129,6 +1233,17 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     []
   );
 
+  const broadcastSecurityLogToCloud = useCallback(
+    async (log: SecurityGatepassLog) => {
+      if (cloudUser && cloudUser.emailVerified) {
+        await pushSecurityLogToFirestore(log, cloudUser, latestStateRef.current.schoolInfo).catch((err) => {
+          console.warn('Firestore security log push warning:', err);
+        });
+      }
+    },
+    [cloudUser]
+  );
+
   const acknowledgeSecurityLog = useCallback(
     async (logId: string, guardianResponse: string, acknowledgedBy?: string) => {
       const ackTime = new Date().toISOString();
@@ -1151,6 +1266,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         })
       );
 
+      if (cloudUser && cloudUser.emailVerified) {
+        acknowledgeSecurityLogInFirestore(
+          logId,
+          responseText,
+          acknowledgedBy || 'অভিভাবক',
+          cloudUser
+        ).catch((err) => console.warn('Firestore ack sync warning:', err));
+      }
+
       try {
         await fetch('/api/security/acknowledge', {
           method: 'POST',
@@ -1166,7 +1290,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('Could not sync guardian acknowledgement to server:', err);
       }
     },
-    []
+    [cloudUser]
   );
 
   const clearSecurityLogs = () => {
@@ -2702,6 +2826,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         seedParentDetailsForClass,
         clearAllStudents,
         scanAndRecoverBrowserData,
+        cloudUser,
+        cloudSyncError,
+        cloudUnauthorizedDomain,
+        connectCloudSync,
+        disconnectCloudSync,
+        broadcastSecurityLogToCloud,
       }}
     >
       {children}

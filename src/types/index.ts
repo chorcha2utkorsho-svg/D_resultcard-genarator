@@ -114,6 +114,7 @@ export interface SecurityGatepassLog {
   classNameBn: string;
   action: 'entry' | 'exit';
   timestamp: string; // ISO string
+  serverTimestamp?: number;
   guardianPhone: string;
   voiceDispatched: boolean;
   smsDispatched: boolean;

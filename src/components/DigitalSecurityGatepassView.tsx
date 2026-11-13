@@ -190,6 +190,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     lastSyncedTime,
     forceServerSync,
     seedParentDetailsForClass,
+    cloudUser,
+    broadcastSecurityLogToCloud,
   } = useSchool();
 
   const initialUrlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -456,7 +458,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     // 2. Add security log locally
     addSecurityLog(newLogRecord);
 
-    // 2b. Broadcast to central server for real-time guardian smartphone audio alarm
+    // 2b. Broadcast to central server + Cloud Firestore for real-time guardian smartphone audio alarm
+    broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     try {
       fetch('/api/security/scan', {
         method: 'POST',
@@ -1089,6 +1092,71 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     activeDailySchedule,
     schoolInfo.name,
   ]);
+
+  // Real-time Firestore listener alarm: whenever Cloud Sync delivers a fresh scan in securityLogs,
+  // ring & speak immediately on Vercel / mobile PWA without waiting for Express polling!
+  const hasSeededCloudLogsRef = useRef<boolean>(false);
+  useEffect(() => {
+    hasSeededCloudLogsRef.current = false;
+  }, [loggedInGuardianStudent?.id]);
+
+  useEffect(() => {
+    const signedStudent = activeSignedInStudentRef.current;
+    if (!signedStudent || !cloudUser) return;
+
+    const childLogs = securityLogs.filter((l) => l.studentId === signedStudent.id);
+    if (!hasSeededCloudLogsRef.current) {
+      hasSeededCloudLogsRef.current = true;
+      const nowMs = Date.now();
+      let recentLog: SecurityGatepassLog | null = null;
+      for (const l of childLogs) {
+        const logTimeMs = l.serverTimestamp || new Date(l.timestamp).getTime() || 0;
+        if (!seenLogIdsRef.current.has(l.id)) {
+          seenLogIdsRef.current.add(l.id);
+          if (!recentLog && nowMs - logTimeMs <= 12000 && nowMs - logTimeMs >= -5000) {
+            recentLog = l;
+          }
+        }
+      }
+      if (recentLog && guardianAudioEnabled) {
+        setIsGuardianAlarmRinging(true);
+        playAlarmChime();
+        speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true);
+        setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+      }
+      return;
+    }
+
+    let freshCloudLog: SecurityGatepassLog | null = null;
+    for (const l of childLogs) {
+      if (!seenLogIdsRef.current.has(l.id)) {
+        seenLogIdsRef.current.add(l.id);
+        if (!freshCloudLog) {
+          freshCloudLog = l;
+        }
+      }
+    }
+    if (freshCloudLog && guardianAudioEnabled) {
+      setIsGuardianAlarmRinging(true);
+      playAlarmChime();
+      const announcement = buildGuardianVoiceMessage(signedStudent, freshCloudLog.action);
+      speakBengali(announcement, true);
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification(`${schoolInfo.name} • লাইভ গেটপাস`, {
+            body: announcement,
+            icon: '/pwa-192x192.png',
+          });
+        } catch {}
+      }
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate([200, 100, 200, 100, 400]);
+        } catch {}
+      }
+      setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+    }
+  }, [securityLogs, cloudUser, loggedInGuardianStudent?.id, guardianAudioEnabled, schoolInfo.name]);
 
   // Also poll server every 3.5 seconds when school staff is viewing Scanner or Audit Logs
   // so guardian responses from Saudi Arabia / mobile phones appear and count live!

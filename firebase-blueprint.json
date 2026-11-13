@@ -1,0 +1,371 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized school administrator UID registration.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "createdAt"]
+    },
+    "SchoolProfile": {
+      "title": "SchoolProfile",
+      "description": "Core school metadata and ownership record.",
+      "type": "object",
+      "properties": {
+        "schoolId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["schoolId", "name", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "StudentRecord": {
+      "title": "StudentRecord",
+      "description": "Synchronized student profile and portal access metadata.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "roll": {
+          "type": "number"
+        },
+        "classId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "section": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "portalUserId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "guardianPhone": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "guardianNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "guardianPin": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "guardianUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "nameBn", "roll", "classId", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "SecurityGatepassLog": {
+      "title": "SecurityGatepassLog",
+      "description": "Live school gate entry/exit scan log and guardian voice response state.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "studentRoll": {
+          "type": "number"
+        },
+        "classNameBn": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "action": {
+          "type": "string",
+          "enum": ["entry", "exit"],
+          "maxLength": 16
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "serverTimestamp": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["verified", "flagged"],
+          "maxLength": 16
+        },
+        "voiceDispatched": {
+          "type": "boolean"
+        },
+        "smsDispatched": {
+          "type": "boolean"
+        },
+        "guardianAcknowledged": {
+          "type": "boolean"
+        },
+        "guardianResponse": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "acknowledgedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "acknowledgedBy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "guardianUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "studentId", "studentNameBn", "studentRoll", "classNameBn", "action", "timestamp", "status", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "StaffAccount": {
+      "title": "StaffAccount",
+      "description": "Official admin and employee/teacher directory entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "role": {
+          "type": "string",
+          "enum": ["official", "employee"],
+          "maxLength": 16
+        },
+        "nameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "designationBn": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "pending"],
+          "maxLength": 16
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "staffCode", "role", "nameBn", "designationBn", "phone", "status", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "StaffAttendance": {
+      "title": "StaffAttendance",
+      "description": "Daily staff check-in and check-out record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "designationBn": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "checkInTime": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "checkOutTime": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "status": {
+          "type": "string",
+          "enum": ["present", "late", "leave"],
+          "maxLength": 16
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "staffId", "staffNameBn", "date", "checkInTime", "status", "ownerUid", "staffUid", "createdAt", "updatedAt"]
+    },
+    "ConnectionCheck": {
+      "title": "ConnectionCheck",
+      "description": "Health check document for validating server reachability.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": ["ok"]
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Stores verified administrator UIDs."
+    },
+    "/schools/{schoolId}": {
+      "schema": { "$ref": "#/entities/SchoolProfile" },
+      "description": "Stores school profile metadata."
+    },
+    "/schools/{schoolId}/students/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentRecord" },
+      "description": "Stores synchronized student profiles and guardian UID bindings."
+    },
+    "/schools/{schoolId}/securityLogs/{logId}": {
+      "schema": { "$ref": "#/entities/SecurityGatepassLog" },
+      "description": "Stores live gatepass entry/exit events and guardian voice acknowledgements."
+    },
+    "/schools/{schoolId}/staffAccounts/{staffId}": {
+      "schema": { "$ref": "#/entities/StaffAccount" },
+      "description": "Stores official and employee accounts."
+    },
+    "/schools/{schoolId}/staffAttendance/{attId}": {
+      "schema": { "$ref": "#/entities/StaffAttendance" },
+      "description": "Stores daily employee check-in and check-out logs."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionCheck" },
+      "description": "Connection health check path."
+    }
+  }
+}

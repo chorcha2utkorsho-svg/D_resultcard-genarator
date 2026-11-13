@@ -20,7 +20,14 @@ import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession, PortalRole, Student } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 import { PWAInstallButton } from './PWAInstallButton';
-import { getStudentPortalId, toBengaliNumber, toBengaliRoll } from '../utils/bengali';
+import { getStudentPortalId, normalizeBengaliDigits, toBengaliNumber, toBengaliRoll } from '../utils/bengali';
+import { INITIAL_STUDENTS } from '../data/defaultData';
+import {
+  authenticateLocally,
+  getLocalStaffAccounts,
+  safeFetchJson,
+  saveLocalStaffAccounts,
+} from '../utils/portalAuthFallback';
 
 interface PortalHomeViewProps {
   onLoginSuccess: (session: PortalAuthSession, matchedStudent?: Student | null) => void;
@@ -81,7 +88,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
     setFeedback(null);
     setIsLoading(true);
     try {
-      const res = await fetch('/api/auth/login', {
+      const serverRes = await safeFetchJson('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -91,19 +98,45 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
           classId: studentLoginClassId,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setFeedback({ type: 'error', text: data.message || 'সাইন ইন সফল হয়নি। তথ্য যাচাই করুন।' });
-        setIsLoading(false);
+
+      if (serverRes.reachable) {
+        const data = serverRes.data;
+        if (serverRes.ok && data?.success) {
+          if (data.student) {
+            updateStudent(data.student);
+          }
+          onLoginSuccess(data.session, data.student || null);
+          return;
+        }
+        // Only surface server auth error if it is an explicit 4xx validation/credential rejection
+        if (serverRes.status >= 400 && serverRes.status < 500 && data?.message) {
+          setFeedback({ type: 'error', text: data.message });
+          return;
+        }
+      }
+
+      // Automatic local/PWA/offline verification fallback when /api is unreachable or returns HTML
+      const localResult = authenticateLocally({
+        role: selectedPortal,
+        identifier,
+        password,
+        classId: studentLoginClassId,
+        students: students.length > 0 ? students : INITIAL_STUDENTS,
+        classes,
+      });
+
+      if (localResult.success && localResult.session) {
+        if (localResult.student) {
+          updateStudent(localResult.student);
+        }
+        onLoginSuccess(localResult.session, localResult.student || null);
         return;
       }
 
-      if (data.student) {
-        updateStudent(data.student);
-      }
-      onLoginSuccess(data.session, data.student || null);
-    } catch {
-      setFeedback({ type: 'error', text: 'সার্ভারের সাথে সংযোগ পাওয়া যায়নি। আবার চেষ্টা করুন।' });
+      setFeedback({
+        type: 'error',
+        text: localResult.message || 'সাইন ইন সফল হয়নি। আপনার আইডি ও পাসওয়ার্ড যাচাই করুন।',
+      });
     } finally {
       setIsLoading(false);
     }
@@ -114,7 +147,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
     setFeedback(null);
     setIsLoading(true);
     try {
-      const res = await fetch('/api/auth/register-staff', {
+      const serverRes = await safeFetchJson('/api/auth/register-staff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -128,15 +161,66 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
           officialInviteCode: officialVerifyCode,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setFeedback({ type: 'error', text: data.message || 'নিবন্ধন সম্পন্ন করা যায়নি।' });
-        setIsLoading(false);
+
+      if (serverRes.reachable) {
+        if (serverRes.ok && serverRes.data?.success) {
+          onLoginSuccess(serverRes.data.session, null);
+          return;
+        }
+        if (serverRes.status >= 400 && serverRes.status < 500 && serverRes.data?.message) {
+          setFeedback({ type: 'error', text: serverRes.data.message });
+          return;
+        }
+      }
+
+      // Offline / PWA / Static fallback staff registration
+      if (staffPassword.trim().length < 4) {
+        setFeedback({ type: 'error', text: 'পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে।' });
         return;
       }
-      onLoginSuccess(data.session, null);
-    } catch {
-      setFeedback({ type: 'error', text: 'নেটওয়ার্ক ত্রুটি! অনুগ্রহ করে আবার চেষ্টা করুন।' });
+      const roleVal = selectedPortal === 'official' ? 'official' : 'employee';
+      const existingAccounts = getLocalStaffAccounts();
+      if (roleVal === 'official') {
+        const inviteNorm = normalizeBengaliDigits(officialVerifyCode).trim();
+        const valid =
+          inviteNorm.toUpperCase() === 'DL-ADMIN' ||
+          existingAccounts.some((a) => a.role === 'official' && normalizeBengaliDigits(a.password) === inviteNorm);
+        if (!valid) {
+          setFeedback({
+            type: 'error',
+            text: 'অফিসিয়াল সাইন আপের জন্য সঠিক প্রতিষ্ঠানের ভেরিফিকেশন কোড (ডিফল্ট: DL-ADMIN) প্রয়োজন।',
+          });
+          return;
+        }
+      }
+
+      const countForRole = existingAccounts.filter((a) => a.role === roleVal).length + 1;
+      const staffCode = `${roleVal === 'official' ? 'DL-OFF' : 'DL-EMP'}-${String(countForRole).padStart(2, '0')}`;
+      const newStaff = {
+        id: `staff_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        staffCode,
+        role: roleVal as 'official' | 'employee',
+        nameBn: staffNameBn.trim(),
+        designationBn: staffDesignationBn.trim(),
+        phone: staffPhone.trim(),
+        email: staffEmail.trim(),
+        password: staffPassword.trim(),
+        department: (roleVal === 'official' ? 'administration' : 'academic') as 'administration' | 'academic',
+        assignedClassIds,
+        status: 'active' as const,
+        createdAt: new Date().toISOString(),
+      };
+      saveLocalStaffAccounts([...existingAccounts, newStaff]);
+      onLoginSuccess(
+        {
+          role: newStaff.role,
+          accountId: newStaff.id,
+          displayName: newStaff.nameBn,
+          subLabel: newStaff.designationBn,
+          staffCode: newStaff.staffCode,
+        },
+        null
+      );
     } finally {
       setIsLoading(false);
     }
@@ -148,7 +232,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
     setIsLoading(true);
     try {
       if (studentSignupMode === 'activate') {
-        const res = await fetch('/api/auth/activate-student', {
+        const serverRes = await safeFetchJson('/api/auth/activate-student', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -158,16 +242,55 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
             newPassword: actNewPin,
           }),
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          setFeedback({ type: 'error', text: data.message || 'অ্যাকাউন্ট সক্রিয় করা যায়নি।' });
-          setIsLoading(false);
+
+        if (serverRes.reachable) {
+          if (serverRes.ok && serverRes.data?.success) {
+            if (serverRes.data.student) updateStudent(serverRes.data.student);
+            onLoginSuccess(serverRes.data.session, serverRes.data.student || null);
+            return;
+          }
+          if (serverRes.status >= 400 && serverRes.status < 500 && serverRes.data?.message) {
+            setFeedback({ type: 'error', text: serverRes.data.message });
+            return;
+          }
+        }
+
+        // Local fallback activation against SchoolContext / bundled students
+        const studentPool = students.length > 0 ? students : INITIAL_STUDENTS;
+        const rollNum = Number(normalizeBengaliDigits(actRoll));
+        const target = studentPool.find((s) => s.classId === actClassId && Number(s.roll) === rollNum);
+        if (!target) {
+          setFeedback({
+            type: 'error',
+            text: 'উক্ত শ্রেণি ও রোলের কোনো নিবন্ধিত শিক্ষার্থী পাওয়া যায়নি। নতুন শিক্ষার্থী হলে "নতুন শিক্ষার্থী আবেদন" ব্যবহার করুন।',
+          });
           return;
         }
-        if (data.student) updateStudent(data.student);
-        onLoginSuccess(data.session, data.student || null);
+        if (actNewPin.trim().length < 4) {
+          setFeedback({ type: 'error', text: 'কমপক্ষে ৪ অক্ষরের নতুন পাসওয়ার্ড দিন।' });
+          return;
+        }
+        const portalCode = getStudentPortalId(target);
+        const updatedStudent: Student = {
+          ...target,
+          portalUserId: portalCode,
+          guardianPin: actNewPin.trim(),
+          guardianPhone: target.guardianPhone || actPhone.trim(),
+        };
+        updateStudent(updatedStudent);
+        const clsObj = classes.find((c) => c.id === updatedStudent.classId);
+        onLoginSuccess(
+          {
+            role: 'student',
+            accountId: updatedStudent.id,
+            displayName: updatedStudent.nameBn,
+            subLabel: `${clsObj?.nameBn || updatedStudent.classId} • রোল ${updatedStudent.roll}`,
+            staffCode: portalCode,
+          },
+          updatedStudent
+        );
       } else {
-        const res = await fetch('/api/auth/request-student-signup', {
+        const serverRes = await safeFetchJson('/api/auth/request-student-signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -179,20 +302,21 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
             password: actNewPin,
           }),
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          setFeedback({ type: 'error', text: data.message || 'আবেদন পাঠানো যায়নি।' });
-          setIsLoading(false);
+        if (serverRes.reachable && serverRes.ok && serverRes.data?.success) {
+          setFeedback({ type: 'success', text: serverRes.data.message });
+          setAdmStudentName('');
+          setAdmGuardianName('');
+          setActRoll('');
+          setActNewPin('');
           return;
         }
-        setFeedback({ type: 'success', text: data.message });
-        setAdmStudentName('');
-        setAdmGuardianName('');
-        setActRoll('');
-        setActNewPin('');
+        setFeedback({
+          type: 'error',
+          text:
+            serverRes.data?.message ||
+            'নতুন ভর্তি আবেদন পাঠাতে ইন্টারনেট ও মূল সার্ভার সংযোগ প্রয়োজন। নিবন্ধিত শিক্ষার্থী হলে "পাসওয়ার্ড সেট" ট্যাব দিয়ে লগইন করুন।',
+        });
       }
-    } catch {
-      setFeedback({ type: 'error', text: 'সার্ভারের সাথে সংযোগে সমস্যা হয়েছে।' });
     } finally {
       setIsLoading(false);
     }

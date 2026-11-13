@@ -4,7 +4,13 @@
     "address": "দক্ষিণগাঁও, গণি মার্কেট, সনমানিয়া, কাপাসিয়া, গাজীপুর।",
     "established": "স্থাপিত:২০১৮",
     "phone": "০১৩১৩১৫৯৪৫৯",
-    "email": "contact.dlikonmodelacademy@gmail.com"
+    "email": "contact.dlikonmodelacademy@gmail.com",
+    "dailySchedule": {
+      "ptStartTimeBn": "আটটা পঞ্চান্ন মিনিটে",
+      "classStartTimeBn": "নয়টা বিশ মিনিটে",
+      "breakTimeBn": "দুপুর একটা দশ মিনিটে",
+      "dismissalTimeBn": "বিকাল চারটায়"
+    }
   },
   "classes": [
     {
@@ -5660,5 +5666,45 @@
       "guardianAcknowledged": false
     }
   ],
-  "_lastUpdated": "2026-11-12T20:35:32.301Z"
+  "staffAccounts": [
+    {
+      "id": "staff_admin_default",
+      "staffCode": "DL-ADMIN",
+      "role": "official",
+      "nameBn": "প্রধান প্রশাসক ও অধ্যক্ষ",
+      "designationBn": "প্রধান শিক্ষক / পরিচালক",
+      "phone": "০১৩১৩১৫৯৪৫৯",
+      "email": "contact.dlikonmodelacademy@gmail.com",
+      "password": "admin123",
+      "department": "administration",
+      "status": "active",
+      "createdAt": "2026-11-12T20:35:50.456Z"
+    },
+    {
+      "id": "staff_emp_default",
+      "staffCode": "DL-EMP-01",
+      "role": "employee",
+      "nameBn": "সহকারী শিক্ষক (একাডেমিক ও গেট)",
+      "designationBn": "সহকারী শিক্ষক",
+      "phone": "01711000001",
+      "email": "teacher@dlikon.edu.bd",
+      "password": "emp123",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "status": "active",
+      "createdAt": "2026-11-12T20:35:50.456Z"
+    }
+  ],
+  "staffAttendance": [],
+  "admissionRequests": [],
+  "_lastUpdated": "2026-11-13T06:37:44.992Z"
 }

@@ -4,7 +4,13 @@
     "address": "দক্ষিণগাঁও, গণি মার্কেট, সনমানিয়া, কাপাসিয়া, গাজীপুর।",
     "established": "স্থাপিত:২০১৮",
     "phone": "০১৩১৩১৫৯৪৫৯",
-    "email": "contact.dlikonmodelacademy@gmail.com"
+    "email": "contact.dlikonmodelacademy@gmail.com",
+    "dailySchedule": {
+      "ptStartTimeBn": "আটটা পঞ্চান্ন মিনিটে",
+      "classStartTimeBn": "নয়টা বিশ মিনিটে",
+      "breakTimeBn": "দুপুর একটা দশ মিনিটে",
+      "dismissalTimeBn": "বিকাল চারটায়"
+    }
   },
   "classes": [
     {
@@ -5643,24 +5649,7 @@
   ],
   "feeInvoices": [],
   "feeReceipts": [],
-  "securityLogs": [
-    {
-      "id": "verify-clock-skew-1",
-      "studentId": "std_1794322963381_0_wpxc",
-      "studentNameBn": "মোঃ মাজিদ",
-      "studentRoll": 1,
-      "classNameBn": "চতুর্থ শ্রেণি",
-      "action": "entry",
-      "timestamp": "2026-11-12T20:24:35.728Z",
-      "guardianPhone": "01700000000",
-      "voiceDispatched": true,
-      "smsDispatched": true,
-      "status": "verified",
-      "serverTimestamp": 1794515195748,
-      "guardianAcknowledged": false
-    }
-  ],
-  "_lastUpdated": "2026-11-12T20:35:32.301Z",
+  "securityLogs": [],
   "staffAccounts": [
     {
       "id": "staff_admin_default",
@@ -5698,5 +5687,9 @@
       "status": "active",
       "createdAt": "2026-11-12T20:35:50.456Z"
     }
-  ]
+  ],
+  "staffAttendance": [],
+  "admissionRequests": [],
+  "_lastUpdated": "2026-11-13T06:37:50.132Z",
+  "isExplicitClearLogs": true
 }

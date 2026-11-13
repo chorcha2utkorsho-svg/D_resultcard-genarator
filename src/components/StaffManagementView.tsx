@@ -13,6 +13,12 @@ import {
 import { useSchool } from '../context/SchoolContext';
 import { AdmissionSignupRequest, StaffAccount, StaffAttendanceRecord } from '../types';
 import { toBengaliNumber } from '../utils/bengali';
+import {
+  getLocalStaffAccounts,
+  getLocalStaffAttendance,
+  safeFetchJson,
+  saveLocalStaffAccounts,
+} from '../utils/portalAuthFallback';
 
 export const StaffManagementView: React.FC = () => {
   const { classes, forceServerSync } = useSchool();
@@ -32,12 +38,16 @@ export const StaffManagementView: React.FC = () => {
   const loadOverview = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/staff/overview');
-      const data = await res.json();
-      if (data?.success) {
-        setStaffAccounts(data.staffAccounts || []);
-        setStaffAttendance(data.staffAttendance || []);
-        setAdmissionRequests(data.admissionRequests || []);
+      const res = await safeFetchJson('/api/staff/overview');
+      if (res.reachable && res.ok && res.data?.success) {
+        const accounts = res.data.staffAccounts || [];
+        setStaffAccounts(accounts);
+        saveLocalStaffAccounts(accounts);
+        setStaffAttendance(res.data.staffAttendance || []);
+        setAdmissionRequests(res.data.admissionRequests || []);
+      } else {
+        setStaffAccounts(getLocalStaffAccounts());
+        setStaffAttendance(getLocalStaffAttendance());
       }
     } finally {
       setLoading(false);
@@ -55,7 +65,7 @@ export const StaffManagementView: React.FC = () => {
 
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/auth/register-staff', {
+    const res = await safeFetchJson('/api/auth/register-staff', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -67,21 +77,47 @@ export const StaffManagementView: React.FC = () => {
         officialInviteCode: 'DL-ADMIN',
       }),
     });
-    const data = await res.json();
-    if (data?.success) {
-      setNameBn('');
-      setPhone('');
-      setPassword('123456');
-      await loadOverview();
-      showToast(`✓ নতুন অ্যাকাউন্ট (${data.staff?.staffCode}) তৈরি হয়েছে!`);
-    } else {
-      showToast(`❌ ${data?.message || 'অ্যাকাউন্ট তৈরি করা যায়নি'}`);
+    if (res.reachable) {
+      if (res.ok && res.data?.success) {
+        setNameBn('');
+        setPhone('');
+        setPassword('123456');
+        await loadOverview();
+        showToast(`✓ নতুন অ্যাকাউন্ট (${res.data.staff?.staffCode}) তৈরি হয়েছে!`);
+      } else {
+        showToast(`❌ ${res.data?.message || 'অ্যাকাউন্ট তৈরি করা যায়নি'}`);
+      }
+      return;
     }
+
+    const current = getLocalStaffAccounts();
+    const prefix = role === 'official' ? 'DL-ADM' : 'DL-EMP';
+    const nextNum = current.filter((a) => a.role === role).length + 1;
+    const staffCode = `${prefix}-${String(nextNum).padStart(2, '0')}`;
+    const newStaff: StaffAccount = {
+      id: `staff_${Date.now()}`,
+      staffCode,
+      role,
+      nameBn: nameBn.trim(),
+      designationBn: designationBn.trim() || (role === 'official' ? 'অফিস প্রশাসক' : 'সহকারী শিক্ষক'),
+      phone: phone.trim(),
+      password: password.trim(),
+      department: role === 'official' ? 'administration' : 'academic',
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    const nextList = [...current, newStaff];
+    saveLocalStaffAccounts(nextList);
+    setStaffAccounts(nextList);
+    setNameBn('');
+    setPhone('');
+    setPassword('123456');
+    showToast(`✓ নতুন অ্যাকাউন্ট (${staffCode}) স্থানীয়ভাবে তৈরি হয়েছে!`);
   };
 
   const handleToggleStatus = async (staff: StaffAccount) => {
-    const nextStatus = staff.status === 'active' ? 'pending' : 'active';
-    const res = await fetch('/api/staff/manage', {
+    const nextStatus: 'active' | 'pending' = staff.status === 'active' ? 'pending' : 'active';
+    const res = await safeFetchJson('/api/staff/manage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -89,9 +125,15 @@ export const StaffManagementView: React.FC = () => {
         payload: { ...staff, status: nextStatus },
       }),
     });
-    const data = await res.json();
-    if (data?.success) {
-      setStaffAccounts(data.staffAccounts || []);
+    if (res.reachable && res.ok && res.data?.success) {
+      const accounts = res.data.staffAccounts || [];
+      setStaffAccounts(accounts);
+      saveLocalStaffAccounts(accounts);
+      showToast(`✓ ${staff.nameBn}-এর অবস্থা হালনাগাদ হয়েছে।`);
+    } else if (!res.reachable) {
+      const updated = staffAccounts.map((s) => (s.id === staff.id ? { ...s, status: nextStatus } : s));
+      setStaffAccounts(updated);
+      saveLocalStaffAccounts(updated);
       showToast(`✓ ${staff.nameBn}-এর অবস্থা হালনাগাদ হয়েছে।`);
     }
   };
@@ -101,20 +143,26 @@ export const StaffManagementView: React.FC = () => {
       showToast('মূল অ্যাডমিন অ্যাকাউন্ট মুছে ফেলা যাবে না।');
       return;
     }
-    const res = await fetch('/api/staff/manage', {
+    const res = await safeFetchJson('/api/staff/manage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'delete_staff', payload: { id: staff.id } }),
     });
-    const data = await res.json();
-    if (data?.success) {
-      setStaffAccounts(data.staffAccounts || []);
+    if (res.reachable && res.ok && res.data?.success) {
+      const accounts = res.data.staffAccounts || [];
+      setStaffAccounts(accounts);
+      saveLocalStaffAccounts(accounts);
+      showToast('✓ স্টাফ অ্যাকাউন্ট অপসারণ করা হয়েছে।');
+    } else if (!res.reachable) {
+      const updated = staffAccounts.filter((s) => s.id !== staff.id);
+      setStaffAccounts(updated);
+      saveLocalStaffAccounts(updated);
       showToast('✓ স্টাফ অ্যাকাউন্ট অপসারণ করা হয়েছে।');
     }
   };
 
   const handleAdmissionAction = async (requestId: string, approve: boolean) => {
-    const res = await fetch('/api/staff/manage', {
+    const res = await safeFetchJson('/api/staff/manage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -122,15 +170,16 @@ export const StaffManagementView: React.FC = () => {
         payload: { requestId },
       }),
     });
-    const data = await res.json();
-    if (data?.success) {
-      setAdmissionRequests(data.admissionRequests || []);
+    if (res.reachable && res.ok && res.data?.success) {
+      setAdmissionRequests(res.data.admissionRequests || []);
       if (approve) {
         await forceServerSync();
-        showToast(`✓ শিক্ষার্থী অনুমোদিত ও পোর্টাল আইডি (${data.student?.portalUserId}) সক্রিয় হয়েছে!`);
+        showToast(`✓ শিক্ষার্থী অনুমোদিত ও পোর্টাল আইডি (${res.data.student?.portalUserId}) সক্রিয় হয়েছে!`);
       } else {
         showToast('আবেদন বাতিল করা হয়েছে।');
       }
+    } else if (!res.reachable) {
+      showToast('সার্ভারের সাথে সংযুক্ত হলে অনলাইন ভর্তি আবেদন অনুমোদন করা যাবে।');
     }
   };
 

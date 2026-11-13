@@ -19,6 +19,12 @@ import {
 import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession, StaffAccount, StaffAttendanceRecord } from '../types';
 import { toBengaliNumber } from '../utils/bengali';
+import {
+  getLocalStaffAccounts,
+  getLocalStaffAttendance,
+  safeFetchJson,
+  saveLocalStaffAttendance,
+} from '../utils/portalAuthFallback';
 
 interface EmployeeDashboardViewProps {
   session: PortalAuthSession;
@@ -32,24 +38,35 @@ export const EmployeeDashboardView: React.FC<EmployeeDashboardViewProps> = ({
   const { classes, students, syllabi, notes, questionPapers, calendarEvents } = useSchool();
 
   const [staffProfile, setStaffProfile] = useState<StaffAccount | null>(null);
-  const [staffAttendance, setStaffAttendance] = useState<StaffAttendanceRecord[]>([]);
+  const [staffAttendance, setStaffAttendance] = useState<StaffAttendanceRecord[]>(() =>
+    getLocalStaffAttendance()
+  );
   const [isUpdatingAtt, setIsUpdatingAtt] = useState(false);
   const [attFeedback, setAttFeedback] = useState<string | null>(null);
 
   const todayIso = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
-    fetch('/api/staff/overview')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data?.success) {
-          const accounts: StaffAccount[] = data.staffAccounts || [];
-          const mine = accounts.find((a) => a.id === session.accountId) || null;
-          setStaffProfile(mine);
-          setStaffAttendance(data.staffAttendance || []);
-        }
-      })
-      .catch(() => {});
+    let active = true;
+    safeFetchJson('/api/staff/overview').then((res) => {
+      if (!active) return;
+      if (res.reachable && res.ok && res.data?.success) {
+        const accounts: StaffAccount[] = res.data.staffAccounts || [];
+        const mine = accounts.find((a) => a.id === session.accountId) || null;
+        setStaffProfile(mine);
+        const att = res.data.staffAttendance || [];
+        setStaffAttendance(att);
+        saveLocalStaffAttendance(att);
+      } else {
+        const localAccounts = getLocalStaffAccounts();
+        const mine = localAccounts.find((a) => a.id === session.accountId) || null;
+        setStaffProfile(mine);
+        setStaffAttendance(getLocalStaffAttendance());
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [session.accountId]);
 
   const myTodayAttendance = staffAttendance.find(
@@ -64,7 +81,7 @@ export const EmployeeDashboardView: React.FC<EmployeeDashboardViewProps> = ({
     setIsUpdatingAtt(true);
     setAttFeedback(null);
     try {
-      const res = await fetch('/api/staff/attendance', {
+      const res = await safeFetchJson('/api/staff/attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -74,18 +91,48 @@ export const EmployeeDashboardView: React.FC<EmployeeDashboardViewProps> = ({
           action,
         }),
       });
-      const data = await res.json();
-      if (data?.success) {
-        setStaffAttendance(data.staffAttendance || []);
-        setAttFeedback(
-          action === 'checkin'
-            ? '✓ আজকের উপস্থিতি (চেক-ইন) সফলভাবে সংরক্ষিত হয়েছে!'
-            : '✓ প্রস্থান (চেক-আউট) সময় সফলভাবে রেকর্ড হয়েছে!'
+      if (res.reachable && res.ok && res.data?.success) {
+        const updated = res.data.staffAttendance || [];
+        setStaffAttendance(updated);
+        saveLocalStaffAttendance(updated);
+      } else {
+        const nowStr = new Date().toLocaleTimeString('bn-BD', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+        const current = getLocalStaffAttendance();
+        const existingIdx = current.findIndex(
+          (r) => r.staffId === session.accountId && r.date === todayIso
         );
-        setTimeout(() => setAttFeedback(null), 4000);
+        let updated = [...current];
+        if (action === 'checkin') {
+          if (existingIdx === -1) {
+            updated.unshift({
+              id: `att_${Date.now()}`,
+              staffId: session.accountId,
+              staffNameBn: session.displayName,
+              designationBn: session.subLabel,
+              date: todayIso,
+              checkInTime: nowStr,
+              status: 'present',
+            });
+          }
+        } else if (existingIdx !== -1) {
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            checkOutTime: nowStr,
+          };
+        }
+        setStaffAttendance(updated);
+        saveLocalStaffAttendance(updated);
       }
-    } catch {
-      setAttFeedback('নেটওয়ার্ক ত্রুটি! আবার চেষ্টা করুন।');
+      setAttFeedback(
+        action === 'checkin'
+          ? '✓ আজকের উপস্থিতি (চেক-ইন) সফলভাবে সংরক্ষিত হয়েছে!'
+          : '✓ প্রস্থান (চেক-আউট) সময় সফলভাবে রেকর্ড হয়েছে!'
+      );
+      setTimeout(() => setAttFeedback(null), 4000);
     } finally {
       setIsUpdatingAtt(false);
     }

@@ -1,24 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Printer,
   User,
   Users,
   ChevronLeft,
   ChevronRight,
-  Sparkles,
   Trophy,
   Award,
   CheckCircle,
-  Share2,
   Smartphone,
-  Send,
   Check,
   BarChart2,
   TrendingUp,
+  TrendingDown,
+  Minus,
+  Activity,
   Download,
-  FileDown,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Area,
+  Line,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+} from 'recharts';
 import { useSchool } from '../context/SchoolContext';
 import { MarksheetCard } from './MarksheetCard';
 import { ResultAnalyticsView } from './ResultAnalyticsView';
@@ -62,6 +74,7 @@ export const ResultsView: React.FC = () => {
   const [smsFeedback, setSmsFeedback] = useState<string | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number; message: string } | null>(null);
+  const [trendMetric, setTrendMetric] = useState<'combined' | 'gpa' | 'percentage'>('combined');
 
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
   const currentExam = examTerms.find((e) => e.id === selectedExamId) || examTerms[0];
@@ -207,6 +220,88 @@ export const ResultsView: React.FC = () => {
     totalStudents > 0
       ? (classResults.reduce((sum, r) => sum + r.gpa, 0) / totalStudents).toFixed(2)
       : '0.00';
+
+  // Multi-exam performance trend for the selected student across all exam terms
+  const studentExamTrend = useMemo(() => {
+    if (!activeResult) return [];
+    return examTerms.map((term) => {
+      const termResults = getCalculatedResultsForClass(
+        selectedClassId,
+        selectedSection,
+        term.id,
+        selectedYear
+      );
+      const found = termResults.find((r) => r.student.id === activeResult.student.id);
+      const hasMarks = Boolean(
+        found && found.subjectRows.some((sr) => sr.totalObtained !== null && sr.totalObtained !== undefined)
+      );
+      const percentage =
+        hasMarks && found && found.totalFullMarks > 0
+          ? Number(((found.grandTotalObtained / found.totalFullMarks) * 100).toFixed(1))
+          : null;
+
+      const shortName = term.nameBn.replace(/\s*পরীক্ষা.*$/, '').trim() || term.nameBn;
+
+      return {
+        termId: term.id,
+        termName: term.nameBn,
+        shortName,
+        hasMarks,
+        gpa: hasMarks && found ? Number(found.gpa.toFixed(2)) : null,
+        percentage,
+        obtainedMarks: hasMarks && found ? found.grandTotalObtained : null,
+        fullMarks: found ? found.totalFullMarks : 0,
+        overallGrade: hasMarks && found ? found.overallGrade : '—',
+        meritPosition: hasMarks && found ? found.meritPosition : null,
+        meritPositionBn: hasMarks && found ? found.meritPositionBn : 'নম্বর নেই',
+        isPassed: hasMarks && found ? found.isPassed : false,
+        isSelected: term.id === selectedExamId,
+      };
+    });
+  }, [
+    activeResult,
+    examTerms,
+    getCalculatedResultsForClass,
+    selectedClassId,
+    selectedSection,
+    selectedYear,
+    selectedExamId,
+  ]);
+
+  const enteredTrendPoints = useMemo(
+    () => studentExamTrend.filter((item) => item.hasMarks && item.gpa !== null && item.percentage !== null),
+    [studentExamTrend]
+  );
+
+  const trendSummary = useMemo(() => {
+    if (enteredTrendPoints.length === 0) return null;
+    const first = enteredTrendPoints[0];
+    const latest = enteredTrendPoints[enteredTrendPoints.length - 1];
+    const gpaDelta =
+      enteredTrendPoints.length >= 2 && first.gpa !== null && latest.gpa !== null
+        ? Number((latest.gpa - first.gpa).toFixed(2))
+        : null;
+    const pctDelta =
+      enteredTrendPoints.length >= 2 && first.percentage !== null && latest.percentage !== null
+        ? Number((latest.percentage - first.percentage).toFixed(1))
+        : null;
+    const avgGpaTerms =
+      enteredTrendPoints.reduce((acc, p) => acc + (p.gpa || 0), 0) / enteredTrendPoints.length;
+    const avgPctTerms =
+      enteredTrendPoints.reduce((acc, p) => acc + (p.percentage || 0), 0) / enteredTrendPoints.length;
+    const bestTerm = enteredTrendPoints.reduce((best, cur) =>
+      (cur.percentage || 0) > (best.percentage || 0) ? cur : best
+    );
+
+    return {
+      count: enteredTrendPoints.length,
+      gpaDelta,
+      pctDelta,
+      avgGpa: Number(avgGpaTerms.toFixed(2)),
+      avgPct: Number(avgPctTerms.toFixed(1)),
+      bestTerm,
+    };
+  }, [enteredTrendPoints]);
 
   return (
     <div className="space-y-6">
@@ -662,42 +757,427 @@ export const ResultsView: React.FC = () => {
       {viewMode === 'analytics' ? (
         <ResultAnalyticsView onBackToCards={() => setViewMode('single')} />
       ) : (
-        /* RESULT CARDS RENDERING (PRINTABLE AREA) */
-        <div className="printable-area">
-          {classResults.length === 0 ? (
-            <div className="no-print bg-white p-12 text-center rounded-xl border border-slate-200 text-slate-500">
-              এই শ্রেণিতে এখনো কোনো ফলাফল প্রস্তুত নেই। &quot;মার্ক এন্ট্রি&quot; থেকে নম্বর এন্ট্রি সম্পন্ন করুন।
-            </div>
-          ) : viewMode === 'single' ? (
-            /* Single Card View */
-            activeResult && (
-              <MarksheetCard
-                result={activeResult}
-                schoolInfo={schoolInfo}
-                classNameTitle={currentClass.nameBn}
-                isPrintMode={false}
-                onDownloadPdf={() => handleDownloadSinglePDF(activeResult)}
-                isExportingPdf={isDownloadingPdf}
-                onPhotoUpload={handleStudentPhotoUpload}
-              />
-            )
-          ) : (
-            /* Batch Cards View - Each will break onto its own A4 page in print! */
-            <div className="space-y-8 print:space-y-0">
-              {classResults
-                .filter((res) => selectedBatchIds.includes(res.student.id))
-                .map((res) => (
-                  <MarksheetCard
-                    key={res.student.id}
-                    result={res}
-                    schoolInfo={schoolInfo}
-                    classNameTitle={currentClass.nameBn}
-                    isPrintMode={true}
-                  />
+        <>
+          {/* Non-print Multi-Exam Student Performance Trend Graph (Single Student View) */}
+          {viewMode === 'single' && activeResult && (
+            <div className="no-print bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4.5 h-4.5 text-indigo-600 shrink-0" />
+                    <h3 className="text-base font-bold text-slate-900 truncate">
+                      {activeResult.student.nameBn} — একাধিক পরীক্ষার পারফরম্যান্স ট্রেন্ড
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                    রোল {toBengaliRoll(activeResult.student.roll)} • {currentClass?.nameBn} • শিক্ষাবর্ষ {selectedYear} •{' '}
+                    {toBengaliNumber(enteredTrendPoints.length)}/{toBengaliNumber(studentExamTrend.length)}টি পরীক্ষার নম্বর সংযুক্ত
+                  </p>
+                </div>
+
+                {/* Metric View Switcher */}
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setTrendMetric('combined')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                      trendMetric === 'combined'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    সমন্বিত (GPA ও %)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendMetric('percentage')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                      trendMetric === 'percentage'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    শতাংশ (%)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendMetric('gpa')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                      trendMetric === 'gpa'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    জিপিএ (GPA)
+                  </button>
+                </div>
+              </div>
+
+              {/* Trend Summary KPI Strip */}
+              {trendSummary ? (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+                    <div className="text-[11px] font-medium text-slate-500">গড় জিপিএ (সকল পরীক্ষা)</div>
+                    <div className="text-lg font-bold text-slate-900 tabular-nums mt-0.5">
+                      {toBengaliNumber(trendSummary.avgGpa.toFixed(2))}
+                      <span className="text-xs font-normal text-slate-500"> / ৫.০০</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+                    <div className="text-[11px] font-medium text-slate-500">গড় নম্বর শতাংশ</div>
+                    <div className="text-lg font-bold text-indigo-700 tabular-nums mt-0.5">
+                      {toBengaliNumber(trendSummary.avgPct.toFixed(1))}%
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+                    <div className="text-[11px] font-medium text-slate-500">সর্বোচ্চ পারফরম্যান্স</div>
+                    <div className="text-sm font-bold text-slate-900 truncate mt-0.5">
+                      {trendSummary.bestTerm.shortName}
+                    </div>
+                    <div className="text-[11px] font-semibold text-emerald-700 tabular-nums">
+                      {toBengaliNumber((trendSummary.bestTerm.percentage || 0).toFixed(1))}% • GPA{' '}
+                      {toBengaliNumber((trendSummary.bestTerm.gpa || 0).toFixed(2))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+                    <div className="text-[11px] font-medium text-slate-500">পরীক্ষাভিত্তিক পরিবর্তন</div>
+                    {trendSummary.pctDelta !== null && trendSummary.gpaDelta !== null ? (
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        {trendSummary.pctDelta > 0 ? (
+                          <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
+                        ) : trendSummary.pctDelta < 0 ? (
+                          <TrendingDown className="w-4 h-4 text-rose-600 shrink-0" />
+                        ) : (
+                          <Minus className="w-4 h-4 text-slate-500 shrink-0" />
+                        )}
+                        <span
+                          className={`text-sm font-bold tabular-nums ${
+                            trendSummary.pctDelta > 0
+                              ? 'text-emerald-700'
+                              : trendSummary.pctDelta < 0
+                                ? 'text-rose-700'
+                                : 'text-slate-700'
+                          }`}
+                        >
+                          {trendSummary.pctDelta > 0 ? '+' : ''}
+                          {toBengaliNumber(trendSummary.pctDelta.toFixed(1))}% (
+                          {trendSummary.gpaDelta > 0 ? '+' : ''}
+                          {toBengaliNumber(trendSummary.gpaDelta.toFixed(2))} GPA)
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-xs font-medium text-slate-500 mt-1">
+                        তুলনার জন্য কমপক্ষে ২টি পরীক্ষা প্রয়োজন
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-2.5 text-xs text-amber-900">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    এই শিক্ষার্থীর জন্য {selectedYear} শিক্ষাবর্ষের কোনো পরীক্ষার নম্বর এখনো এন্ট্রি করা হয়নি। মার্ক এন্ট্রি সম্পন্ন হলে স্বয়ংক্রিয়ভাবে ট্রেন্ড গ্রাফ প্রদর্শিত হবে।
+                  </span>
+                </div>
+              )}
+
+              {/* Recharts Visualization */}
+              {enteredTrendPoints.length > 0 && (
+                <div className="space-y-2">
+                  {enteredTrendPoints.length === 1 && (
+                    <div className="flex items-center gap-2 text-[11px] text-indigo-800 bg-indigo-50/80 border border-indigo-200 rounded-lg px-3 py-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>
+                        বর্তমানে ১টি পরীক্ষার ({enteredTrendPoints[0].termName}) ফলাফল পাওয়া গেছে; পরবর্তী পরীক্ষার নম্বর যুক্ত হলে সম্পূর্ণ অগ্রগতির রেখাচিত্র দেখা যাবে।
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="w-full h-64 min-w-0 pt-1">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart
+                        data={studentExamTrend}
+                        margin={{ top: 12, right: 16, left: 0, bottom: 4 }}
+                      >
+                        <defs>
+                          <linearGradient id="studentPerfPctFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.22} />
+                            <stop offset="95%" stopColor="#4f46e5" stopOpacity={0.02} />
+                          </linearGradient>
+                          <linearGradient id="studentPerfGpaFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#059669" stopOpacity={0.22} />
+                            <stop offset="95%" stopColor="#059669" stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+
+                        <XAxis
+                          dataKey="shortName"
+                          tick={{ fontSize: 12, fill: '#334155', fontWeight: 600 }}
+                          axisLine={{ stroke: '#cbd5e1' }}
+                          tickLine={false}
+                        />
+
+                        {(trendMetric === 'combined' || trendMetric === 'percentage') && (
+                          <YAxis
+                            yAxisId="pct"
+                            domain={[0, 100]}
+                            tick={{ fontSize: 11, fill: '#4f46e5' }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(val: number) => `${toBengaliNumber(val)}%`}
+                            width={44}
+                          />
+                        )}
+
+                        {(trendMetric === 'combined' || trendMetric === 'gpa') && (
+                          <YAxis
+                            yAxisId="gpa"
+                            orientation={trendMetric === 'combined' ? 'right' : 'left'}
+                            domain={[0, 5]}
+                            ticks={[0, 1, 2, 3, 4, 5]}
+                            tick={{ fontSize: 11, fill: '#059669' }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(val: number) => toBengaliNumber(val.toFixed(1))}
+                            width={38}
+                          />
+                        )}
+
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload || payload.length === 0) return null;
+                            const row = payload[0]?.payload as (typeof studentExamTrend)[number];
+                            if (!row) return null;
+                            return (
+                              <div className="bg-white border border-slate-200 rounded-xl shadow-lg p-3 text-xs space-y-1.5 min-w-[205px]">
+                                <div className="font-bold text-slate-900 border-b border-slate-100 pb-1 flex items-center justify-between gap-2">
+                                  <span>{row.termName}</span>
+                                  {row.isSelected && (
+                                    <span className="text-[10px] font-semibold text-indigo-700">সক্রিয় কার্ড</span>
+                                  )}
+                                </div>
+                                {row.hasMarks ? (
+                                  <div className="space-y-1 tabular-nums">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-500">গ্রেড ও জিপিএ:</span>
+                                      <span className="font-bold text-emerald-700">
+                                        {row.overallGrade} ({toBengaliNumber((row.gpa || 0).toFixed(2))})
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-500">প্রাপ্ত নম্বর:</span>
+                                      <span className="font-bold text-slate-900">
+                                        {toBengaliNumber(row.obtainedMarks || 0)} / {toBengaliNumber(row.fullMarks)}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-500">শতাংশ:</span>
+                                      <span className="font-bold text-indigo-700">
+                                        {toBengaliNumber((row.percentage || 0).toFixed(1))}%
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-500">মেধাক্রম:</span>
+                                      <span className="font-semibold text-slate-800">{row.meritPositionBn}</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="text-slate-500 py-1">এই পরীক্ষার নম্বর এখনো এন্ট্রি হয়নি।</div>
+                                )}
+                              </div>
+                            );
+                          }}
+                        />
+
+                        {trendMetric === 'percentage' && trendSummary && (
+                          <ReferenceLine
+                            yAxisId="pct"
+                            y={trendSummary.avgPct}
+                            stroke="#6366f1"
+                            strokeDasharray="4 4"
+                            strokeOpacity={0.65}
+                          />
+                        )}
+
+                        {trendMetric === 'gpa' && trendSummary && (
+                          <ReferenceLine
+                            yAxisId="gpa"
+                            y={trendSummary.avgGpa}
+                            stroke="#059669"
+                            strokeDasharray="4 4"
+                            strokeOpacity={0.65}
+                          />
+                        )}
+
+                        {trendMetric === 'combined' && (
+                          <>
+                            <Bar
+                              yAxisId="pct"
+                              dataKey="percentage"
+                              name="শতাংশ (%)"
+                              fill="url(#studentPerfPctFill)"
+                              stroke="#6366f1"
+                              strokeWidth={1.5}
+                              barSize={38}
+                              radius={[6, 6, 0, 0]}
+                            />
+                            <Line
+                              yAxisId="gpa"
+                              type="monotone"
+                              dataKey="gpa"
+                              name="জিপিএ (GPA)"
+                              stroke="#059669"
+                              strokeWidth={3}
+                              connectNulls={false}
+                              dot={{ r: 5, fill: '#059669', stroke: '#ffffff', strokeWidth: 2 }}
+                              activeDot={{ r: 7, fill: '#047857', stroke: '#ffffff', strokeWidth: 2 }}
+                            />
+                          </>
+                        )}
+
+                        {trendMetric === 'percentage' && (
+                          <Area
+                            yAxisId="pct"
+                            type="monotone"
+                            dataKey="percentage"
+                            name="শতাংশ (%)"
+                            stroke="#4f46e5"
+                            strokeWidth={3}
+                            fill="url(#studentPerfPctFill)"
+                            connectNulls={false}
+                            dot={{ r: 5, fill: '#4f46e5', stroke: '#ffffff', strokeWidth: 2 }}
+                            activeDot={{ r: 7, fill: '#4338ca', stroke: '#ffffff', strokeWidth: 2 }}
+                          />
+                        )}
+
+                        {trendMetric === 'gpa' && (
+                          <Area
+                            yAxisId="gpa"
+                            type="monotone"
+                            dataKey="gpa"
+                            name="জিপিএ (GPA)"
+                            stroke="#059669"
+                            strokeWidth={3}
+                            fill="url(#studentPerfGpaFill)"
+                            connectNulls={false}
+                            dot={{ r: 5, fill: '#059669', stroke: '#ffffff', strokeWidth: 2 }}
+                            activeDot={{ r: 7, fill: '#047857', stroke: '#ffffff', strokeWidth: 2 }}
+                          />
+                        )}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Legend Row */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 pt-1">
+                    <div className="flex items-center gap-4">
+                      {(trendMetric === 'combined' || trendMetric === 'percentage') && (
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <span className="w-3 h-3 rounded-xs bg-indigo-500/30 border border-indigo-600 inline-block" />
+                          মোট নম্বরের শতাংশ (%)
+                        </span>
+                      )}
+                      {(trendMetric === 'combined' || trendMetric === 'gpa') && (
+                        <span className="inline-flex items-center gap-1.5 font-medium">
+                          <span className="w-3 h-0.5 bg-emerald-600 inline-block" />
+                          অর্জিত জিপিএ (৫.০০ এর মধ্যে)
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-slate-500">নিচের যেকোনো পরীক্ষায় ক্লিক করে সেই কার্ডে যান</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Exam-by-Exam Interactive Breakdown Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                {studentExamTrend.map((term) => (
+                  <button
+                    key={term.termId}
+                    type="button"
+                    onClick={() => setSelectedExamId(term.termId)}
+                    className={`text-left rounded-lg border p-3 transition ${
+                      term.isSelected
+                        ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-900 truncate">{term.termName}</span>
+                      <span
+                        className={`text-[11px] font-bold tabular-nums ${
+                          term.hasMarks
+                            ? term.isPassed
+                              ? 'text-emerald-700'
+                              : 'text-rose-700'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {term.hasMarks ? `${term.overallGrade}` : 'ফাঁকা'}
+                      </span>
+                    </div>
+                    {term.hasMarks ? (
+                      <div className="mt-1.5 flex items-baseline justify-between text-xs tabular-nums">
+                        <span className="font-bold text-slate-800">
+                          GPA {toBengaliNumber((term.gpa || 0).toFixed(2))}
+                          <span className="text-slate-400 font-normal"> • </span>
+                          {toBengaliNumber((term.percentage || 0).toFixed(1))}%
+                        </span>
+                        <span className="text-[11px] font-medium text-slate-600">
+                          {term.meritPositionBn}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="mt-1.5 text-[11px] text-slate-400">নম্বর এন্ট্রি বাকি রয়েছে</div>
+                    )}
+                  </button>
                 ))}
+              </div>
             </div>
           )}
-        </div>
+
+          {/* RESULT CARDS RENDERING (PRINTABLE AREA) */}
+          <div className="printable-area">
+            {classResults.length === 0 ? (
+              <div className="no-print bg-white p-12 text-center rounded-xl border border-slate-200 text-slate-500">
+                এই শ্রেণিতে এখনো কোনো ফলাফল প্রস্তুত নেই। &quot;মার্ক এন্ট্রি&quot; থেকে নম্বর এন্ট্রি সম্পন্ন করুন।
+              </div>
+            ) : viewMode === 'single' ? (
+              /* Single Card View */
+              activeResult && (
+                <MarksheetCard
+                  result={activeResult}
+                  schoolInfo={schoolInfo}
+                  classNameTitle={currentClass.nameBn}
+                  isPrintMode={false}
+                  onDownloadPdf={() => handleDownloadSinglePDF(activeResult)}
+                  isExportingPdf={isDownloadingPdf}
+                  onPhotoUpload={handleStudentPhotoUpload}
+                />
+              )
+            ) : (
+              /* Batch Cards View - Each will break onto its own A4 page in print! */
+              <div className="space-y-8 print:space-y-0">
+                {classResults
+                  .filter((res) => selectedBatchIds.includes(res.student.id))
+                  .map((res) => (
+                    <MarksheetCard
+                      key={res.student.id}
+                      result={res}
+                      schoolInfo={schoolInfo}
+                      classNameTitle={currentClass.nameBn}
+                      isPrintMode={true}
+                    />
+                  ))}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* PDF Generation Progress Modal Overlay */}

@@ -28,7 +28,6 @@ import {
   Send,
   ShieldCheck,
   Smartphone,
-  Sparkles,
   Target,
   Trash2,
   TrendingUp,
@@ -51,19 +50,12 @@ import {
 } from 'recharts';
 import { useSchool } from '../context/SchoolContext';
 import {
-  MonerBariData,
   SecurityGatepassLog,
   Student,
   StudentAchievement,
   StudentFuturePlan,
   StudentMilestone,
 } from '../types';
-import {
-  DREAM_CAREER_PRESETS,
-  MONER_BARI_AFFIRMATIONS,
-  MONER_BARI_MOODS,
-  matchCareerPresets,
-} from '../data/dreamCareerGallery';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import {
   formatBengaliDate,
@@ -75,6 +67,11 @@ import {
 import { compressImageBase64 } from '../utils/imageCompressor';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { PWAInstallButton } from './PWAInstallButton';
+import { HowToInstallModal } from './HowToInstallModal';
+import { EcheDanaGallery } from './EcheDanaGallery';
+import { MonerBariView } from './MonerBariView';
+import { TimeManagementView } from './TimeManagementView';
+import { ExamCountdownWidget } from './ExamCountdownWidget';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -164,7 +161,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
   const [dashboardSection, setDashboardSection] = useState<
-    'overview' | 'moner_bari' | 'icche_dana' | 'future_plan' | 'achievements' | 'id_and_contact'
+    'overview' | 'moner_bari' | 'icche_dana' | 'time_management' | 'future_plan' | 'achievements' | 'id_and_contact'
   >('overview');
 
   const classObj = useMemo(
@@ -241,82 +238,38 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       .slice(0, 4);
   }, [calendarEvents, student.classId]);
 
-  // Permanent Dashboard Install & Lock Modal + Moner Bari / Icche Dana state
+  // Permanent Dashboard Install & Visual 'How to Install' Modal state
   const [showInstallLockModal, setShowInstallLockModal] = useState(false);
-  const [installPromptOutcome, setInstallPromptOutcome] = useState<'prompted' | 'installed' | 'manual' | null>(null);
   const [adminUnlockPin, setAdminUnlockPin] = useState('');
   const [adminUnlockError, setAdminUnlockError] = useState<string | null>(null);
   const [showAdminUnlockBox, setShowAdminUnlockBox] = useState(false);
 
   const handleInstallDashboardClick = async () => {
-    if (onInstallLockedDashboard) {
-      await onInstallLockedDashboard();
+    const isFirstClick =
+      typeof window !== 'undefined' &&
+      localStorage.getItem('dlikon_pwa_install_guide_seen') !== '1';
+
+    // Trigger browser PWA prompt immediately within the click gesture
+    const installPromise = isInstallable ? install() : Promise.resolve(false);
+    const lockPromise = onInstallLockedDashboard
+      ? Promise.resolve(onInstallLockedDashboard())
+      : Promise.resolve();
+
+    const [accepted] = await Promise.all([installPromise, lockPromise]);
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('dlikon_pwa_install_guide_seen', '1');
+      } catch {
+        // Ignore storage write error
+      }
     }
-    if (isInstallable) {
-      const accepted = await install();
-      setInstallPromptOutcome(accepted ? 'installed' : 'prompted');
-    } else if (isInstalled) {
-      setInstallPromptOutcome('installed');
-    } else {
-      setInstallPromptOutcome('manual');
+
+    // Open the visual Android & iOS 'How to Install' modal on first click, or when manual instructions are needed
+    if (isFirstClick || (!accepted && !isInstalled)) {
+      setShowInstallLockModal(true);
     }
-    setShowInstallLockModal(true);
   };
-
-  // =========================================================================
-  // MONER BARI (মনের বাড়ি) STATE
-  // =========================================================================
-  const existingMonerBari: MonerBariData = useMemo(
-    () =>
-      student.monerBari || {
-        moodToday: 'প্রফুল্ল ও আত্মবিশ্বাসী',
-        dailyAffirmation: MONER_BARI_AFFIRMATIONS[0],
-        favoriteQuote: 'আমি প্রতিদিন একটু একটু করে নিজের সেরা সংস্করণ হয়ে উঠছি।',
-        proudMoment: '',
-        gratitudeNote: 'আমার প্রিয় মা-বাবা এবং ডি-লিকন মডেল একাডেমীর শিক্ষকদের প্রতি কৃতজ্ঞতা।',
-      },
-    [student.monerBari]
-  );
-
-  const [monerMood, setMonerMood] = useState(existingMonerBari.moodToday || 'প্রফুল্ল ও আত্মবিশ্বাসী');
-  const [monerAffirmation, setMonerAffirmation] = useState(
-    existingMonerBari.dailyAffirmation || MONER_BARI_AFFIRMATIONS[0]
-  );
-  const [monerQuote, setMonerQuote] = useState(existingMonerBari.favoriteQuote || '');
-  const [monerProud, setMonerProud] = useState(existingMonerBari.proudMoment || '');
-  const [monerGratitude, setMonerGratitude] = useState(existingMonerBari.gratitudeNote || '');
-  const [monerSavedNotice, setMonerSavedNotice] = useState<string | null>(null);
-
-  const handleSaveMonerBari = (overrideMood?: string, overrideAffirmation?: string) => {
-    const nextData: MonerBariData = {
-      moodToday: overrideMood ?? monerMood,
-      dailyAffirmation: overrideAffirmation ?? monerAffirmation,
-      favoriteQuote: monerQuote,
-      proudMoment: monerProud,
-      gratitudeNote: monerGratitude,
-      updatedAt: new Date().toISOString(),
-    };
-    updateStudent({
-      ...student,
-      monerBari: nextData,
-    });
-    setMonerSavedNotice('✓ মনের বাড়ির তথ্য স্থায়ীভাবে সংরক্ষিত হয়েছে!');
-    setTimeout(() => setMonerSavedNotice(null), 3200);
-  };
-
-  // =========================================================================
-  // ICCHE DANA (ইচ্ছে ডানা) DREAM PHOTO GALLERY STATE
-  // =========================================================================
-  const [activeCareerGalleryTag, setActiveCareerGalleryTag] = useState<string>(
-    student.futurePlan?.dreamCareer || DREAM_CAREER_PRESETS[0].careerTag
-  );
-  const [lightboxDreamPhoto, setLightboxDreamPhoto] = useState<{
-    titleBn: string;
-    careerTag: string;
-    captionBn: string;
-    imageUrl: string;
-    isCustomStudentAi?: boolean;
-  } | null>(null);
 
   // =========================================================================
   // FUTURE PLAN & MILESTONES STATE
@@ -629,14 +582,29 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               <button
                 type="button"
                 onClick={handleInstallDashboardClick}
+                aria-label="Install App"
                 className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-                  isDeviceLocked
+                  isInstalled
+                    ? 'bg-emerald-700/80 border-emerald-400 text-white'
+                    : isDeviceLocked
                     ? 'bg-emerald-600 hover:bg-emerald-500 border-emerald-400 text-white'
                     : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-400 text-slate-950'
                 }`}
               >
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>{isDeviceLocked ? 'ড্যাশবোর্ড সেটআপ সম্পন্ন' : 'ড্যাশবোর্ড ইনস্টল'}</span>
+                {isInstalled ? (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Smartphone className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {isInstalled
+                    ? 'অ্যাপ ইনস্টল সম্পন্ন'
+                    : isInstallable
+                    ? 'Install App · ড্যাশবোর্ড ইনস্টল'
+                    : isDeviceLocked
+                    ? 'Install App · হোম স্ক্রিনে নিন'
+                    : 'Install App · ড্যাশবোর্ড ইনস্টল'}
+                </span>
               </button>
 
               {!isDeviceLocked && (
@@ -659,6 +627,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             { id: 'overview' as const, label: 'পড়াশোনা ও প্রগ্রেস', icon: TrendingUp },
             { id: 'moner_bari' as const, label: 'মনের বাড়ি', icon: Home },
             { id: 'icche_dana' as const, label: 'ইচ্ছে ডানা', icon: Rocket },
+            { id: 'time_management' as const, label: 'সময় ব্যবস্থাপনা ও রুটিন', icon: Clock },
             { id: 'future_plan' as const, label: 'ভবিষ্যৎ পরিকল্পনা', icon: Compass },
             {
               id: 'achievements' as const,
@@ -742,6 +711,15 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             </div>
           </div>
+
+          {/* Upcoming Exam Countdown Widget (pulled from Academic Calendar) */}
+          <ExamCountdownWidget
+            calendarEvents={calendarEvents}
+            studentClassId={student.classId}
+            classNameBn={classNameBn}
+            syllabusCount={classSyllabi.length}
+            onOpenTimeManagement={() => setDashboardSection('time_management')}
+          />
 
           {/* Live Gatepass Audio Notification Card */}
           <div className="bg-slate-900 text-white rounded-2xl border border-slate-800 p-5 sm:p-6 space-y-4">
@@ -1653,399 +1631,57 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       {/* SECTION 5: MONER BARI (মনের বাড়ি — আত্মবিশ্বাস ও মনন চর্চা)        */}
       {/* =================================================================== */}
       {dashboardSection === 'moner_bari' && (
-        <div className="space-y-6">
-          {/* Calm Editorial Banner */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-            <div className="space-y-2 max-w-2xl">
-              <div className="flex items-center gap-2 text-xs text-emerald-700 font-semibold">
-                <Home className="w-4 h-4" />
-                <span>{student.nameBn}-এর একান্ত প্রশান্তির জায়গা</span>
-                <span aria-hidden="true">·</span>
-                <span>আত্মবিশ্বাস ও কৃতজ্ঞতা চর্চা</span>
-              </div>
-              <h3 className="text-2xl sm:text-3xl font-bold font-serif text-slate-900">
-                মনের বাড়ি — আমি নিজেকে বিশ্বাস করি
-              </h3>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                প্রতিদিন পড়াশোনা শুরু করার আগে এক মিনিট শান্ত মনে নিজের অনুভূতি, আজকের ভালো কাজ এবং স্বপ্নকে মনে করে নাও। তোমার মন যত সুন্দর ও দৃঢ় হবে, জীবন তত উজ্জ্বল হবে।
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setDashboardSection('icche_dana')}
-                className="px-4 py-2.5 bg-indigo-900 hover:bg-indigo-800 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center gap-2 cursor-pointer whitespace-nowrap"
-              >
-                <Rocket className="w-4 h-4 text-amber-300" />
-                <span>ইচ্ছে ডানায় স্বপ্ন দেখো</span>
-              </button>
-            </div>
-          </div>
-
-          {monerSavedNotice && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-900">
-              {monerSavedNotice}
-            </div>
-          )}
-
-          {/* Emotional Check-in + Daily Self-Affirmation */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4">
-              <div className="space-y-1">
-                <h4 className="text-base font-bold text-slate-900 font-serif">
-                  ১. আজ আমার মনের অবস্থা কেমন?
-                </h4>
-                <p className="text-xs text-slate-500">
-                  তোমার আজকের অনুভূতি বেছে নাও — মনের বাড়ি তোমার মনের কথা যত্ন করে রাখে।
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {MONER_BARI_MOODS.map((m) => {
-                  const active = monerMood === m.labelBn;
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => {
-                        setMonerMood(m.labelBn);
-                        handleSaveMonerBari(m.labelBn, undefined);
-                      }}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                        active
-                          ? 'bg-emerald-700 text-white border-emerald-700'
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/60'
-                      }`}
-                    >
-                      {m.labelBn}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="bg-[#091e42] text-white rounded-2xl border border-slate-800 p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-base font-bold text-amber-300 font-serif">
-                  ২. আজকের আত্মবিশ্বাসের বাণী
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const idx = MONER_BARI_AFFIRMATIONS.indexOf(monerAffirmation);
-                    const next =
-                      MONER_BARI_AFFIRMATIONS[(idx + 1) % MONER_BARI_AFFIRMATIONS.length];
-                    setMonerAffirmation(next);
-                    handleSaveMonerBari(undefined, next);
-                  }}
-                  className="text-xs font-semibold text-emerald-300 hover:text-emerald-200 cursor-pointer whitespace-nowrap"
-                >
-                  নতুন বাণী দেখো →
-                </button>
-              </div>
-
-              <p className="text-base sm:text-lg font-serif text-white leading-relaxed">
-                &ldquo;{monerAffirmation}&rdquo;
-              </p>
-
-              <div className="text-xs text-slate-300">
-                বর্তমান স্বপ্ন: <strong className="text-amber-300">{existingPlan.dreamCareer}</strong> · দৈনিক লক্ষ্য:{' '}
-                <strong className="text-emerald-300 tabular-nums">
-                  {toBengaliNumber(existingPlan.dailyStudyHoursGoal || 3)} ঘণ্টা পড়াশোনা
-                </strong>
-              </div>
-            </div>
-          </div>
-
-          {/* Reflective Journal Fields */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-slate-900 font-serif">
-                  আমার প্রিয় মূলমন্ত্র ও অঙ্গীকার
-                </label>
-                <textarea
-                  rows={3}
-                  value={monerQuote}
-                  onChange={(e) => setMonerQuote(e.target.value)}
-                  placeholder="তোমার মনের দৃঢ় প্রতিজ্ঞা বা প্রিয় বাক্যটি লেখো..."
-                  className="w-full text-xs sm:text-sm p-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-slate-900 font-serif">
-                  আজ আমি যা নিয়ে গর্বিত
-                </label>
-                <textarea
-                  rows={3}
-                  value={monerProud}
-                  onChange={(e) => setMonerProud(e.target.value)}
-                  placeholder="যেমন: আজ আমি সময়মতো পড়া শেষ করেছি অথবা বন্ধুকে সাহায্য করেছি..."
-                  className="w-full text-xs sm:text-sm p-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-bold text-slate-900 font-serif">
-                  মা-বাবা ও শিক্ষকের প্রতি কৃতজ্ঞতা
-                </label>
-                <textarea
-                  rows={3}
-                  value={monerGratitude}
-                  onChange={(e) => setMonerGratitude(e.target.value)}
-                  placeholder="মা-বাবা বা শিক্ষকদের জন্য মনের কথা ও দোয়া..."
-                  className="w-full text-xs sm:text-sm p-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
-              <span className="text-xs text-slate-500">
-                মনের বাড়িতে লেখা তোমার প্রতিটি কথা সুরক্ষিতভাবে সংরক্ষিত থাকে।
-              </span>
-              <button
-                type="button"
-                onClick={() => handleSaveMonerBari()}
-                className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center gap-2 cursor-pointer"
-              >
-                <Save className="w-4 h-4" />
-                <span>মনের বাড়িতে সেভ করুন</span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <MonerBariView
+          student={student}
+          dreamCareer={existingPlan.dreamCareer}
+          dailyStudyHoursGoal={existingPlan.dailyStudyHoursGoal}
+          onSaveMonerBari={(nextData) =>
+            updateStudent({
+              ...student,
+              monerBari: nextData,
+            })
+          }
+          onOpenIccheDana={() => setDashboardSection('icche_dana')}
+        />
       )}
 
       {/* =================================================================== */}
       {/* SECTION 6: ICCHE DANA (ইচ্ছে ডানা — AI স্বপ্নের ফটো গ্যালারি)       */}
       {/* =================================================================== */}
       {dashboardSection === 'icche_dana' && (
-        <div className="space-y-6">
-          {/* Editorial Gallery Header */}
-          <div className="bg-[#091e42] text-white rounded-2xl border border-slate-800 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-            <div className="space-y-2 max-w-2xl">
-              <div className="flex items-center gap-2 text-xs text-amber-300 font-semibold">
-                <Sparkles className="w-4 h-4" />
-                <span>ইচ্ছে ডানা · ভবিষ্যতের নিজেকে দেখার আয়না</span>
-                <span aria-hidden="true">·</span>
-                <span>{student.nameBn}</span>
-              </div>
-              <h3 className="text-2xl sm:text-3xl font-bold font-serif text-white">
-                নিজেকে স্বপ্নের উচ্চতায় কল্পনা করো
-              </h3>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                বড় হয়ে তুমি যা হতে চাও—সেই স্বপ্নের পোশাক ও কর্মক্ষেত্রে নিজেকে প্রতিদিন একবার দেখো। এই আত্মবিশ্বাসই তোমাকে সেই লক্ষ্যে পৌঁছে দেবে।
-              </p>
-            </div>
+        <EcheDanaGallery
+          student={student}
+          classNameBn={classNameBn}
+          schoolName={schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
+          dreamCareer={existingPlan.dreamCareer}
+          dailyStudyHoursGoal={existingPlan.dailyStudyHoursGoal}
+          planSaveNotice={planSaveNotice}
+          onSelectDreamCareer={(careerTag) =>
+            saveFuturePlan(
+              { ...existingPlan, dreamCareer: careerTag },
+              `✓ "${careerTag}" আপনার প্রধান স্বপ্ন হিসেবে সেট হয়েছে!`
+            )
+          }
+          onOpenMonerBari={() => setDashboardSection('moner_bari')}
+        />
+      )}
 
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setDashboardSection('moner_bari')}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs sm:text-sm font-semibold rounded-xl transition flex items-center gap-2 cursor-pointer whitespace-nowrap"
-              >
-                <Home className="w-4 h-4 text-emerald-300" />
-                <span>মনের বাড়ি</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Career Dream Switcher */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs sm:text-sm font-bold text-slate-900">
-                স্বপ্নের পেশা বেছে নিয়ে গ্যালারি দেখুন (বর্তমান লক্ষ্য:{' '}
-                <span className="text-indigo-800">{existingPlan.dreamCareer}</span>)
-              </div>
-              {activeCareerGalleryTag !== existingPlan.dreamCareer && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    saveFuturePlan(
-                      { ...existingPlan, dreamCareer: activeCareerGalleryTag },
-                      `✓ "${activeCareerGalleryTag}" আপনার প্রধান স্বপ্ন হিসেবে সেট হয়েছে!`
-                    )
-                  }
-                  className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer"
-                >
-                  &ldquo;{activeCareerGalleryTag}&rdquo; আমার স্বপ্ন হিসেবে সেট করুন
-                </button>
-              )}
-            </div>
-
-            {planSaveNotice && (
-              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-900">
-                {planSaveNotice}
-              </div>
-            )}
-
-            <div className="flex flex-wrap gap-2">
-              {DREAM_CAREER_PRESETS.map((preset) => {
-                const isSelected = activeCareerGalleryTag === preset.careerTag;
-                return (
-                  <button
-                    key={preset.careerTag}
-                    type="button"
-                    onClick={() => setActiveCareerGalleryTag(preset.careerTag)}
-                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
-                      isSelected
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {preset.careerTag}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 1. Personalized Student AI Gallery (Assigned from Developer / Official Station) */}
-          {student.dreamGallery && student.dreamGallery.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-lg font-bold text-slate-900 font-serif">
-                  {student.nameBn}-এর বিশেষ AI স্বপ্ন-ছবি ({toBengaliNumber(student.dreamGallery.length)}টি)
-                </h4>
-                <span className="text-xs text-slate-500">বিদ্যালয় ডেভেলপার স্টেশন কর্তৃক প্রস্তুতকৃত</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {student.dreamGallery.map((item) => (
-                  <article
-                    key={item.id}
-                    onClick={() =>
-                      setLightboxDreamPhoto({
-                        titleBn: item.titleBn,
-                        careerTag: item.careerTag,
-                        captionBn:
-                          item.captionBn ||
-                          'প্রতিদিন নিজেকে এই উচ্চতায় কল্পনা করো ও নিষ্ঠার সাথে পড়াশোনা করো।',
-                        imageUrl: item.imageUrl,
-                        isCustomStudentAi: true,
-                      })
-                    }
-                    className="bg-white rounded-2xl border border-slate-200 overflow-hidden cursor-pointer group hover:border-indigo-400 transition"
-                  >
-                    <div className="relative aspect-[4/3] bg-slate-900 overflow-hidden">
-                      <img
-                        src={item.imageUrl}
-                        alt={item.titleBn}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-200"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent flex flex-col justify-end p-4 text-white">
-                        <div className="text-[11px] font-semibold text-amber-300">{item.careerTag}</div>
-                        <div className="text-base font-bold font-serif">{item.titleBn}</div>
-                      </div>
-                    </div>
-                    {item.captionBn && (
-                      <div className="p-4 text-xs text-slate-600 leading-relaxed">{item.captionBn}</div>
-                    )}
-                  </article>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 2. Featured Spotlight + Inspirational Career Vision Gallery */}
-          {(() => {
-            const orderedPresets = matchCareerPresets(activeCareerGalleryTag);
-            const heroPreset = orderedPresets[0] || DREAM_CAREER_PRESETS[0];
-            const otherPresets = orderedPresets.slice(1);
-            return (
-              <div className="space-y-6">
-                {/* Featured Career Spotlight */}
-                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden grid grid-cols-1 lg:grid-cols-12 items-stretch">
-                  <div
-                    onClick={() =>
-                      setLightboxDreamPhoto({
-                        titleBn: `${heroPreset.headlineBn} — ${student.nameBn}`,
-                        careerTag: heroPreset.careerTag,
-                        captionBn: heroPreset.quoteBn,
-                        imageUrl: heroPreset.imageUrl,
-                      })
-                    }
-                    className="lg:col-span-7 relative min-h-[260px] bg-slate-900 overflow-hidden cursor-pointer group"
-                  >
-                    <img
-                      src={heroPreset.imageUrl}
-                      alt={heroPreset.headlineBn}
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute top-3 right-3 p-2 bg-slate-950/75 text-white rounded-lg">
-                      <Maximize2 className="w-4 h-4" />
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-5 p-6 sm:p-7 flex flex-col justify-between space-y-4">
-                    <div className="space-y-3">
-                      <div className="text-xs font-semibold text-indigo-700">
-                        নির্বাচিত স্বপ্ন · {heroPreset.careerTag}
-                      </div>
-                      <h4 className="text-xl sm:text-2xl font-bold text-slate-900 font-serif">
-                        ভবিষ্যতের {heroPreset.shortLabelBn} — {student.nameBn}
-                      </h4>
-                      <p className="text-sm text-slate-600 leading-relaxed font-serif">
-                        &ldquo;{heroPreset.quoteBn}&rdquo;
-                      </p>
-                    </div>
-
-                    <div className="pt-4 border-t border-slate-100 space-y-2 text-xs">
-                      <div className="font-bold text-slate-800">
-                        লক্ষ্যে পৌঁছাতে আজকের করণীয়:
-                      </div>
-                      <p className="text-slate-600 leading-relaxed">{heroPreset.studyTipBn}</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Other Aspirational Vision Cards */}
-                <div className="space-y-3">
-                  <h4 className="text-base font-bold text-slate-900 font-serif">
-                    আরও অনুপ্রেরণামূলক স্বপ্ন-দৃশ্যপট
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {otherPresets.map((preset) => (
-                      <article
-                        key={preset.careerTag}
-                        onClick={() => {
-                          setActiveCareerGalleryTag(preset.careerTag);
-                          setLightboxDreamPhoto({
-                            titleBn: `${preset.headlineBn} — ${student.nameBn}`,
-                            careerTag: preset.careerTag,
-                            captionBn: preset.quoteBn,
-                            imageUrl: preset.imageUrl,
-                          });
-                        }}
-                        className="bg-white rounded-2xl border border-slate-200 overflow-hidden cursor-pointer group hover:border-slate-400 transition flex flex-col justify-between"
-                      >
-                        <div className="relative aspect-[4/3] bg-slate-900 overflow-hidden">
-                          <img
-                            src={preset.imageUrl}
-                            alt={preset.headlineBn}
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-200"
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-                        <div className="p-4 space-y-1.5">
-                          <div className="text-xs font-semibold text-indigo-700">{preset.careerTag}</div>
-                          <h5 className="text-base font-bold text-slate-900 font-serif">
-                            {preset.headlineBn}
-                          </h5>
-                          <p className="text-xs text-slate-600 line-clamp-2">{preset.quoteBn}</p>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
+      {/* =================================================================== */}
+      {/* SECTION 7: TIME MANAGEMENT (সময় ব্যবস্থাপনা ও দৈনিক রুটিন)         */}
+      {/* =================================================================== */}
+      {dashboardSection === 'time_management' && (
+        <TimeManagementView
+          student={student}
+          dailyStudyHoursGoal={existingPlan.dailyStudyHoursGoal}
+          onSaveTimeManagement={(nextData) =>
+            updateStudent({
+              ...student,
+              timeManagement: nextData,
+            })
+          }
+          onOpenMonerBari={() => setDashboardSection('moner_bari')}
+          onOpenIccheDana={() => setDashboardSection('icche_dana')}
+        />
       )}
 
       {/* =================================================================== */}
@@ -2237,121 +1873,18 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         </div>
       )}
 
-      {/* Permanent Student PWA Install & Lock Confirmation Modal */}
-      {showInstallLockModal && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center p-4"
-          onClick={() => setShowInstallLockModal(false)}
-        >
-          <div
-            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
-                  <Smartphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-sm sm:text-base font-bold text-slate-900 font-serif">
-                    ড্যাশবোর্ড স্থায়ীভাবে সেট হয়েছে
-                  </h4>
-                  <p className="text-xs text-emerald-700 font-semibold">{student.nameBn} · {portalId}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowInstallLockModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-950 font-medium">
-                ✓ এই ফোনটি স্থায়ীভাবে <strong>{student.nameBn}</strong>-এর ড্যাশবোর্ডের জন্য লক করা হয়েছে। সাইন-আউট বাটন গোপন করা হয়েছে যাতে আর কখনো সাইন-ইন করতে না হয়।
-              </div>
-
-              {installPromptOutcome === 'installed' ? (
-                <p className="text-xs text-slate-600">
-                  অ্যাপটি সফলভাবে হোম স্ক্রিনে ইনস্টল হয়েছে। এখন থেকে অ্যাপের আইকনে টাচ করলেই সরাসরি {student.nameBn}-এর ড্যাশবোর্ড ওপেন হবে।
-                </p>
-              ) : isIOS ? (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5">
-                  <div className="font-bold text-slate-900">আইফোন হোম স্ক্রিনে যোগ করার শেষ ধাপ:</div>
-                  <p>১. নিচের <strong>Share</strong> আইকনে ট্যাপ করুন।</p>
-                  <p>২. <strong>Add to Home Screen</strong> নির্বাচন করে <strong>Add</strong> চাপুন।</p>
-                </div>
-              ) : (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5">
-                  <div className="font-bold text-slate-900">অ্যান্ড্রয়েড হোম স্ক্রিনে অ্যাপ আইকন সেট করার ধাপ:</div>
-                  <p>
-                    যদি অটো ইনস্টল পপআপ না আসে, তবে ব্রাউজারের ডান কোণায় <strong>৩-ডট মেনু (⋮)</strong> থেকে{' '}
-                    <strong>&ldquo;Add to Home screen&rdquo;</strong> বা <strong>&ldquo;Install app&rdquo;</strong>-এ ট্যাপ করুন।
-                  </p>
-                  <p className="text-emerald-800 font-semibold">
-                    ইনস্টল হয়ে গেলে আইকনে টাচ করা মাত্রই সরাসরি এই ড্যাশবোর্ড খুলবে!
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowInstallLockModal(false)}
-              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl cursor-pointer"
-            >
-              সম্পন্ন ও বন্ধ করুন
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Fullscreen Vision Lightbox for Icche Dana Dream Gallery */}
-      {lightboxDreamPhoto && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/90 flex items-center justify-center p-4"
-          onClick={() => setLightboxDreamPhoto(null)}
-        >
-          <div
-            className="bg-white rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl border border-slate-200"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200">
-              <div>
-                <div className="text-[11px] font-semibold text-indigo-700">{lightboxDreamPhoto.careerTag}</div>
-                <div className="text-sm sm:text-base font-bold text-slate-900 font-serif">
-                  {lightboxDreamPhoto.titleBn}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLightboxDreamPhoto(null)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="bg-slate-950 max-h-[65vh] flex items-center justify-center overflow-hidden">
-              <img
-                src={lightboxDreamPhoto.imageUrl}
-                alt={lightboxDreamPhoto.titleBn}
-                className="max-h-[65vh] w-auto object-contain"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-            <div className="p-5 space-y-1.5 text-xs sm:text-sm">
-              <p className="text-slate-800 font-serif text-base leading-relaxed">
-                &ldquo;{lightboxDreamPhoto.captionBn}&rdquo;
-              </p>
-              <p className="text-xs text-slate-500">
-                {student.nameBn} · {classNameBn} · {schoolInfo.name || 'ডি-লিকন মডেল একাডেমী'}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Visual 'How to Install' Modal (Android & iOS Home Screen Guide) */}
+      <HowToInstallModal
+        isOpen={showInstallLockModal}
+        onClose={() => setShowInstallLockModal(false)}
+        studentName={student.nameBn}
+        portalId={portalId}
+        defaultPlatform={isIOS ? 'ios' : 'android'}
+        isDeviceLocked={isDeviceLocked}
+        isInstallable={isInstallable}
+        isInstalled={isInstalled}
+        onTriggerNativeInstall={install}
+      />
 
       {/* Fullscreen Lightbox for Achievement Memories */}
       {lightboxAchievement && (

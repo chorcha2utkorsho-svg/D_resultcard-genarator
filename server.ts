@@ -212,12 +212,19 @@ async function startServer() {
                 ? srvStd.monerBari
                 : incStd.monerBari
               : incStd.monerBari || srvStd.monerBari;
+          const mergedTimeManagement =
+            incStd.timeManagement && srvStd.timeManagement
+              ? new Date(srvStd.timeManagement.updatedAt || 0).getTime() > new Date(incStd.timeManagement.updatedAt || 0).getTime()
+                ? srvStd.timeManagement
+                : incStd.timeManagement
+              : incStd.timeManagement || srvStd.timeManagement;
           return {
             ...incStd,
             futurePlan: mergedFuturePlan,
             achievements: mergedAchievements,
             dreamGallery: mergedDreamGallery,
             monerBari: mergedMonerBari,
+            timeManagement: mergedTimeManagement,
             portalUserId: incStd.portalUserId || srvStd.portalUserId,
             guardianPin: incStd.guardianPin || srvStd.guardianPin,
           };

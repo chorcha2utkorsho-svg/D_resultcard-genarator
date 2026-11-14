@@ -74,6 +74,7 @@ export interface Student {
   achievements?: StudentAchievement[];
   dreamGallery?: DreamGalleryPhoto[];
   monerBari?: MonerBariData;
+  timeManagement?: StudentTimeManagementData;
 
   // ডিজিটাল সিকিউরিটি ও স্মার্ট আইডি কিউআর কোড
   securityQrCode?: string; // সিকিউর কিউআর কোড টোকেন
@@ -89,12 +90,92 @@ export interface DreamGalleryPhoto {
   createdAt: string;
 }
 
+export interface MonerBariJournalEntry {
+  id: string;
+  date: string;
+  mood: string;
+  promptBn?: string;
+  contentBn: string;
+  createdAt: string;
+}
+
+export interface MonerBariEmotionalGoal {
+  id: string;
+  titleBn: string;
+  achieved: boolean;
+  createdAt: string;
+}
+
+export interface MonerBariMoodLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  moodId: string;
+  moodLabelBn: string;
+  confidenceScore?: number; // 1 to 5
+  noteBn?: string;
+  createdAt: string;
+}
+
+export interface MonerBariGratitudeItem {
+  id: string;
+  date: string; // YYYY-MM-DD
+  gratefulForBn: string;
+  dailyThoughtBn?: string;
+  createdAt: string;
+}
+
 export interface MonerBariData {
   moodToday?: string;
   dailyAffirmation?: string;
   favoriteQuote?: string;
   proudMoment?: string;
   gratitudeNote?: string;
+  emotionalGoals?: MonerBariEmotionalGoal[];
+  journalEntries?: MonerBariJournalEntry[];
+  moodHistory?: MonerBariMoodLog[];
+  gratitudeLogs?: MonerBariGratitudeItem[];
+  updatedAt?: string;
+}
+
+export type RoutineBlockCategory =
+  | 'study'
+  | 'school'
+  | 'spiritual'
+  | 'health'
+  | 'hobby'
+  | 'rest';
+
+export type RoutineDayKey =
+  | 'sat'
+  | 'sun'
+  | 'mon'
+  | 'tue'
+  | 'wed'
+  | 'thu'
+  | 'fri';
+
+export interface StudentRoutineBlock {
+  id: string;
+  startTime: string; // HH:MM (24-hour for chronological sort)
+  endTime: string;   // HH:MM
+  titleBn: string;
+  category: RoutineBlockCategory;
+  daysOfWeek?: RoutineDayKey[]; // empty or all 7 = daily; subset = weekly specific days
+  noteBn?: string;
+  completedDates?: string[]; // YYYY-MM-DD dates when marked completed
+}
+
+export interface StudentDailyMomentumLog {
+  date: string; // YYYY-MM-DD
+  completedBlockIds: string[];
+  focusedMinutes: number;
+  sessionsCount: number;
+}
+
+export interface StudentTimeManagementData {
+  routineBlocks: StudentRoutineBlock[];
+  dailyLogs?: StudentDailyMomentumLog[];
+  totalFocusMinutes?: number;
   updatedAt?: string;
 }
 

@@ -13,6 +13,8 @@ interface HowToInstallModalProps {
   isOpen: boolean;
   onClose: () => void;
   studentName?: string;
+  studentShortName?: string;
+  studentAvatarUrl?: string;
   portalId?: string;
   defaultPlatform?: 'android' | 'ios';
   isDeviceLocked?: boolean;
@@ -25,6 +27,8 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
   isOpen,
   onClose,
   studentName,
+  studentShortName,
+  studentAvatarUrl,
   portalId,
   defaultPlatform = 'android',
   isDeviceLocked = false,
@@ -80,13 +84,31 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
         </div>
 
         <div className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
-          {/* Lock Confirmation Note */}
-          {isDeviceLocked && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 font-medium flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-              <span>
-                এই ফোনটি স্থায়ীভাবে <strong>{studentName || 'শিক্ষার্থীর'}</strong> ড্যাশবোর্ডের জন্য সেট করা হয়েছে। হোম স্ক্রিনে যুক্ত করলে আর কখনো লগইন করতে হবে না।
-              </span>
+          {/* Lock Confirmation + Live Passport App Icon Preview */}
+          {(isDeviceLocked || studentAvatarUrl) && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-[#091e42] border-2 border-amber-400 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                <img
+                  src={studentAvatarUrl || '/pwa-192x192.png'}
+                  alt={studentName ? `${studentName}-এর অ্যাপ আইকন` : 'অ্যাপ আইকন'}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="font-bold text-emerald-950 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>
+                    {studentAvatarUrl
+                      ? 'শিক্ষার্থীর পাসপোর্ট ছবিই স্মার্টফোনের অ্যাপ আইকন!'
+                      : `${studentName || 'শিক্ষার্থীর'} ড্যাশবোর্ড স্থায়ীভাবে সেট করা হয়েছে`}
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-900 leading-relaxed">
+                  {isDeviceLocked
+                    ? 'হোম স্ক্রিনে যুক্ত করলে আর সাইন ইন করতে হবে না। আগে অন্য আইকন থাকলে একবার নতুন করে "Add to Home screen" করলেই পাসপোর্ট ছবিটি আইকন হয়ে যাবে।'
+                    : 'ইনস্টল বাটনে চাপলে শিক্ষার্থীর নাম ও পাসপোর্ট ছবি ফোনের হোম স্ক্রিনের অ্যাপ আইকন হিসেবে সেট হবে।'}
+                </p>
+              </div>
             </div>
           )}
 
@@ -184,15 +206,17 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
                   <div className="flex flex-col items-center gap-1">
                     <div className="w-12 h-12 rounded-2xl bg-[#091e42] border-2 border-amber-400 flex items-center justify-center shadow-sm overflow-hidden">
                       <img
-                        src="/pwa-192x192.png"
-                        alt="ডি-লিকন অ্যাপ আইকন"
-                        className="w-9 h-9 object-contain"
+                        src={studentAvatarUrl || '/pwa-192x192.png'}
+                        alt={studentName ? `${studentName} অ্যাপ আইকন` : 'ডি-লিকন অ্যাপ আইকন'}
+                        className="w-full h-full object-cover"
                       />
                     </div>
-                    <span className="text-[11px] font-bold text-slate-800">ডি-লিকন</span>
+                    <span className="text-[11px] font-bold text-slate-800 max-w-[80px] truncate">
+                      {studentShortName || 'ডি-লিকন'}
+                    </span>
                   </div>
                   <div className="text-xs text-slate-600 max-w-[200px]">
-                    ফোনের হোম স্ক্রিনে এই আইকনে টাচ করলেই সরাসরি ড্যাশবোর্ড খুলবে।
+                    ফোনের হোম স্ক্রিনে শিক্ষার্থীর এই আইকনে টাচ করলেই সরাসরি ড্যাশবোর্ড খুলবে।
                   </div>
                 </div>
               </div>
@@ -256,7 +280,16 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
 
                 <div className="bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between text-xs max-w-[260px] mx-auto">
                   <span className="text-slate-500">Cancel</span>
-                  <span className="font-bold text-slate-900">ডি-লিকন</span>
+                  <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                    {studentAvatarUrl && (
+                      <img
+                        src={studentAvatarUrl}
+                        alt=""
+                        className="w-5 h-5 rounded-md object-cover border border-amber-400"
+                      />
+                    )}
+                    <span className="truncate max-w-[110px]">{studentShortName || 'ডি-লিকন'}</span>
+                  </div>
                   <span className="px-2 py-0.5 rounded bg-sky-600 text-white font-bold">Add</span>
                 </div>
               </div>

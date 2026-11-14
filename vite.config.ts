@@ -11,7 +11,13 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        includeAssets: [
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+          'sw-student-icon.js',
+        ],
         manifest: {
           id: '/',
           name: 'ডি-লিকন মডেল একাডেমী',
@@ -44,9 +50,10 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          importScripts: ['/sw-student-icon.js'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-          navigateFallbackDenylist: [/^\/api/, /^\/@vite/],
+          navigateFallbackDenylist: [/^\/api/, /^\/@vite/, /^\/sw-student-icon\.js/],
           skipWaiting: true,
           clientsClaim: true,
           runtimeCaching: [
@@ -58,7 +65,7 @@ export default defineConfig(() => {
         },
         devOptions: {
           enabled: true,
-          type: 'module',
+          type: 'classic',
         },
       }),
     ],

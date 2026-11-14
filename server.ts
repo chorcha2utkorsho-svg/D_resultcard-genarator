@@ -1185,6 +1185,189 @@ async function startServer() {
   });
 
   // =========================================================================
+  // DYNAMIC PER-STUDENT PWA APP ICON & MANIFEST ENDPOINTS
+  // Allows a student's passport-size photo to serve as smartphone home icon
+  // =========================================================================
+  const PWA_ICON_DIR = path.join(DATA_DIR, 'pwa-icons');
+  if (!fs.existsSync(PWA_ICON_DIR)) {
+    fs.mkdirSync(PWA_ICON_DIR, { recursive: true });
+  }
+
+  const sanitizeStudentPathId = (rawId: string): string =>
+    rawId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'student';
+
+  const decodeDataUrlBuffer = (dataUrl: string): { mime: string; buffer: Buffer } | null => {
+    if (typeof dataUrl !== 'string') return null;
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+    if (!match) return null;
+    try {
+      return {
+        mime: match[1],
+        buffer: Buffer.from(match[2], 'base64'),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  app.post('/api/student-icon/:studentId', (req, res) => {
+    try {
+      const studentId = req.params.studentId;
+      const safeId = sanitizeStudentPathId(studentId);
+      const { icon192, icon512, maskable512, apple180 } = req.body || {};
+
+      const studentDir = path.join(PWA_ICON_DIR, safeId);
+      if (!fs.existsSync(studentDir)) {
+        fs.mkdirSync(studentDir, { recursive: true });
+      }
+
+      const targets: { dataUrl: unknown; fileName: string }[] = [
+        { dataUrl: icon192, fileName: '192.png' },
+        { dataUrl: icon512, fileName: '512.png' },
+        { dataUrl: maskable512, fileName: 'maskable-512.png' },
+        { dataUrl: apple180, fileName: 'apple-touch-icon.png' },
+      ];
+
+      let written = 0;
+      for (const item of targets) {
+        if (typeof item.dataUrl !== 'string') continue;
+        const decoded = decodeDataUrlBuffer(item.dataUrl);
+        if (decoded && decoded.buffer.length > 0 && decoded.buffer.length <= 5 * 1024 * 1024) {
+          fs.writeFileSync(path.join(studentDir, item.fileName), decoded.buffer);
+          written += 1;
+        }
+      }
+
+      return res.json({ success: true, written });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Icon save failed' });
+    }
+  });
+
+  app.get('/api/student-icon/:studentId/:fileName', (req, res) => {
+    const allowedFiles = new Set(['192.png', '512.png', 'maskable-512.png', 'apple-touch-icon.png']);
+    const fileName = req.params.fileName;
+    if (!allowedFiles.has(fileName)) {
+      return res.status(404).end();
+    }
+
+    const studentId = req.params.studentId;
+    const safeId = sanitizeStudentPathId(studentId);
+    const cachedFile = path.join(PWA_ICON_DIR, safeId, fileName);
+
+    res.setHeader('Cache-Control', 'no-cache, max-age=0');
+
+    if (fs.existsSync(cachedFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      return res.sendFile(cachedFile);
+    }
+
+    // Fallback to raw student passport avatar stored in memoryDb if present
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const matchedStudent = Array.isArray(memoryDb?.students)
+      ? memoryDb.students.find((s: any) => s && s.id === studentId)
+      : null;
+
+    if (matchedStudent?.avatarUrl) {
+      const decoded = decodeDataUrlBuffer(matchedStudent.avatarUrl);
+      if (decoded) {
+        res.setHeader('Content-Type', decoded.mime);
+        return res.send(decoded.buffer);
+      }
+    }
+
+    // Final fallback to academy default PNG icon
+    const publicFallbackName =
+      fileName === '192.png'
+        ? 'pwa-192x192.png'
+        : fileName === 'maskable-512.png'
+        ? 'pwa-maskable-512x512.png'
+        : fileName === 'apple-touch-icon.png'
+        ? 'apple-touch-icon.png'
+        : 'pwa-512x512.png';
+
+    const publicFile = path.join(__dirname, 'public', publicFallbackName);
+    if (fs.existsSync(publicFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      return res.sendFile(publicFile);
+    }
+
+    return res.status(404).end();
+  });
+
+  app.get('/api/student-manifest/:studentId', (req, res) => {
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const studentId = req.params.studentId;
+    const matchedStudent = Array.isArray(memoryDb?.students)
+      ? memoryDb.students.find((s: any) => s && s.id === studentId)
+      : null;
+
+    const studentName = (matchedStudent?.nameBn || '').trim();
+    let shortName = 'ডি-লিকন';
+    if (studentName) {
+      if (studentName.length <= 12) {
+        shortName = studentName;
+      } else {
+        const parts = studentName.split(/\s+/);
+        if (parts[0] && parts[0].length <= 12) {
+          shortName =
+            parts[1] && `${parts[0]} ${parts[1]}`.length <= 12
+              ? `${parts[0]} ${parts[1]}`
+              : parts[0];
+        } else {
+          shortName = studentName.slice(0, 12);
+        }
+      }
+    }
+
+    const versionQuery = typeof req.query.v === 'string' && req.query.v ? `?v=${encodeURIComponent(req.query.v)}` : '';
+    const encodedId = encodeURIComponent(studentId);
+    const startUrl = `/?guardian=${encodedId}&locked=1`;
+
+    const manifestPayload = {
+      id: startUrl,
+      name: studentName ? `${studentName} — ডি-লিকন ড্যাশবোর্ড` : 'ডি-লিকন মডেল একাডেমী',
+      short_name: shortName,
+      description: studentName
+        ? `${studentName}-এর ব্যক্তিগত শিক্ষার্থী ও অভিভাবক ড্যাশবোর্ড`
+        : 'ডি-লিকন মডেল একাডেমী - ডিজিটাল রেজাল্ট ও অভিভাবক পোর্টাল',
+      theme_color: '#091e42',
+      background_color: '#091e42',
+      display: 'standalone',
+      start_url: startUrl,
+      scope: '/',
+      icons: [
+        {
+          src: `/api/student-icon/${encodedId}/192.png${versionQuery}`,
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'any',
+        },
+        {
+          src: `/api/student-icon/${encodedId}/512.png${versionQuery}`,
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any',
+        },
+        {
+          src: `/api/student-icon/${encodedId}/maskable-512.png${versionQuery}`,
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'maskable',
+        },
+      ],
+    };
+
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(manifestPayload);
+  });
+
+  // =========================================================================
   const httpServer = http.createServer(app);
 
   // =========================================================================

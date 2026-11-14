@@ -74,6 +74,10 @@ import { MonerBariView } from './MonerBariView';
 import { TimeManagementView } from './TimeManagementView';
 import { ExamCountdownWidget } from './ExamCountdownWidget';
 import { StudentBadgesPanel } from './StudentBadgesPanel';
+import {
+  applyStudentPassportAppIcon,
+  getShortStudentAppName,
+} from '../utils/studentAppIcon';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -272,11 +276,29 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const [adminUnlockPin, setAdminUnlockPin] = useState('');
   const [adminUnlockError, setAdminUnlockError] = useState<string | null>(null);
   const [showAdminUnlockBox, setShowAdminUnlockBox] = useState(false);
+  const [customAppIconPreview, setCustomAppIconPreview] = useState<string>(
+    student.avatarUrl || '/pwa-192x192.png'
+  );
+
+  React.useEffect(() => {
+    let active = true;
+    applyStudentPassportAppIcon(student).then((res) => {
+      if (active && res.previewIconUrl) {
+        setCustomAppIconPreview(res.previewIconUrl);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [student]);
 
   const handleInstallDashboardClick = async () => {
     const isFirstClick =
       typeof window !== 'undefined' &&
       localStorage.getItem('dlikon_pwa_install_guide_seen') !== '1';
+
+    // Ensure student's passport photo PNG icon & manifest are active before native prompt
+    void applyStudentPassportAppIcon(student);
 
     // Trigger browser PWA prompt immediately within the click gesture
     const installPromise = isInstallable ? install() : Promise.resolve(false);
@@ -612,7 +634,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 type="button"
                 onClick={handleInstallDashboardClick}
                 aria-label="Install App"
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-2 cursor-pointer whitespace-nowrap ${
                   isInstalled
                     ? 'bg-emerald-700/80 border-emerald-400 text-white'
                     : isDeviceLocked
@@ -620,7 +642,13 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                     : 'bg-emerald-500 hover:bg-emerald-400 border-emerald-400 text-slate-950'
                 }`}
               >
-                {isInstalled ? (
+                {student.avatarUrl ? (
+                  <img
+                    src={customAppIconPreview}
+                    alt=""
+                    className="w-4 h-4 rounded object-cover border border-amber-300 shrink-0"
+                  />
+                ) : isInstalled ? (
                   <CheckCircle2 className="w-3.5 h-3.5" />
                 ) : (
                   <Smartphone className="w-3.5 h-3.5" />
@@ -631,7 +659,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                     : isInstallable
                     ? 'Install App · ড্যাশবোর্ড ইনস্টল'
                     : isDeviceLocked
-                    ? 'Install App · হোম স্ক্রিনে নিন'
+                    ? 'ছবিসহ হোম আইকন সেট করুন'
                     : 'Install App · ড্যাশবোর্ড ইনস্টল'}
                 </span>
               </button>
@@ -1925,6 +1953,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         isOpen={showInstallLockModal}
         onClose={() => setShowInstallLockModal(false)}
         studentName={student.nameBn}
+        studentShortName={getShortStudentAppName(student.nameBn)}
+        studentAvatarUrl={student.avatarUrl ? customAppIconPreview : undefined}
         portalId={portalId}
         defaultPlatform={isIOS ? 'ios' : 'android'}
         isDeviceLocked={isDeviceLocked}

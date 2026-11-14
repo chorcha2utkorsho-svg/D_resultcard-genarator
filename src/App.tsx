@@ -34,6 +34,10 @@ import {
   lockDeviceToStudent,
   unlockDeviceFromStudent,
 } from './utils/deviceLock';
+import {
+  applyStudentPassportAppIcon,
+  resetStudentAppIcon,
+} from './utils/studentAppIcon';
 import { getLocalStaffAccounts, safeFetchJson } from './utils/portalAuthFallback';
 
 const SESSION_STORAGE_KEY = 'dlikon_portal_auth_session_v1';
@@ -133,6 +137,12 @@ function MainContent() {
         }
       }
     }
+    if (authSession?.role === 'student' && students.length > 0) {
+      const matched = students.find((s) => s.id === authSession.accountId);
+      if (matched) {
+        void applyStudentPassportAppIcon(matched);
+      }
+    }
   }, [authSession, students, classes, urlGuardianParam, isSavedGuardianMode]);
 
   const handleLoginSuccess = (session: PortalAuthSession, matchedStudent?: Student | null) => {
@@ -143,6 +153,9 @@ function MainContent() {
       if (session.role === 'student' && matchedStudent) {
         localStorage.setItem('dlikon_guardian_paired_student_id', matchedStudent.id);
         localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
+        void applyStudentPassportAppIcon(matchedStudent);
+      } else {
+        resetStudentAppIcon();
       }
     }
   };
@@ -150,6 +163,7 @@ function MainContent() {
   const handleInstallLockedDashboard = async (student: Student) => {
     const clsName = classes.find((c) => c.id === student.classId)?.nameBn || student.classId;
     const lockedSession = await lockDeviceToStudent(student, getStudentPortalId(student), clsName);
+    await applyStudentPassportAppIcon(student);
     setIsDeviceLocked(true);
     setAuthSession(lockedSession);
     setCurrentTab('dashboard');
@@ -175,6 +189,7 @@ function MainContent() {
 
     if (!isValidOfficial) return false;
     await unlockDeviceFromStudent();
+    resetStudentAppIcon();
     setIsDeviceLocked(false);
     setAuthSession(null);
     setCurrentTab('dashboard');
@@ -184,6 +199,7 @@ function MainContent() {
 
   const handleLogout = () => {
     if (isDeviceLocked) return;
+    resetStudentAppIcon();
     setAuthSession(null);
     setCurrentTab('dashboard');
     setIsSettingsOpen(false);

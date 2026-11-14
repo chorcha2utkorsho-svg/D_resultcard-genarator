@@ -50,6 +50,7 @@ import {
 } from 'recharts';
 import { useSchool } from '../context/SchoolContext';
 import {
+  CalculatedStudentResult,
   SecurityGatepassLog,
   Student,
   StudentAchievement,
@@ -72,6 +73,7 @@ import { EcheDanaGallery } from './EcheDanaGallery';
 import { MonerBariView } from './MonerBariView';
 import { TimeManagementView } from './TimeManagementView';
 import { ExamCountdownWidget } from './ExamCountdownWidget';
+import { StudentBadgesPanel } from './StudentBadgesPanel';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -197,6 +199,33 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     () => Boolean(termResult && termResult.subjectRows.some((r) => r.totalObtained !== null)),
     [termResult]
   );
+
+  const allTermResults = useMemo(() => {
+    return examTerms
+      .map((term) => {
+        const classRes = getCalculatedResultsForClass(
+          student.classId,
+          student.section || '',
+          term.id,
+          student.academicYear || selectedYear || '২০২৬'
+        );
+        let found = classRes.find((r) => r.student.id === student.id) || null;
+        if (!found) {
+          const allSec = getCalculatedResultsForClass(
+            student.classId,
+            '',
+            term.id,
+            student.academicYear || selectedYear || '২০২৬'
+          );
+          found = allSec.find((r) => r.student.id === student.id) || null;
+        }
+        const hasMarks = Boolean(found && found.subjectRows.some((sr) => sr.totalObtained !== null));
+        return found && hasMarks
+          ? { termId: term.id, termName: term.nameBn, result: found }
+          : null;
+      })
+      .filter((item): item is { termId: string; termName: string; result: CalculatedStudentResult } => Boolean(item));
+  }, [examTerms, getCalculatedResultsForClass, student, selectedYear]);
 
   const subjectChartData = useMemo(() => {
     if (!termResult) return [];
@@ -631,7 +660,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             { id: 'future_plan' as const, label: 'ভবিষ্যৎ পরিকল্পনা', icon: Compass },
             {
               id: 'achievements' as const,
-              label: `কৃতিত্বের স্মৃতি (${toBengaliNumber(achievementsList.length)})`,
+              label: `ব্যাজ ও কৃতিত্ব (${toBengaliNumber(achievementsList.length)})`,
               icon: Trophy,
             },
             { id: 'id_and_contact' as const, label: 'আইডি কার্ড ও পাসওয়ার্ড', icon: KeyRound },
@@ -1073,6 +1102,16 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             </div>
           </div>
+
+          {/* Virtual Badges & Performance Recognition Showcase */}
+          <StudentBadgesPanel
+            student={student}
+            allTermResults={allTermResults}
+            attendanceMetrics={attendanceMetrics}
+            latestTermResult={termResult}
+            variant="summary"
+            onViewAllBadges={() => setDashboardSection('achievements')}
+          />
         </div>
       )}
 
@@ -1414,10 +1453,18 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       )}
 
       {/* =================================================================== */}
-      {/* SECTION 3: ACHIEVEMENTS & MEMORIES GALLERY                          */}
+      {/* SECTION 3: VIRTUAL BADGES & ACHIEVEMENT MEMORIES GALLERY            */}
       {/* =================================================================== */}
       {dashboardSection === 'achievements' && (
         <div className="space-y-6">
+          <StudentBadgesPanel
+            student={student}
+            allTermResults={allTermResults}
+            attendanceMetrics={attendanceMetrics}
+            latestTermResult={termResult}
+            variant="full"
+          />
+
           <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-amber-50 text-amber-700 rounded-xl">

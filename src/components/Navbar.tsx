@@ -42,6 +42,7 @@ interface NavbarProps {
   setCurrentTab: (tab: string) => void;
   onOpenSettings: () => void;
   onLogout: () => void;
+  isDeviceLocked?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -50,6 +51,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentTab,
   onOpenSettings,
   onLogout,
+  isDeviceLocked = false,
 }) => {
   const {
     schoolInfo,
@@ -224,13 +226,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               </>
             )}
 
-            <button
-              onClick={onLogout}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600/90 hover:bg-rose-600 text-white transition shadow-xs cursor-pointer whitespace-nowrap"
-            >
-              <LogOut className="w-3.5 h-3.5 mr-1.5" />
-              সাইন আউট
-            </button>
+            {!isDeviceLocked && (
+              <button
+                onClick={onLogout}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600/90 hover:bg-rose-600 text-white transition shadow-xs cursor-pointer whitespace-nowrap"
+              >
+                <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                সাইন আউট
+              </button>
+            )}
           </div>
 
           {/* Mobile menu button */}
@@ -245,14 +249,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <Settings className="w-5 h-5" />
               </button>
             )}
-            <button
-              onClick={onLogout}
-              className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1"
-              title="সাইন আউট"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">সাইন আউট</span>
-            </button>
+            {!isDeviceLocked && (
+              <button
+                onClick={onLogout}
+                className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1"
+                title="সাইন আউট"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">সাইন আউট</span>
+              </button>
+            )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 focus:outline-none"
@@ -380,16 +386,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               </>
             )}
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onLogout();
-              }}
-              className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-rose-600 text-white"
-            >
-              <LogOut className="w-3.5 h-3.5 mr-1" />
-              সাইন আউট
-            </button>
+            {!isDeviceLocked && (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onLogout();
+                }}
+                className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-semibold bg-rose-600 text-white"
+              >
+                <LogOut className="w-3.5 h-3.5 mr-1" />
+                সাইন আউট
+              </button>
+            )}
           </div>
         </div>
       )}

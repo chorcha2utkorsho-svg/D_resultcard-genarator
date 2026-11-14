@@ -34,9 +34,11 @@ import {
   Heart,
   QrCode,
   UserCheck,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
-import { Student } from '../types';
+import { DreamGalleryPhoto, Student } from '../types';
+import { DREAM_CAREER_PRESETS } from '../data/dreamCareerGallery';
 import { toBengaliNumber, toBengaliRoll, formatBengaliDate } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
 import { BulkStudentRegistration } from './BulkStudentRegistration';
@@ -80,7 +82,11 @@ export const StudentManagement: React.FC = () => {
   const [isPrintDirectoryOpen, setIsPrintDirectoryOpen] = useState(false);
 
   // Full Form state for comprehensive student & guardian dossier
-  const [studentModalTab, setStudentModalTab] = useState<'student' | 'father' | 'mother' | 'address' | 'security'>('student');
+  const [studentModalTab, setStudentModalTab] = useState<'student' | 'father' | 'mother' | 'address' | 'security' | 'dream_gallery'>('student');
+  const [dreamDraftCareer, setDreamDraftCareer] = useState<string>(DREAM_CAREER_PRESETS[0].careerTag);
+  const [dreamDraftTitle, setDreamDraftTitle] = useState<string>('');
+  const [dreamDraftCaption, setDreamDraftCaption] = useState<string>('');
+  const [dreamUploading, setDreamUploading] = useState<boolean>(false);
   const [detailStudent, setDetailStudent] = useState<Student | null>(null);
 
   const initialFormState = {
@@ -135,6 +141,7 @@ export const StudentManagement: React.FC = () => {
 
     // ডিজিটাল সিকিউরিটি
     securityQrCode: '',
+    dreamGallery: [] as DreamGalleryPhoto[],
   };
 
   const [formData, setFormData] = useState(initialFormState);
@@ -297,7 +304,11 @@ export const StudentManagement: React.FC = () => {
 
       // সিকিউরিটি কোড
       securityQrCode: student.securityQrCode || `DLIKON-${student.classId.toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`,
+      dreamGallery: student.dreamGallery || [],
     });
+    setDreamDraftCareer(student.futurePlan?.dreamCareer || DREAM_CAREER_PRESETS[0].careerTag);
+    setDreamDraftTitle('');
+    setDreamDraftCaption('');
     setStudentModalTab('student');
     setIsAddModalOpen(true);
   };
@@ -1216,6 +1227,19 @@ export const StudentManagement: React.FC = () => {
                 <ShieldCheck className="w-3.5 h-3.5" />
                 <span>৫. ডিজিটাল সিকিউরিটি আইডি</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setStudentModalTab('dream_gallery')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  studentModalTab === 'dream_gallery'
+                    ? 'bg-amber-500 text-slate-950 shadow-xs'
+                    : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>৬. ইচ্ছে ডানা (AI ছবি · {toBengaliNumber(formData.dreamGallery.length)})</span>
+              </button>
             </div>
 
             <form onSubmit={handleSaveStudent} className="space-y-4 text-sm">
@@ -1906,6 +1930,165 @@ export const StudentManagement: React.FC = () => {
                 </div>
               )}
 
+              {/* TAB 6: DEVELOPER STATION - ICCHE DANA AI DREAM GALLERY */}
+              {studentModalTab === 'dream_gallery' && (
+                <div className="space-y-4 animate-in fade-in-50 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900 font-serif flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-amber-600" />
+                        <span>ডেভেলপার স্টেশন — ইচ্ছে ডানা (ভবিষ্যৎ স্বপ্ন AI ফটো গ্যালারি)</span>
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        কেবলমাত্র এখান থেকেই শিক্ষার্থীর কাস্টম AI-জেনারেটেড স্বপ্ন-ছবি যুক্ত ও পরিচালনা করা যাবে। শিক্ষার্থীর ড্যাশবোর্ডের &ldquo;ইচ্ছে ডানা&rdquo; গ্যালারিতে এই ছবিগুলো সবার আগে দৃশ্যমান হবে।
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">পেশা বা স্বপ্নের ক্যাটাগরি</label>
+                      <select
+                        value={dreamDraftCareer}
+                        onChange={(e) => setDreamDraftCareer(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-semibold"
+                      >
+                        {DREAM_CAREER_PRESETS.map((p) => (
+                          <option key={p.careerTag} value={p.careerTag}>
+                            {p.careerTag}
+                          </option>
+                        ))}
+                        <option value="অন্যান্য বিশেষ স্বপ্ন">অন্যান্য বিশেষ স্বপ্ন</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">ছবির অনুপ্রেরণামূলক শিরোনাম</label>
+                      <input
+                        type="text"
+                        value={dreamDraftTitle}
+                        onChange={(e) => setDreamDraftTitle(e.target.value)}
+                        placeholder={`যেমন: ভবিষ্যতের দক্ষ ${dreamDraftCareer} — ${formData.nameBn || 'শিক্ষার্থী'}`}
+                        className="w-full border border-slate-300 rounded-lg p-2 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">উৎসাহমূলক বার্তা / ক্যাপশন (ঐচ্ছিক)</label>
+                    <input
+                      type="text"
+                      value={dreamDraftCaption}
+                      onChange={(e) => setDreamDraftCaption(e.target.value)}
+                      placeholder="যেমন: নিয়মিত গণিত ও বিজ্ঞানের চর্চা তোমাকে এই উচ্চতায় পৌঁছে দেবে।"
+                      className="w-full border border-slate-300 rounded-lg p-2 text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold rounded-xl cursor-pointer transition">
+                      <ImageIcon className="w-4 h-4" />
+                      <span>{dreamUploading ? 'প্রসেস হচ্ছে...' : '+ AI জেনারেটেড ছবি আপলোড করুন (একাধিক সমর্থিত)'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={async (e) => {
+                          const files = Array.from(e.target.files || []);
+                          if (files.length === 0) return;
+                          setDreamUploading(true);
+                          try {
+                            const newPhotos: DreamGalleryPhoto[] = [];
+                            for (const file of files) {
+                              const rawBase64 = await new Promise<string>((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = (ev) => resolve((ev.target?.result as string) || '');
+                                reader.readAsDataURL(file);
+                              });
+                              if (rawBase64) {
+                                const compressed = await compressImageBase64(rawBase64, 720, 720, 0.8);
+                                newPhotos.push({
+                                  id: `dream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                                  careerTag: dreamDraftCareer,
+                                  titleBn:
+                                    dreamDraftTitle.trim() ||
+                                    `ভবিষ্যতের ${dreamDraftCareer} — ${formData.nameBn || 'ডি-লিকন শিক্ষার্থী'}`,
+                                  captionBn:
+                                    dreamDraftCaption.trim() ||
+                                    'প্রতিদিন নিজেকে এই উচ্চতায় কল্পনা করো ও নিষ্ঠার সাথে এগিয়ে যাও।',
+                                  imageUrl: compressed,
+                                  isAiGenerated: true,
+                                  createdAt: new Date().toISOString(),
+                                });
+                              }
+                            }
+                            if (newPhotos.length > 0) {
+                              setFormData((prev) => ({
+                                ...prev,
+                                dreamGallery: [...newPhotos, ...prev.dreamGallery],
+                              }));
+                              setDreamDraftTitle('');
+                              setDreamDraftCaption('');
+                            }
+                          } finally {
+                            setDreamUploading(false);
+                            e.target.value = '';
+                          }
+                        }}
+                      />
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      একাধিক ছবি একসাথে সিলেক্ট করা যাবে • স্বয়ংক্রিয়ভাবে কমপ্রেস হয়ে সেভ হবে
+                    </span>
+                  </div>
+
+                  {formData.dreamGallery.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-2">
+                      {formData.dreamGallery.map((item) => (
+                        <div
+                          key={item.id}
+                          className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col justify-between"
+                        >
+                          <div className="aspect-[4/3] bg-slate-100 relative overflow-hidden">
+                            <img
+                              src={item.imageUrl}
+                              alt={item.titleBn}
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  dreamGallery: prev.dreamGallery.filter((g) => g.id !== item.id),
+                                }))
+                              }
+                              className="absolute top-2 right-2 p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow cursor-pointer"
+                              title="ছবি সরান"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="p-2.5 space-y-1 text-xs">
+                            <div className="text-[11px] font-semibold text-indigo-700">{item.careerTag}</div>
+                            <div className="font-bold text-slate-900 line-clamp-1">{item.titleBn}</div>
+                            {item.captionBn && (
+                              <div className="text-[11px] text-slate-500 line-clamp-2">{item.captionBn}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-white border border-dashed border-slate-300 rounded-xl text-center text-xs text-slate-500">
+                      এই শিক্ষার্থীর জন্য এখনো কোনো কাস্টম AI স্বপ্ন-ছবি আপলোড করা হয়নি। তবে শিক্ষার্থীর &ldquo;ইচ্ছে ডানা&rdquo; গ্যালারিতে তার নির্বাচিত পেশা অনুযায়ী তৈরি করা অনুপ্রেরণামূলক ছবি স্বয়ংক্রিয়ভাবে দেখাবে।
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Bottom Actions */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
                 <div className="flex items-center gap-1">
@@ -1913,7 +2096,7 @@ export const StudentManagement: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        const tabs: ('student' | 'father' | 'mother' | 'address' | 'security')[] = ['student', 'father', 'mother', 'address', 'security'];
+                        const tabs: ('student' | 'father' | 'mother' | 'address' | 'security' | 'dream_gallery')[] = ['student', 'father', 'mother', 'address', 'security', 'dream_gallery'];
                         const idx = tabs.indexOf(studentModalTab);
                         if (idx > 0) setStudentModalTab(tabs[idx - 1]);
                       }}
@@ -1922,11 +2105,11 @@ export const StudentManagement: React.FC = () => {
                       ← পূর্ববর্তী ধাপ
                     </button>
                   )}
-                  {studentModalTab !== 'security' && (
+                  {studentModalTab !== 'dream_gallery' && (
                     <button
                       type="button"
                       onClick={() => {
-                        const tabs: ('student' | 'father' | 'mother' | 'address' | 'security')[] = ['student', 'father', 'mother', 'address', 'security'];
+                        const tabs: ('student' | 'father' | 'mother' | 'address' | 'security' | 'dream_gallery')[] = ['student', 'father', 'mother', 'address', 'security', 'dream_gallery'];
                         const idx = tabs.indexOf(studentModalTab);
                         if (idx < tabs.length - 1) setStudentModalTab(tabs[idx + 1]);
                       }}

@@ -165,6 +165,9 @@ interface DigitalSecurityGatepassViewProps {
   restrictedMode?: 'full' | 'student_only' | 'employee_scanner';
   forcedStudentId?: string;
   onRoleLogout?: () => void;
+  isDeviceLocked?: boolean;
+  onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
+  onAdminUnlockDevice?: (adminPin: string) => Promise<boolean>;
 }
 
 export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewProps> = ({
@@ -172,6 +175,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   restrictedMode = 'full',
   forcedStudentId,
   onRoleLogout,
+  isDeviceLocked = false,
+  onInstallLockedDashboard,
+  onAdminUnlockDevice,
 }) => {
   const {
     schoolInfo,
@@ -2229,13 +2235,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               }}
               onAcknowledgeAlarm={handleGuardianAcknowledge}
               buildGuardianVoiceMessage={buildGuardianVoiceMessage}
-              copiedLink={copiedGuardianLinkId === activeSignedInStudent.id}
-              onCopyDirectLink={() => handleCopyGuardianLink(activeSignedInStudent)}
               onLogout={() => {
                 handleGuardianLogout();
                 if (onRoleLogout) onRoleLogout();
               }}
-              onPhotoUpload={handleIdCardPhotoUpload}
+              isDeviceLocked={isDeviceLocked}
+              onInstallLockedDashboard={
+                onInstallLockedDashboard
+                  ? () => onInstallLockedDashboard(activeSignedInStudent)
+                  : undefined
+              }
+              onAdminUnlockDevice={onAdminUnlockDevice}
             />
           )}
         </div>

@@ -72,9 +72,30 @@ export interface Student {
   portalUserId?: string; // ইউনিক লগইন আইডি (যেমন: DL-4-01)
   futurePlan?: StudentFuturePlan;
   achievements?: StudentAchievement[];
+  dreamGallery?: DreamGalleryPhoto[];
+  monerBari?: MonerBariData;
 
   // ডিজিটাল সিকিউরিটি ও স্মার্ট আইডি কিউআর কোড
   securityQrCode?: string; // সিকিউর কিউআর কোড টোকেন
+}
+
+export interface DreamGalleryPhoto {
+  id: string;
+  careerTag: string;
+  titleBn: string;
+  captionBn?: string;
+  imageUrl: string;
+  isAiGenerated?: boolean;
+  createdAt: string;
+}
+
+export interface MonerBariData {
+  moodToday?: string;
+  dailyAffirmation?: string;
+  favoriteQuote?: string;
+  proudMoment?: string;
+  gratitudeNote?: string;
+  updatedAt?: string;
 }
 
 export interface StudentMilestone {

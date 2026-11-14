@@ -27,6 +27,14 @@ import { AdmitCardView } from './components/AdmitCardView';
 import { DigitalSecurityGatepassView } from './components/DigitalSecurityGatepassView';
 import { PortalAuthSession, Student } from './types';
 import { getStudentPortalId } from './utils/bengali';
+import {
+  getLockedStudentIdSync,
+  getLockedStudentSnapshotSync,
+  loadLockedStudentFromStorage,
+  lockDeviceToStudent,
+  unlockDeviceFromStudent,
+} from './utils/deviceLock';
+import { getLocalStaffAccounts, safeFetchJson } from './utils/portalAuthFallback';
 
 const SESSION_STORAGE_KEY = 'dlikon_portal_auth_session_v1';
 
@@ -45,8 +53,16 @@ function MainContent() {
     localStorage.getItem('dlikon_pwa_guardian_mode') === 'true' &&
     Boolean(localStorage.getItem('dlikon_guardian_paired_student_id'));
 
+  const [isDeviceLocked, setIsDeviceLocked] = useState<boolean>(() =>
+    Boolean(getLockedStudentIdSync() || getLockedStudentSnapshotSync())
+  );
+
   const [authSession, setAuthSession] = useState<PortalAuthSession | null>(() => {
     if (typeof window === 'undefined') return null;
+    const lockedSnap = getLockedStudentSnapshotSync();
+    if (lockedSnap?.session) {
+      return lockedSnap.session;
+    }
     try {
       const saved = localStorage.getItem(SESSION_STORAGE_KEY);
       if (saved) return JSON.parse(saved);
@@ -59,12 +75,33 @@ function MainContent() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
-  // Seamless support for ?guardian=... direct pairing links or saved Guardian PWA smartphone sessions
+  // Restore permanent device lock from IndexedDB even if localStorage was evicted or launched from Home Screen icon
   useEffect(() => {
-    if (authSession || students.length === 0) return;
+    let active = true;
+    loadLockedStudentFromStorage().then((snap) => {
+      if (!active || !snap) return;
+      setIsDeviceLocked(true);
+      setAuthSession((prev) => {
+        if (prev && prev.role === 'student' && prev.accountId === snap.studentId) {
+          return prev;
+        }
+        return snap.session;
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Seamless support for ?guardian=... direct pairing links, locked device IDs, or saved Guardian PWA smartphone sessions
+  useEffect(() => {
+    if (students.length === 0) return;
+    const lockedId = getLockedStudentIdSync();
+    if (authSession && !lockedId) return;
+
     const savedPairedId =
       typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
-    const targetId = urlGuardianParam || (isSavedGuardianMode ? savedPairedId : '');
+    const targetId = lockedId || urlGuardianParam || (isSavedGuardianMode ? savedPairedId : '');
     if (targetId) {
       const matched = students.find(
         (s) =>
@@ -80,9 +117,20 @@ function MainContent() {
           subLabel: `${clsName} • রোল ${matched.roll}`,
           staffCode: getStudentPortalId(matched),
         };
-        setAuthSession(autoSession);
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(autoSession));
-        setCurrentTab('dashboard');
+        if (
+          !authSession ||
+          authSession.role !== 'student' ||
+          authSession.accountId !== matched.id ||
+          authSession.displayName !== matched.nameBn
+        ) {
+          setAuthSession(autoSession);
+          localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(autoSession));
+          setCurrentTab('dashboard');
+        }
+        if (lockedId) {
+          setIsDeviceLocked(true);
+          document.title = `${matched.nameBn} · ডি-লিকন ড্যাশবোর্ড`;
+        }
       }
     }
   }, [authSession, students, classes, urlGuardianParam, isSavedGuardianMode]);
@@ -99,7 +147,43 @@ function MainContent() {
     }
   };
 
+  const handleInstallLockedDashboard = async (student: Student) => {
+    const clsName = classes.find((c) => c.id === student.classId)?.nameBn || student.classId;
+    const lockedSession = await lockDeviceToStudent(student, getStudentPortalId(student), clsName);
+    setIsDeviceLocked(true);
+    setAuthSession(lockedSession);
+    setCurrentTab('dashboard');
+  };
+
+  const handleAdminUnlockDevice = async (adminPin: string): Promise<boolean> => {
+    const cleanPin = adminPin.trim();
+    const localOfficialMatch =
+      cleanPin === 'admin123' ||
+      getLocalStaffAccounts().some((acc) => acc.role === 'official' && acc.password === cleanPin);
+
+    let isValidOfficial = localOfficialMatch;
+    if (!isValidOfficial) {
+      const serverCheck = await safeFetchJson('/api/portal/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'official', identifier: 'DL-ADMIN', password: cleanPin }),
+      });
+      if (serverCheck.reachable && serverCheck.ok && serverCheck.data?.success) {
+        isValidOfficial = true;
+      }
+    }
+
+    if (!isValidOfficial) return false;
+    await unlockDeviceFromStudent();
+    setIsDeviceLocked(false);
+    setAuthSession(null);
+    setCurrentTab('dashboard');
+    setIsSettingsOpen(false);
+    return true;
+  };
+
   const handleLogout = () => {
+    if (isDeviceLocked) return;
     setAuthSession(null);
     setCurrentTab('dashboard');
     setIsSettingsOpen(false);
@@ -145,6 +229,7 @@ function MainContent() {
         setCurrentTab={setCurrentTab}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={handleLogout}
+        isDeviceLocked={isDeviceLocked}
       />
 
       {/* Strictly Role-Isolated Workspace Views */}
@@ -160,6 +245,9 @@ function MainContent() {
                 restrictedMode="student_only"
                 forcedStudentId={authSession.accountId}
                 onRoleLogout={handleLogout}
+                isDeviceLocked={isDeviceLocked}
+                onInstallLockedDashboard={handleInstallLockedDashboard}
+                onAdminUnlockDevice={handleAdminUnlockDevice}
               />
             )}
           </>

@@ -200,10 +200,24 @@ async function startServer() {
               : Array.isArray(srvStd.achievements)
               ? srvStd.achievements
               : undefined;
+          const mergedDreamGallery =
+            Array.isArray(incStd.dreamGallery)
+              ? incStd.dreamGallery
+              : Array.isArray(srvStd.dreamGallery)
+              ? srvStd.dreamGallery
+              : undefined;
+          const mergedMonerBari =
+            incStd.monerBari && srvStd.monerBari
+              ? new Date(srvStd.monerBari.updatedAt || 0).getTime() > new Date(incStd.monerBari.updatedAt || 0).getTime()
+                ? srvStd.monerBari
+                : incStd.monerBari
+              : incStd.monerBari || srvStd.monerBari;
           return {
             ...incStd,
             futurePlan: mergedFuturePlan,
             achievements: mergedAchievements,
+            dreamGallery: mergedDreamGallery,
+            monerBari: mergedMonerBari,
             portalUserId: incStd.portalUserId || srvStd.portalUserId,
             guardianPin: incStd.guardianPin || srvStd.guardianPin,
           };

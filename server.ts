@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import { WebSocketServer, WebSocket } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,6 +162,69 @@ async function startServer() {
     res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
     next();
   });
+
+  // =========================================================================
+  // REAL-TIME GATEPASS MULTI-DEVICE PUSH HUB (WebSocket + SSE)
+  // =========================================================================
+  interface GatepassWsClient {
+    ws: WebSocket;
+    studentId: string;
+    role: string;
+    isAlive: boolean;
+  }
+  interface GatepassSseClient {
+    res: express.Response;
+    studentId: string;
+    role: string;
+  }
+
+  const gatepassWsClients = new Set<GatepassWsClient>();
+  const gatepassSseClients = new Set<GatepassSseClient>();
+
+  const shouldDeliverToSubscriber = (
+    sub: { studentId: string; role: string },
+    log: any
+  ): boolean => {
+    if (!log || !log.studentId) return false;
+    if (sub.role === 'official' || sub.role === 'employee' || !sub.studentId) {
+      return true;
+    }
+    return sub.studentId === log.studentId;
+  };
+
+  const broadcastGatepassEvent = (
+    eventType: 'gatepass:scan' | 'gatepass:acknowledge',
+    log: any,
+    extra: Record<string, any> = {}
+  ) => {
+    const payloadObj = {
+      type: eventType,
+      log,
+      serverTime: Date.now(),
+      ...extra,
+    };
+    const serialized = JSON.stringify(payloadObj);
+
+    for (const client of gatepassWsClients) {
+      if (client.ws.readyState === WebSocket.OPEN && shouldDeliverToSubscriber(client, log)) {
+        try {
+          client.ws.send(serialized);
+        } catch {
+          // Ignore broken socket; heartbeat cleans it up
+        }
+      }
+    }
+
+    for (const sseClient of gatepassSseClients) {
+      if (shouldDeliverToSubscriber(sseClient, log)) {
+        try {
+          sseClient.res.write(`event: gatepass\ndata: ${serialized}\n\n`);
+        } catch {
+          gatepassSseClients.delete(sseClient);
+        }
+      }
+    }
+  };
 
   // =========================================================================
   // API ROUTES
@@ -349,10 +413,41 @@ async function startServer() {
       const existingAdmissionReqs = Array.isArray(memoryDb?.admissionRequests) ? memoryDb.admissionRequests : [];
       const incomingAdmissionReqs = Array.isArray(incoming.admissionRequests) ? incoming.admissionRequests : existingAdmissionReqs;
 
+      // Smart merge libraryMaterials so uploaded files & download counters from other clients are preserved
+      const serverLib: any[] = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+      const incomingLib: any[] = Array.isArray(incoming.libraryMaterials) ? incoming.libraryMaterials : [];
+      const libMap = new Map<string, any>();
+      for (const sl of serverLib) {
+        if (sl && sl.id) libMap.set(sl.id, sl);
+      }
+      for (const il of incomingLib) {
+        if (il && il.id) {
+          const ex = libMap.get(il.id);
+          if (ex) {
+            const exUpdated = new Date(ex.updatedAt || 0).getTime();
+            const ilUpdated = new Date(il.updatedAt || 0).getTime();
+            const chosen = ilUpdated >= exUpdated ? il : ex;
+            libMap.set(il.id, {
+              ...chosen,
+              downloadsCount: Math.max(Number(ex.downloadsCount) || 0, Number(il.downloadsCount) || 0),
+            });
+          } else {
+            libMap.set(il.id, il);
+          }
+        }
+      }
+      const mergedLibraryMaterials = Array.from(libMap.values()).sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+
       const payload = {
         ...incoming,
         students: studentsToSave,
         securityLogs: mergedSecurityLogs,
+        libraryMaterials:
+          incomingLib.length === 0 && serverLib.length > 0 && !incoming.isExplicitClearLibrary
+            ? serverLib
+            : mergedLibraryMaterials,
         staffAccounts: incomingStaffAccounts.length > 0 ? incomingStaffAccounts : existingStaffAccounts,
         staffAttendance: incomingStaffAttendance.length > 0 ? incomingStaffAttendance : existingStaffAttendance,
         admissionRequests: incomingAdmissionReqs.length > 0 ? incomingAdmissionReqs : existingAdmissionReqs,
@@ -361,6 +456,15 @@ async function startServer() {
 
       const saved = saveDatabaseToFile(payload);
       if (saved) {
+        // Also push any brand-new security scan logs merged during general DB sync
+        const existingLogIds = new Set(serverLogs.map((l: any) => l?.id).filter(Boolean));
+        const newlyMergedLogs = (payload.securityLogs || []).filter(
+          (l: any) => l && l.id && !existingLogIds.has(l.id)
+        );
+        for (const freshLog of newlyMergedLogs) {
+          broadcastGatepassEvent('gatepass:scan', freshLog);
+        }
+
         return res.json({
           success: true,
           message: 'Saved to central school database',
@@ -610,6 +714,7 @@ async function startServer() {
       };
 
       saveDatabaseToFile(updatedDb);
+      broadcastGatepassEvent('gatepass:scan', savedLog);
 
       return res.json({
         success: true,
@@ -666,6 +771,7 @@ async function startServer() {
       saveDatabaseToFile(updatedDb);
 
       const totalAcknowledgedCount = updatedLogs.filter((l) => l.guardianAcknowledged).length;
+      broadcastGatepassEvent('gatepass:acknowledge', updatedTarget, { totalAcknowledgedCount });
 
       return res.json({
         success: true,
@@ -677,6 +783,56 @@ async function startServer() {
       console.error('[Server API] Security acknowledge error:', err);
       return res.status(500).json({ success: false, message: err?.message || 'Server error' });
     }
+  });
+
+  // Real-time Server-Sent Events (SSE) stream fallback for gatepass notifications
+  app.get('/api/security/stream', (req, res) => {
+    const studentId = String(req.query.studentId || '').trim();
+    const role = String(req.query.role || 'student').trim();
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') {
+      (res as any).flushHeaders();
+    }
+
+    const clientEntry: GatepassSseClient = { res, studentId, role };
+    gatepassSseClients.add(clientEntry);
+
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+    const recentLogs = studentId ? logs.filter((l) => l.studentId === studentId).slice(0, 10) : logs.slice(0, 20);
+
+    try {
+      res.write(
+        `event: gatepass\ndata: ${JSON.stringify({
+          type: 'gatepass:init',
+          serverTime: Date.now(),
+          logs: recentLogs,
+        })}\n\n`
+      );
+    } catch {
+      gatepassSseClients.delete(clientEntry);
+      return;
+    }
+
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(`: ping ${Date.now()}\n\n`);
+      } catch {
+        clearInterval(heartbeat);
+        gatepassSseClients.delete(clientEntry);
+      }
+    }, 20000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      gatepassSseClients.delete(clientEntry);
+    });
   });
 
   // GET latest security logs since a timestamp, optionally filtered for a student
@@ -1519,7 +1675,533 @@ async function startServer() {
   });
 
   // =========================================================================
+  // DIGITAL LIBRARY FILE UPLOAD, STREAMING, DOWNLOAD & METADATA ENDPOINTS
+  // Stores uploaded PDFs, e-books, docs, slides & images safely on server disk
+  // =========================================================================
+  const LIBRARY_DIR = path.join(DATA_DIR, 'library_files');
+  if (!fs.existsSync(LIBRARY_DIR)) {
+    fs.mkdirSync(LIBRARY_DIR, { recursive: true });
+  }
+
+  const sanitizeLibraryId = (raw: string): string =>
+    raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96) || `lib_${Date.now()}`;
+
+  const sanitizeLibraryFileName = (raw: string): string => {
+    const base = path.basename(raw || 'material.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
+    return base.slice(0, 120) || 'material.pdf';
+  };
+
+  const decodeGenericDataUrl = (dataUrl: string): { mime: string; buffer: Buffer } | null => {
+    if (typeof dataUrl !== 'string') return null;
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return null;
+    try {
+      return {
+        mime: match[1].trim(),
+        buffer: Buffer.from(match[2], 'base64'),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const buildStarterPdfBuffer = (heading: string, lines: string[]): Buffer => {
+    const escapePdfText = (txt: string) =>
+      txt.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+
+    const textOps: string[] = [
+      'BT',
+      '/F1 18 Tf',
+      '50 760 Td',
+      `(${escapePdfText('D-Likon Model Academy - Digital Library')}) Tj`,
+      '/F1 13 Tf',
+      '0 -28 Td',
+      `(${escapePdfText(heading)}) Tj`,
+      '/F1 11 Tf',
+      '0 -24 Td',
+    ];
+    for (const line of lines) {
+      textOps.push(`(${escapePdfText(line)}) Tj`);
+      textOps.push('0 -18 Td');
+    }
+    textOps.push('ET');
+    const streamContent = textOps.join('\n');
+
+    const obj1 = '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n';
+    const obj2 = '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n';
+    const obj3 =
+      '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n';
+    const obj4 = `4 0 obj\n<< /Length ${Buffer.byteLength(streamContent, 'utf8')} >>\nstream\n${streamContent}\nendstream\nendobj\n`;
+    const obj5 = '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n';
+
+    const header = '%PDF-1.4\n';
+    const offsets: number[] = [0];
+    let body = header;
+    for (const obj of [obj1, obj2, obj3, obj4, obj5]) {
+      offsets.push(Buffer.byteLength(body, 'utf8'));
+      body += obj;
+    }
+    const xrefStart = Buffer.byteLength(body, 'utf8');
+    let xref = `xref\n0 6\n0000000000 65535 f \n`;
+    for (let i = 1; i <= 5; i++) {
+      xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+    }
+    const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+    return Buffer.from(body + xref + trailer, 'utf8');
+  };
+
+  const STARTER_PDF_CONTENT: Record<string, { fileName: string; heading: string; lines: string[] }> = {
+    lib_starter_bangla_4: {
+      fileName: 'bangla-class-4-ebook.pdf',
+      heading: 'Class 4 Bangla E-Book & Study Guide (2026)',
+      lines: [
+        'Subject: Bangla | Class: Class 4 | Academic Year: 2026',
+        'Includes chapter summaries, vocabulary exercises, and creative questions.',
+        '1. Read each chapter carefully and practice word meanings.',
+        '2. Complete all short questions and grammar exercises in your notebook.',
+        'Uploaded by: Head Teacher, D-Likon Model Academy',
+      ],
+    },
+    lib_starter_math_guide: {
+      fileName: 'math-fraction-lecture.pdf',
+      heading: 'Primary Mathematics Lecture Sheet - Fractions & Geometry',
+      lines: [
+        'Subject: Mathematics | Class: Class 4 | Chapter: Fractions, HCF & LCM',
+        'Key Topics Covered:',
+        '- Proper, Improper, and Mixed Fractions conversion',
+        '- Addition and Subtraction of Fractions with Step-by-Step Examples',
+        '- Prime Factorization Method for HCF and LCM',
+        '- Practice Worksheet for Term Exam Preparation',
+      ],
+    },
+    lib_starter_english_grammar: {
+      fileName: 'english-grammar-handbook.pdf',
+      heading: 'English Grammar & Vocabulary Handbook (All Classes)',
+      lines: [
+        'Subject: English | Scope: All Classes | Academic Year: 2026',
+        'Essential Grammar Checklist:',
+        '1. Parts of Speech (Noun, Pronoun, Verb, Adjective, Adverb)',
+        '2. 12 Basic Tenses with Affirmative, Negative & Interrogative Forms',
+        '3. Sentence Structure & Punctuation Rules',
+        '4. Daily Vocabulary & Short Paragraph Templates',
+      ],
+    },
+  };
+
+  const findLibraryDiskFile = (materialId: string): string | null => {
+    const safeId = sanitizeLibraryId(materialId);
+    const prefix = `${safeId}__`;
+    try {
+      const files = fs.readdirSync(LIBRARY_DIR);
+      const match = files.find((f) => f.startsWith(prefix));
+      if (match) {
+        return path.join(LIBRARY_DIR, path.basename(match));
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  };
+
+  const inferMimeFromExt = (fileName: string): string => {
+    const ext = path.extname(fileName).toLowerCase();
+    if (ext === '.pdf') return 'application/pdf';
+    if (ext === '.epub') return 'application/epub+zip';
+    if (ext === '.mobi') return 'application/x-mobipocket-ebook';
+    if (ext === '.doc') return 'application/msword';
+    if (ext === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (ext === '.ppt') return 'application/vnd.ms-powerpoint';
+    if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    if (ext === '.xls') return 'application/vnd.ms-excel';
+    if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (ext === '.txt') return 'text/plain; charset=utf-8';
+    if (ext === '.png') return 'image/png';
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.webp') return 'image/webp';
+    return 'application/octet-stream';
+  };
+
+  app.get('/api/library', (_req, res) => {
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const items = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+    return res.json({ success: true, items });
+  });
+
+  app.post('/api/library/upload', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const {
+        id,
+        title,
+        description,
+        category,
+        fileType,
+        classId,
+        subjectId,
+        subjectNameBn,
+        chapter,
+        fileName,
+        mimeType,
+        fileSizeBytes,
+        fileDataUrl,
+        externalUrl,
+        uploadedBy,
+        uploadedByRole,
+        academicYear,
+      } = req.body || {};
+
+      if (!title || typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ success: false, message: 'মেটেরিয়ালের শিরোনাম আবশ্যক' });
+      }
+
+      const materialId = sanitizeLibraryId(id || `lib_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+      const nowIso = new Date().toISOString();
+
+      let finalFileName = sanitizeLibraryFileName(fileName || 'resource.pdf');
+      let finalMime = typeof mimeType === 'string' && mimeType ? mimeType : inferMimeFromExt(finalFileName);
+      let finalSize = Number(fileSizeBytes) || 0;
+      let finalUrl = '';
+      let isExternalUrl = false;
+
+      if (typeof fileDataUrl === 'string' && fileDataUrl.startsWith('data:')) {
+        const decoded = decodeGenericDataUrl(fileDataUrl);
+        if (!decoded || decoded.buffer.length === 0) {
+          return res.status(400).json({ success: false, message: 'ফাইল ডেটা সঠিকভাবে পড়া যায়নি' });
+        }
+        if (decoded.buffer.length > 42 * 1024 * 1024) {
+          return res.status(413).json({ success: false, message: 'ফাইলটি ৪২ মেগাবাইটের বেশি হতে পারবে না' });
+        }
+
+        const diskFilePath = path.join(LIBRARY_DIR, `${materialId}__${finalFileName}`);
+        fs.writeFileSync(diskFilePath, decoded.buffer);
+        finalMime = decoded.mime || finalMime;
+        finalSize = decoded.buffer.length;
+        finalUrl = `/api/library/file/${encodeURIComponent(materialId)}/${encodeURIComponent(finalFileName)}`;
+      } else if (typeof externalUrl === 'string' && externalUrl.trim()) {
+        const trimmedUrl = externalUrl.trim();
+        if (!/^https?:\/\//i.test(trimmedUrl)) {
+          return res.status(400).json({ success: false, message: 'সঠিক http:// বা https:// লিংক দিন' });
+        }
+        finalUrl = trimmedUrl;
+        isExternalUrl = true;
+        finalFileName = sanitizeLibraryFileName(fileName || 'external-link');
+        finalMime = mimeType || 'text/html';
+      } else {
+        return res.status(400).json({ success: false, message: 'অনুগ্রহ করে একটি ফাইল আপলোড করুন অথবা লিংক দিন' });
+      }
+
+      const material = {
+        id: materialId,
+        title: title.trim().slice(0, 240),
+        description: typeof description === 'string' ? description.trim().slice(0, 1500) : '',
+        category: category || 'pdf_lecture',
+        fileType: fileType || (isExternalUrl ? 'link' : 'pdf'),
+        classId: classId || 'all',
+        subjectId: typeof subjectId === 'string' ? subjectId : '',
+        subjectNameBn: typeof subjectNameBn === 'string' ? subjectNameBn : '',
+        chapter: typeof chapter === 'string' ? chapter.trim().slice(0, 160) : '',
+        fileName: finalFileName,
+        mimeType: finalMime,
+        fileSizeBytes: finalSize,
+        fileUrl: finalUrl,
+        isExternalUrl,
+        uploadedBy: typeof uploadedBy === 'string' && uploadedBy.trim() ? uploadedBy.trim() : 'শিক্ষক',
+        uploadedByRole: uploadedByRole === 'employee' ? 'employee' : 'official',
+        downloadsCount: 0,
+        academicYear: academicYear || '২০২৬',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      const currentItems: any[] = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+      const nextItems = [material, ...currentItems.filter((item) => item && item.id !== materialId)];
+
+      saveDatabaseToFile({
+        ...(memoryDb || {}),
+        libraryMaterials: nextItems,
+        _lastUpdated: nowIso,
+      });
+
+      return res.json({ success: true, material });
+    } catch (err: any) {
+      console.error('[Library Upload Error]:', err);
+      return res.status(500).json({ success: false, message: err?.message || 'Library upload error' });
+    }
+  });
+
+  app.put('/api/library/:id', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const targetId = req.params.id;
+      const updates = req.body || {};
+      const currentItems: any[] = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+      let updatedItem: any = null;
+      const nowIso = new Date().toISOString();
+
+      const nextItems = currentItems.map((item) => {
+        if (item && item.id === targetId) {
+          updatedItem = {
+            ...item,
+            ...(typeof updates.title === 'string' && updates.title.trim() ? { title: updates.title.trim().slice(0, 240) } : {}),
+            ...(typeof updates.description === 'string' ? { description: updates.description.trim().slice(0, 1500) } : {}),
+            ...(typeof updates.category === 'string' ? { category: updates.category } : {}),
+            ...(typeof updates.classId === 'string' ? { classId: updates.classId } : {}),
+            ...(typeof updates.subjectId === 'string' ? { subjectId: updates.subjectId } : {}),
+            ...(typeof updates.subjectNameBn === 'string' ? { subjectNameBn: updates.subjectNameBn } : {}),
+            ...(typeof updates.chapter === 'string' ? { chapter: updates.chapter.trim().slice(0, 160) } : {}),
+            ...(typeof updates.academicYear === 'string' ? { academicYear: updates.academicYear } : {}),
+            updatedAt: nowIso,
+          };
+          return updatedItem;
+        }
+        return item;
+      });
+
+      if (!updatedItem) {
+        return res.status(404).json({ success: false, message: 'Material not found' });
+      }
+
+      saveDatabaseToFile({
+        ...(memoryDb || {}),
+        libraryMaterials: nextItems,
+        _lastUpdated: nowIso,
+      });
+
+      return res.json({ success: true, material: updatedItem });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Update failed' });
+    }
+  });
+
+  app.post('/api/library/:id/download', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const targetId = req.params.id;
+      const currentItems: any[] = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+      let found: any = null;
+
+      const nextItems = currentItems.map((item) => {
+        if (item && item.id === targetId) {
+          found = {
+            ...item,
+            downloadsCount: (Number(item.downloadsCount) || 0) + 1,
+          };
+          return found;
+        }
+        return item;
+      });
+
+      if (found) {
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          libraryMaterials: nextItems,
+          _lastUpdated: new Date().toISOString(),
+        });
+        return res.json({ success: true, downloadsCount: found.downloadsCount });
+      }
+
+      return res.json({ success: true, downloadsCount: 1 });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Download count failed' });
+    }
+  });
+
+  app.delete('/api/library/:id', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const targetId = req.params.id;
+      const safeId = sanitizeLibraryId(targetId);
+
+      // Delete matching files from disk
+      try {
+        const files = fs.readdirSync(LIBRARY_DIR);
+        for (const f of files) {
+          if (f.startsWith(`${safeId}__`)) {
+            fs.unlinkSync(path.join(LIBRARY_DIR, f));
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+
+      const currentItems: any[] = Array.isArray(memoryDb?.libraryMaterials) ? memoryDb.libraryMaterials : [];
+      const nextItems = currentItems.filter((item) => item && item.id !== targetId);
+
+      saveDatabaseToFile({
+        ...(memoryDb || {}),
+        libraryMaterials: nextItems,
+        _lastUpdated: new Date().toISOString(),
+      });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Delete failed' });
+    }
+  });
+
+  app.get('/api/library/file/:id/:fileName', (req, res) => {
+    try {
+      const materialId = req.params.id;
+      const reqFileName = sanitizeLibraryFileName(req.params.fileName);
+      let diskFile = findLibraryDiskFile(materialId);
+
+      // Lazy-create starter curriculum PDF on disk if requested
+      if (!diskFile && STARTER_PDF_CONTENT[materialId]) {
+        const starter = STARTER_PDF_CONTENT[materialId];
+        const safeId = sanitizeLibraryId(materialId);
+        const generatedPath = path.join(LIBRARY_DIR, `${safeId}__${starter.fileName}`);
+        const pdfBuf = buildStarterPdfBuffer(starter.heading, starter.lines);
+        fs.writeFileSync(generatedPath, pdfBuf);
+        diskFile = generatedPath;
+      }
+
+      if (!diskFile || !fs.existsSync(diskFile)) {
+        return res.status(404).json({ success: false, message: 'File not found on server' });
+      }
+
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const meta = Array.isArray(memoryDb?.libraryMaterials)
+        ? memoryDb.libraryMaterials.find((item: any) => item && item.id === materialId)
+        : null;
+
+      const contentType = meta?.mimeType || inferMimeFromExt(diskFile);
+      const isDownload = req.query.download === '1' || req.query.download === 'true';
+      const cleanDownloadName = sanitizeLibraryFileName(meta?.fileName || reqFileName);
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader(
+        'Content-Disposition',
+        `${isDownload ? 'attachment' : 'inline'}; filename="${cleanDownloadName}"`
+      );
+      return res.sendFile(diskFile);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'File serve error' });
+    }
+  });
+
+  // =========================================================================
   const httpServer = http.createServer(app);
+
+  // Attach dedicated WebSocket server on /ws/gatepass for instant cross-device gatepass voice alerts
+  const gatepassWss = new WebSocketServer({ noServer: true });
+
+  gatepassWss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+    let urlObj: URL | null = null;
+    try {
+      urlObj = new URL(req.url || '/ws/gatepass', 'http://localhost');
+    } catch {
+      urlObj = null;
+    }
+
+    const clientEntry: GatepassWsClient = {
+      ws,
+      studentId: urlObj?.searchParams.get('studentId')?.trim() || '',
+      role: urlObj?.searchParams.get('role')?.trim() || 'student',
+      isAlive: true,
+    };
+    gatepassWsClients.add(clientEntry);
+
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+    const recentLogs = clientEntry.studentId
+      ? logs.filter((l) => l.studentId === clientEntry.studentId).slice(0, 10)
+      : logs.slice(0, 20);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'gatepass:init',
+          serverTime: Date.now(),
+          logs: recentLogs,
+        })
+      );
+    } catch {
+      // Ignore send error
+    }
+
+    ws.on('pong', () => {
+      clientEntry.isAlive = true;
+    });
+
+    ws.on('message', (rawMsg) => {
+      try {
+        const parsed = JSON.parse(String(rawMsg));
+        if (parsed && parsed.type === 'subscribe') {
+          clientEntry.studentId = String(parsed.studentId || '').trim();
+          clientEntry.role = String(parsed.role || clientEntry.role).trim();
+          const currentLogs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+          const subLogs = clientEntry.studentId
+            ? currentLogs.filter((l) => l.studentId === clientEntry.studentId).slice(0, 10)
+            : currentLogs.slice(0, 20);
+          ws.send(
+            JSON.stringify({
+              type: 'gatepass:init',
+              serverTime: Date.now(),
+              logs: subLogs,
+            })
+          );
+        } else if (parsed && parsed.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong', serverTime: Date.now() }));
+        }
+      } catch {
+        // Ignore malformed WS message
+      }
+    });
+
+    ws.on('close', () => {
+      gatepassWsClients.delete(clientEntry);
+    });
+    ws.on('error', () => {
+      gatepassWsClients.delete(clientEntry);
+    });
+  });
+
+  const wsHeartbeatTimer = setInterval(() => {
+    for (const client of gatepassWsClients) {
+      if (!client.isAlive) {
+        try {
+          client.ws.terminate();
+        } catch {}
+        gatepassWsClients.delete(client);
+        continue;
+      }
+      client.isAlive = false;
+      try {
+        client.ws.ping();
+      } catch {
+        gatepassWsClients.delete(client);
+      }
+    }
+  }, 25000);
+  wsHeartbeatTimer.unref?.();
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    try {
+      const reqUrl = new URL(request.url || '/', 'http://localhost');
+      if (reqUrl.pathname === '/ws/gatepass') {
+        gatepassWss.handleUpgrade(request, socket, head, (ws) => {
+          gatepassWss.emit('connection', ws, request);
+        });
+      }
+    } catch {
+      socket.destroy();
+    }
+  });
 
   // =========================================================================
   // VITE DEV MIDDLEWARE / STATIC PROD SERVING

@@ -53,12 +53,12 @@ export default defineConfig(() => {
           importScripts: ['/sw-student-icon.js'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-          navigateFallbackDenylist: [/^\/api/, /^\/@vite/, /^\/sw-student-icon\.js/],
+          navigateFallbackDenylist: [/^\/api/, /^\/ws/, /^\/@vite/, /^\/sw-student-icon\.js/],
           skipWaiting: true,
           clientsClaim: true,
           runtimeCaching: [
             {
-              urlPattern: /^\/api\/.*/i,
+              urlPattern: ({ url }) => url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/'),
               handler: 'NetworkOnly',
             },
           ],

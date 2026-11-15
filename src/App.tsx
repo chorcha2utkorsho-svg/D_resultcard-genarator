@@ -25,6 +25,7 @@ import { StandaloneVoucherPrintView } from './components/StandaloneVoucherPrintV
 import { SeatPlanView } from './components/SeatPlanView';
 import { AdmitCardView } from './components/AdmitCardView';
 import { DigitalSecurityGatepassView } from './components/DigitalSecurityGatepassView';
+import { DigitalLibraryView } from './components/DigitalLibraryView';
 import { PortalAuthSession, Student } from './types';
 import { getStudentPortalId } from './utils/bengali';
 import {
@@ -41,6 +42,15 @@ import {
   resetStudentAppIcon,
 } from './utils/studentAppIcon';
 import { getLocalStaffAccounts, safeFetchJson } from './utils/portalAuthFallback';
+import { useGatepassRealtime } from './hooks/useGatepassRealtime';
+import {
+  playAlarmChime,
+  replayPendingBlockedSpeech,
+  speakBengaliSpeech,
+  subscribePendingBlockedSpeech,
+  unlockMobileAudioAndSpeech,
+} from './utils/gatepassAudio';
+import { BellRing, Volume2, X } from 'lucide-react';
 
 const SESSION_STORAGE_KEY = 'dlikon_portal_auth_session_v1';
 
@@ -89,6 +99,23 @@ function MainContent() {
 
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+
+  const { liveRingingAlert, dismissLiveRingingAlert } = useGatepassRealtime({
+    role: authSession?.role,
+    studentId: authSession?.role === 'student' ? authSession.accountId : null,
+    enabled: Boolean(authSession),
+  });
+
+  const [pendingBlockedAlert, setPendingBlockedAlert] = useState<{
+    message: string;
+    logId: string;
+    studentNameBn?: string;
+    action?: 'entry' | 'exit';
+  } | null>(null);
+
+  useEffect(() => {
+    return subscribePendingBlockedSpeech(setPendingBlockedAlert);
+  }, []);
 
   // Instant ?unlock=1 recovery & permanent device lock restore from IndexedDB
   useEffect(() => {
@@ -292,8 +319,52 @@ function MainContent() {
         {/* ================= 1. STUDENT & GUARDIAN WORKSPACE ================= */}
         {authSession.role === 'student' && (
           <>
+            {(liveRingingAlert || pendingBlockedAlert) && currentTab !== 'dashboard' && (
+              <div className="mb-4 bg-slate-900 text-white rounded-2xl p-4 border-2 border-amber-400 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                    <BellRing className="w-4 h-4 shrink-0" />
+                    <span>লাইভ স্কুল গেটপাস নোটিফিকেশন</span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-slate-100 leading-relaxed">
+                    {(pendingBlockedAlert || liveRingingAlert)?.message}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (pendingBlockedAlert) {
+                        replayPendingBlockedSpeech();
+                      } else if (liveRingingAlert) {
+                        unlockMobileAudioAndSpeech(true);
+                        playAlarmChime();
+                        speakBengaliSpeech(liveRingingAlert.message, { delayMs: 260 });
+                      }
+                    }}
+                    className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Volume2 className="w-4 h-4" />
+                    <span>ভয়েস শুনুন</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={dismissLiveRingingAlert}
+                    aria-label="বন্ধ করুন"
+                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             {currentTab === 'calendar' ? (
               <AcademicCalendarView />
+            ) : currentTab === 'digital_library' ? (
+              <DigitalLibraryView
+                mode="student"
+                defaultClassId={students.find((s) => s.id === authSession.accountId)?.classId}
+              />
             ) : (
               <DigitalSecurityGatepassView
                 initialTab="guardian_portal"
@@ -333,6 +404,13 @@ function MainContent() {
             {currentTab === 'syllabus' && <SyllabusView />}
             {currentTab === 'question_papers' && <QuestionPaperGenerator />}
             {currentTab === 'notes' && <NotesView />}
+            {currentTab === 'digital_library' && (
+              <DigitalLibraryView
+                mode="manage"
+                uploaderName={authSession.displayName}
+                uploaderRole="employee"
+              />
+            )}
             {currentTab === 'calendar' && <AcademicCalendarView />}
           </>
         )}
@@ -387,6 +465,13 @@ function MainContent() {
             {currentTab === 'syllabus' && <SyllabusView />}
             {currentTab === 'question_papers' && <QuestionPaperGenerator />}
             {currentTab === 'notes' && <NotesView />}
+            {currentTab === 'digital_library' && (
+              <DigitalLibraryView
+                mode="manage"
+                uploaderName={authSession.displayName}
+                uploaderRole="official"
+              />
+            )}
           </>
         )}
       </main>

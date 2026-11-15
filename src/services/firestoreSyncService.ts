@@ -12,11 +12,12 @@ import {
   where,
   limit,
   writeBatch,
+  deleteDoc,
   Unsubscribe,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { SchoolInfo, SecurityGatepassLog, Student } from '../types';
+import { LibraryMaterial, SchoolInfo, SecurityGatepassLog, Student } from '../types';
 
 export const DEFAULT_SCHOOL_ID = 'dlikon_academy';
 export const BOOTSTRAP_ADMIN_EMAIL = 'chorcho2utkosho@gmail.com';
@@ -344,3 +345,123 @@ export function subscribeCloudSecurityLogs(
     }
   );
 }
+
+export async function syncLibraryMaterialToFirestore(
+  material: LibraryMaterial,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified) return;
+  await ensureSchoolDocument(user, schoolInfo);
+
+  const cleanId = safeId(material.id);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/libraryMaterials/${cleanId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'libraryMaterials', cleanId);
+
+  try {
+    const existingSnap = await getDoc(ref);
+    const existingData = existingSnap.exists() ? existingSnap.data() : undefined;
+
+    const payload: Record<string, any> = {
+      id: cleanId,
+      title: clampStr(material.title, 240),
+      category: material.category,
+      fileType: material.fileType,
+      classId: clampStr(material.classId || 'all', 64),
+      fileName: clampStr(material.fileName || 'material.pdf', 240),
+      mimeType: clampStr(material.mimeType || 'application/octet-stream', 128),
+      fileSizeBytes: Math.max(0, Number(material.fileSizeBytes) || 0),
+      fileUrl: clampStr(material.fileUrl, 1000),
+      isExternalUrl: Boolean(material.isExternalUrl),
+      uploadedBy: clampStr(material.uploadedBy || 'শিক্ষক', 160),
+      downloadsCount: Math.max(0, Number(material.downloadsCount) || 0),
+      academicYear: clampStr(material.academicYear || '২০২৬', 24),
+      ownerUid: existingData?.ownerUid ? safeId(existingData.ownerUid) : safeId(user.uid),
+      createdAt: existingData?.createdAt || serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    if (material.description) payload.description = clampStr(material.description, 1500);
+    if (material.subjectId) payload.subjectId = clampStr(material.subjectId, 64);
+    if (material.subjectNameBn) payload.subjectNameBn = clampStr(material.subjectNameBn, 120);
+    if (material.chapter) payload.chapter = clampStr(material.chapter, 160);
+    if (material.uploadedByRole === 'official' || material.uploadedByRole === 'employee') {
+      payload.uploadedByRole = material.uploadedByRole;
+    }
+
+    if (existingSnap.exists()) {
+      await updateDoc(ref, payload);
+    } else {
+      await setDoc(ref, payload);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteLibraryMaterialFromFirestore(
+  materialId: string,
+  user: User
+): Promise<void> {
+  if (!user.emailVerified) return;
+  const cleanId = safeId(materialId);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/libraryMaterials/${cleanId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'libraryMaterials', cleanId);
+  try {
+    await deleteDoc(ref);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function pullLibraryMaterialsFromFirestore(
+  user: User
+): Promise<LibraryMaterial[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/libraryMaterials`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'libraryMaterials');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  const q = isAdminUser
+    ? query(colRef)
+    : query(colRef, where('ownerUid', '==', safeId(user.uid)));
+
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data();
+      const createdAtIso =
+        data.createdAt && typeof data.createdAt.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : new Date().toISOString();
+      const updatedAtIso =
+        data.updatedAt && typeof data.updatedAt.toDate === 'function'
+          ? data.updatedAt.toDate().toISOString()
+          : createdAtIso;
+      return {
+        id: data.id || d.id,
+        title: data.title || '',
+        description: data.description || '',
+        category: data.category || 'pdf_lecture',
+        fileType: data.fileType || 'pdf',
+        classId: data.classId || 'all',
+        subjectId: data.subjectId || '',
+        subjectNameBn: data.subjectNameBn || '',
+        chapter: data.chapter || '',
+        fileName: data.fileName || 'material.pdf',
+        mimeType: data.mimeType || 'application/pdf',
+        fileSizeBytes: Number(data.fileSizeBytes) || 0,
+        fileUrl: data.fileUrl || '',
+        isExternalUrl: Boolean(data.isExternalUrl),
+        uploadedBy: data.uploadedBy || 'শিক্ষক',
+        uploadedByRole: data.uploadedByRole,
+        downloadsCount: Number(data.downloadsCount) || 0,
+        academicYear: data.academicYear || '২০২৬',
+        createdAt: createdAtIso,
+        updatedAt: updatedAtIso,
+      } as LibraryMaterial;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+

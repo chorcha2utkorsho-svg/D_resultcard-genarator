@@ -57,109 +57,21 @@ import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport'
 import { PWAInstallButton } from './PWAInstallButton';
 import { StudentPersonalDashboard } from './StudentPersonalDashboard';
 import { isDeviceExplicitlyUnlockedSync } from '../utils/deviceLock';
-
-// Shared Web Audio API context so background async polls can play alarm chimes on mobile after user gesture unlock
-let sharedAudioCtx: AudioContext | null = null;
-const getSharedAudioContext = (): AudioContext | null => {
-  try {
-    if (typeof window === 'undefined') return null;
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return null;
-    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
-      sharedAudioCtx = new AudioCtx();
-    }
-    if (sharedAudioCtx.state === 'suspended') {
-      sharedAudioCtx.resume().catch(() => {});
-    }
-    return sharedAudioCtx;
-  } catch {
-    return null;
-  }
-};
-
-// Unlock mobile Chrome / iOS Safari audio & speech synthesis during a user click gesture
-const unlockMobileAudioAndSpeech = (skipSpeechPrime = false) => {
-  try {
-    const ctx = getSharedAudioContext();
-    if (ctx) {
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
-      }
-      const buffer = ctx.createBuffer(1, 1, 22050);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start(0);
-    }
-    if (!skipSpeechPrime && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      // Prime speech engine quietly so async voice playback is allowed later
-      if (!window.speechSynthesis.speaking) {
-        const silentUtter = new SpeechSynthesisUtterance(' ');
-        silentUtter.volume = 0;
-        silentUtter.lang = 'bn-BD';
-        window.speechSynthesis.speak(silentUtter);
-      }
-    }
-  } catch {
-    // Safe fallback
-  }
-};
-
-// Web Audio API beep sound generator for realistic barcode scanner beep
-const playScannerBeep = (freq = 1900, durationMs = 120) => {
-  try {
-    const ctx = getSharedAudioContext();
-    if (!ctx) return;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, ctx.currentTime);
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start();
-    osc.stop(ctx.currentTime + durationMs / 1000);
-  } catch {
-    // Audio might be blocked until user gesture
-  }
-};
-
-// Play siren / alarm chime for guardian alert
-const playAlarmChime = () => {
-  try {
-    const ctx = getSharedAudioContext();
-    if (!ctx) return;
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc1.type = 'triangle';
-    osc1.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc1.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
-
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(880, ctx.currentTime);
-    osc2.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.15); // D6
-
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
-
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc1.start();
-    osc2.start();
-    osc1.stop(ctx.currentTime + 0.45);
-    osc2.stop(ctx.currentTime + 0.45);
-  } catch {
-    // Ignore
-  }
-};
+import {
+  buildGuardianVoiceMessage as buildGuardianVoiceMsgShared,
+  DEFAULT_DAILY_SCHEDULE,
+  playAlarmChime,
+  playScannerBeep,
+  setPendingBlockedSpeech,
+  speakBengaliSpeech,
+  unlockMobileAudioAndSpeech,
+} from '../utils/gatepassAudio';
+import {
+  broadcastLocalGatepassScan,
+  isGuardianAudioEnabledPref,
+  seenGatepassLogIds,
+  setGuardianAudioEnabledPref,
+} from '../hooks/useGatepassRealtime';
 
 interface DigitalSecurityGatepassViewProps {
   initialTab?: 'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs';
@@ -382,54 +294,38 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
   // Default & Dynamic Daily School Schedule for Guardian Voice Announcement
   const activeDailySchedule = useMemo(
-    () =>
-      schoolInfo.dailySchedule || {
-        ptStartTimeBn: 'আটটা পঞ্চান্ন মিনিটে',
-        classStartTimeBn: 'নয়টা বিশ মিনিটে',
-        breakTimeBn: 'দুপুর একটা দশ মিনিটে',
-        dismissalTimeBn: 'বিকাল চারটায়',
-      },
+    () => schoolInfo.dailySchedule || DEFAULT_DAILY_SCHEDULE,
     [schoolInfo.dailySchedule]
   );
 
-  const buildGuardianVoiceMessage = (student: Student, action: 'entry' | 'exit') => {
-    if (action === 'entry') {
-      return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গনে প্রবেশ করেছে। আজকে পিটি শুরু হবে ${activeDailySchedule.ptStartTimeBn}, ক্লাস শুরু হবে ${activeDailySchedule.classStartTimeBn}। প্রথমবার বিরতি থাকবে ${activeDailySchedule.breakTimeBn}। ছুটি ${activeDailySchedule.dismissalTimeBn}।`;
-    }
-    return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গন থেকে নিরাপদে প্রস্থান করেছে।`;
-  };
+  const buildGuardianVoiceMessage = (student: Student, action: 'entry' | 'exit') =>
+    buildGuardianVoiceMsgShared(student, action, activeDailySchedule);
 
-  // Bengali Voice Synthesis helper (forceSpeak=true allows guardian phone playback independent of gate mute)
-  const speakBengali = (text: string, forceSpeak: boolean = false) => {
-    if ((!forceSpeak && !voiceEnabled) || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+  // Android/iOS-safe Bengali Voice Synthesis helper (forceSpeak=true allows guardian phone playback independent of gate mute)
+  const speakBengali = (
+    text: string,
+    forceSpeak: boolean = false,
+    options: { delayMs?: number; logId?: string; studentNameBn?: string; action?: 'entry' | 'exit' } = {}
+  ) => {
+    if (!forceSpeak && !voiceEnabled) {
       return;
     }
-
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.92;
-      utterance.pitch = 1.02;
-      utterance.lang = 'bn-BD';
-
-      const voices = window.speechSynthesis.getVoices();
-      const bnVoice =
-        voices.find((v) => v.lang.toLowerCase() === 'bn-bd') ||
-        voices.find((v) => v.lang.toLowerCase().startsWith('bn')) ||
-        voices.find((v) => v.name.includes('Bengali') || v.name.includes('Bangla'));
-      if (bnVoice) {
-        utterance.voice = bnVoice;
-      }
-
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-
-      window.speechSynthesis.speak(utterance);
-    } catch (err) {
-      console.warn('Speech synthesis error:', err);
-      setIsSpeaking(false);
-    }
+    speakBengaliSpeech(text, {
+      delayMs: options.delayMs || 0,
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+      onBlocked: options.logId
+        ? () => {
+            setIsSpeaking(false);
+            setPendingBlockedSpeech({
+              message: text,
+              logId: options.logId!,
+              studentNameBn: options.studentNameBn,
+              action: options.action,
+            });
+          }
+        : () => setIsSpeaking(false),
+    });
   };
 
   // Perform Gate Verification and Broadcast
@@ -464,17 +360,25 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       operatorNote: `${actionLabel} সফলভাবে সম্পন্ন হয়েছে`,
     };
 
-    // 2. Add security log locally
+    // 2. Add security log locally & notify same-browser tabs
     addSecurityLog(newLogRecord);
+    broadcastLocalGatepassScan(newLogRecord);
 
-    // 2b. Broadcast to central server + Cloud Firestore for real-time guardian smartphone audio alarm
+    // 2b. Broadcast to central server (WebSocket + SSE push to all connected guardian phones) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     try {
       fetch('/api/security/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ log: newLogRecord }),
-      }).catch((err) => console.warn('Gate log sync error:', err));
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.log) {
+            addSecurityLog(data.log);
+          }
+        })
+        .catch((err) => console.warn('Gate log sync error:', err));
     } catch {
       // Non-fatal
     }
@@ -483,9 +387,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setLiveAnnouncement(voiceMsg);
     setScannerFeedback(`✓ ${student.nameBn} (${toBengaliRoll(student.roll)}) — ${actionLabel} অনুমোদিত!`);
 
-    // 3. Play Bengali Voice Announcement
+    // 3. Play Bengali Voice Announcement on scanner device
     if (voiceEnabled) {
-      speakBengali(voiceMsg);
+      speakBengali(voiceMsg, false, { delayMs: soundBeepEnabled ? 140 : 0 });
     }
 
     // Clear input
@@ -496,63 +400,58 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     }, 4500);
   };
 
-  // Filter and match students based on scanned QR code, barcode, roll, or phone
+  // Filter and match students based on scanned QR code, barcode, roll, or phone (exact ID/QR matches take strict priority!)
   const handleBarcodeSearchSubmit = (inputQuery: string) => {
     if (!inputQuery.trim()) return;
     const q = inputQuery.toLowerCase().trim();
     const cleanDigitsQ = q.replace(/\D/g, '');
 
-    const matched = students.find((s) => {
-      const rollStr = String(s.roll).trim();
-      const rollBn = toBengaliNumber(s.roll).trim();
-      const matchRoll = rollStr === q || rollBn === q;
-
+    // Pass 1: Strict unique matches (printed QR payload, student ID, birth registration, exact roll/phone)
+    let matched = students.find((s) => {
       const sBirthDigits = s.birthRegNo ? s.birthRegNo.replace(/\D/g, '') : '';
       const matchBirth = Boolean(sBirthDigits && cleanDigitsQ && sBirthDigits === cleanDigitsQ);
 
       const sIdLower = s.id.toLowerCase();
-      const matchId = sIdLower === q || sIdLower.endsWith(q) || q.includes(sIdLower);
+      const matchId = sIdLower === q || (q.length >= 4 && sIdLower.endsWith(q)) || q.includes(sIdLower);
 
       const matchQr = Boolean(
         s.securityQrCode &&
-          (s.securityQrCode.toLowerCase().includes(q) || q.includes(s.securityQrCode.toLowerCase()))
+          (s.securityQrCode.toLowerCase() === q || q.includes(s.securityQrCode.toLowerCase()))
       );
 
       const sClassStr = (s.classId || '').toLowerCase();
       const defaultQr = `dlikon-sec-${sClassStr}-${s.roll}-${s.id.slice(-4)}`.toLowerCase();
-      const matchDefaultQr = defaultQr === q || q.includes(defaultQr) || defaultQr.includes(q);
+      const matchDefaultQr = defaultQr === q || q.includes(defaultQr);
 
-      const hasRollSegment =
-        q.includes(`-${rollStr}-`) ||
-        q.endsWith(`-${rollStr}`) ||
-        q.startsWith(`${rollStr}-`) ||
-        q.includes(`_${rollStr}_`) ||
-        q.endsWith(`_${rollStr}`) ||
-        (q.includes(s.id.toLowerCase().slice(-4)) && q.includes(rollStr));
+      const rollStr = String(s.roll).trim();
+      const rollBn = toBengaliNumber(s.roll).trim();
+      const matchExactRoll = rollStr === q || rollBn === q;
 
-      const matchClassAndRoll = Boolean(sClassStr && q.includes(sClassStr) && q.includes(rollStr));
-
-      const matchName = s.nameBn.toLowerCase().includes(q) || (s.nameEn && s.nameEn.toLowerCase().includes(q));
-
-      const sFatherPhoneDigits = s.fatherPhone ? s.fatherPhone.replace(/\D/g, '') : '';
-      const sGuardianPhoneDigits = s.guardianPhone ? s.guardianPhone.replace(/\D/g, '') : '';
-      const matchPhone = Boolean(
-        (cleanDigitsQ.length >= 6 && sFatherPhoneDigits && sFatherPhoneDigits.includes(cleanDigitsQ)) ||
-          (cleanDigitsQ.length >= 6 && sGuardianPhoneDigits && sGuardianPhoneDigits.includes(cleanDigitsQ))
-      );
-
-      return (
-        matchRoll ||
-        matchBirth ||
-        matchId ||
-        matchQr ||
-        matchDefaultQr ||
-        hasRollSegment ||
-        matchClassAndRoll ||
-        matchName ||
-        matchPhone
-      );
+      return matchBirth || matchId || matchQr || matchDefaultQr || matchExactRoll;
     });
+
+    // Pass 2: Tokenized class+roll / name / phone match (strict token boundary on roll so Roll 1 never collides with Roll 10)
+    if (!matched) {
+      matched = students.find((s) => {
+        const rollStr = String(s.roll).trim();
+        const sClassStr = (s.classId || '').toLowerCase();
+        const rollBoundaryRegex = new RegExp(`(?:^|[-_\\s])${rollStr}(?:$|[-_\\s])`);
+        const hasRollSegment = rollBoundaryRegex.test(q);
+        const matchClassAndRoll = Boolean(sClassStr && q.includes(sClassStr) && hasRollSegment);
+
+        const matchName =
+          s.nameBn.toLowerCase().includes(q) || Boolean(s.nameEn && s.nameEn.toLowerCase().includes(q));
+
+        const sFatherPhoneDigits = s.fatherPhone ? s.fatherPhone.replace(/\D/g, '') : '';
+        const sGuardianPhoneDigits = s.guardianPhone ? s.guardianPhone.replace(/\D/g, '') : '';
+        const matchPhone = Boolean(
+          (cleanDigitsQ.length >= 6 && sFatherPhoneDigits && sFatherPhoneDigits.includes(cleanDigitsQ)) ||
+            (cleanDigitsQ.length >= 6 && sGuardianPhoneDigits && sGuardianPhoneDigits.includes(cleanDigitsQ))
+        );
+
+        return matchClassAndRoll || (hasRollSegment && q.includes(s.id.toLowerCase().slice(-4))) || matchName || matchPhone;
+      });
+    }
 
     if (matched) {
       handleVerifyStudent(matched);
@@ -937,28 +836,45 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setTimeout(() => setAckSuccessFeedback(null), 4000);
   };
 
-  // Guardian Real-Time Live Audio Alarm & Background Polling (Server-Clock Synced)
-  const [guardianAudioEnabled, setGuardianAudioEnabled] = useState<boolean>(true);
+  // Guardian Real-Time Live Audio Alarm & Background Sync (Shared Preference + Deduplicated)
+  const [guardianAudioEnabled, setGuardianAudioEnabledState] = useState<boolean>(() =>
+    isGuardianAudioEnabledPref()
+  );
+  const setGuardianAudioEnabled = (val: boolean) => {
+    setGuardianAudioEnabledState(val);
+    setGuardianAudioEnabledPref(val);
+  };
   const [guardianAudioTested, setGuardianAudioTested] = useState<boolean>(false);
   const [isGuardianAlarmRinging, setIsGuardianAlarmRinging] = useState<boolean>(false);
   const lastServerTimeRef = useRef<number>(0);
   const hasBaselinePollRef = useRef<boolean>(false);
-  const seenLogIdsRef = useRef<Set<string>>(new Set());
 
-  const handleTestGuardianAudio = () => {
+  const handleTestGuardianAudio = (playDemo: boolean = false) => {
+    setPendingBlockedSpeech(null);
     unlockMobileAudioAndSpeech(true);
     setGuardianAudioTested(true);
     setGuardianAudioEnabled(true);
     setIsGuardianAlarmRinging(true);
     playAlarmChime();
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+
+    if (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default' &&
+      localStorage.getItem('dlikon_notif_asked') !== '1'
+    ) {
+      localStorage.setItem('dlikon_notif_asked', '1');
       Notification.requestPermission().catch(() => {});
     }
+
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
-    const msg = targetStudent
+    const msg = playDemo && targetStudent
       ? buildGuardianVoiceMessage(targetStudent, 'entry')
-      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। আজকে পিটি শুরু হবে ${activeDailySchedule.ptStartTimeBn}, ক্লাস শুরু হবে ${activeDailySchedule.classStartTimeBn}।`;
-    speakBengali(msg, true);
+      : targetStudent
+      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় রয়েছে। গেটে আইডি কার্ড স্ক্যান হলেই স্বয়ংক্রিয়ভাবে মেসেজ বেজে উঠবে।`
+      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। গেটে কার্ড স্ক্যান হলেই স্বয়ংক্রিয়ভাবে ভয়েস মেসেজ বেজে উঠবে।`;
+
+    speakBengali(msg, true, { delayMs: 280 });
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
@@ -967,7 +883,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setTimeout(() => setIsGuardianAlarmRinging(false), 4500);
   };
 
-  // Keep latest signed-in student ref synced without resetting the 2.5s poll timer on profile edits
+  // Keep latest signed-in student ref synced without resetting poll timers on profile edits
   const activeSignedInStudentRef = useRef<Student | null>(null);
   activeSignedInStudentRef.current = activeSignedInStudent || loggedInGuardianStudent;
 
@@ -975,13 +891,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   useEffect(() => {
     hasBaselinePollRef.current = false;
     lastServerTimeRef.current = 0;
-    seenLogIdsRef.current = new Set();
   }, [loggedInGuardianStudent?.id]);
 
-  // Poll server every 2.5 seconds for new gatepass scan events for this child
+  // Fallback poll only when used inside Official preview mode (when top-level student App session isn't already running useGatepassRealtime)
   useEffect(() => {
     const signedStudentId = loggedInGuardianStudent?.id;
-    if (!signedStudentId) return;
+    if (!signedStudentId || forcedStudentId) return;
 
     let isSubscribed = true;
 
@@ -990,7 +905,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
         const announcement = buildGuardianVoiceMessage(studentObj, log.action);
-        speakBengali(announcement, true);
+        speakBengali(announcement, true, {
+          delayMs: 320,
+          logId: log.id,
+          studentNameBn: studentObj.nameBn,
+          action: log.action,
+        });
 
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
           try {
@@ -1021,7 +941,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             ? Math.max(0, lastServerTimeRef.current - 5000)
             : 0;
         const res = await fetch(
-          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}`
+          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}`,
+          { cache: 'no-store' }
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -1034,17 +955,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           hasBaselinePollRef.current = true;
           lastServerTimeRef.current = serverNow;
 
-          // Sync existing logs silently on login; only ring if a scan happened within last 8s of server time
           let newestLogToAlert: any = null;
           for (const log of serverLogs) {
             if (log.studentId === signedStudent.id) {
               addSecurityLog(log);
-              seenLogIdsRef.current.add(log.id);
+              const alreadySeen = seenGatepassLogIds.has(log.id);
+              seenGatepassLogIds.add(log.id);
               const sTime =
                 typeof log.serverTimestamp === 'number'
                   ? log.serverTimestamp
                   : new Date(log.timestamp).getTime() || 0;
-              if (!newestLogToAlert && sTime >= serverNow - 8000) {
+              if (!alreadySeen && !newestLogToAlert && sTime >= serverNow - 8000 && !log.guardianAcknowledged) {
                 newestLogToAlert = log;
               }
             }
@@ -1068,8 +989,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             if (sTime > maxSeenTime) {
               maxSeenTime = sTime;
             }
-            if (!seenLogIdsRef.current.has(log.id)) {
-              seenLogIdsRef.current.add(log.id);
+            if (!seenGatepassLogIds.has(log.id)) {
+              seenGatepassLogIds.add(log.id);
               if (!freshLogToAlert) {
                 freshLogToAlert = log;
               }
@@ -1086,7 +1007,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       }
     };
 
-    // Immediate baseline check + 2.5s interval
     pollServerForScans();
     const pollInterval = setInterval(pollServerForScans, 2500);
 
@@ -1095,6 +1015,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       clearInterval(pollInterval);
     };
   }, [
+    forcedStudentId,
     loggedInGuardianStudent?.id,
     guardianAudioEnabled,
     addSecurityLog,
@@ -1102,8 +1023,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     schoolInfo.name,
   ]);
 
-  // Real-time Firestore listener alarm: whenever Cloud Sync delivers a fresh scan in securityLogs,
-  // ring & speak immediately on Vercel / mobile PWA without waiting for Express polling!
+  // Real-time Firestore listener alarm (deduplicated via shared seenGatepassLogIds)
   const hasSeededCloudLogsRef = useRef<boolean>(false);
   useEffect(() => {
     hasSeededCloudLogsRef.current = false;
@@ -1120,9 +1040,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       let recentLog: SecurityGatepassLog | null = null;
       for (const l of childLogs) {
         const logTimeMs = l.serverTimestamp || new Date(l.timestamp).getTime() || 0;
-        if (!seenLogIdsRef.current.has(l.id)) {
-          seenLogIdsRef.current.add(l.id);
-          if (!recentLog && nowMs - logTimeMs <= 12000 && nowMs - logTimeMs >= -5000) {
+        if (!seenGatepassLogIds.has(l.id)) {
+          seenGatepassLogIds.add(l.id);
+          if (!recentLog && nowMs - logTimeMs <= 12000 && nowMs - logTimeMs >= -5000 && !l.guardianAcknowledged) {
             recentLog = l;
           }
         }
@@ -1130,7 +1050,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       if (recentLog && guardianAudioEnabled) {
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
-        speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true);
+        speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true, {
+          delayMs: 320,
+          logId: recentLog.id,
+          studentNameBn: signedStudent.nameBn,
+          action: recentLog.action,
+        });
         setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
       }
       return;
@@ -1138,8 +1063,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     let freshCloudLog: SecurityGatepassLog | null = null;
     for (const l of childLogs) {
-      if (!seenLogIdsRef.current.has(l.id)) {
-        seenLogIdsRef.current.add(l.id);
+      if (!seenGatepassLogIds.has(l.id)) {
+        seenGatepassLogIds.add(l.id);
         if (!freshCloudLog) {
           freshCloudLog = l;
         }
@@ -1149,7 +1074,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       setIsGuardianAlarmRinging(true);
       playAlarmChime();
       const announcement = buildGuardianVoiceMessage(signedStudent, freshCloudLog.action);
-      speakBengali(announcement, true);
+      speakBengali(announcement, true, {
+        delayMs: 320,
+        logId: freshCloudLog.id,
+        studentNameBn: signedStudent.nameBn,
+        action: freshCloudLog.action,
+      });
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
         try {
           new Notification(`${schoolInfo.name} • লাইভ গেটপাস`, {
@@ -2232,10 +2162,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               setGuardianReplyText={setGuardianReplyText}
               onTestAudio={handleTestGuardianAudio}
               onReplayAlarm={(log) => {
+                setPendingBlockedSpeech(null);
                 unlockMobileAudioAndSpeech(true);
                 playAlarmChime();
                 const msg = buildGuardianVoiceMessage(activeSignedInStudent, log.action);
-                speakBengali(msg, true);
+                speakBengali(msg, true, { delayMs: 280 });
               }}
               onAcknowledgeAlarm={handleGuardianAcknowledge}
               buildGuardianVoiceMessage={buildGuardianVoiceMessage}

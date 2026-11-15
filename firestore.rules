@@ -156,6 +156,42 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidLibraryMaterial(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'category', 'fileType', 'classId', 'fileName',
+          'mimeType', 'fileSizeBytes', 'fileUrl', 'uploadedBy',
+          'downloadsCount', 'academicYear', 'ownerUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'title', 'description', 'category', 'fileType', 'classId',
+          'subjectId', 'subjectNameBn', 'chapter', 'fileName', 'mimeType',
+          'fileSizeBytes', 'fileUrl', 'isExternalUrl', 'uploadedBy',
+          'uploadedByRole', 'downloadsCount', 'academicYear', 'ownerUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 240 &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 1500)) &&
+        data.category in ['ebook', 'pdf_lecture', 'notes', 'question_bank', 'guide'] &&
+        data.fileType in ['pdf', 'ebook', 'document', 'presentation', 'image', 'link'] &&
+        data.classId is string && data.classId.size() >= 1 && data.classId.size() <= 64 &&
+        (!('subjectId' in data) || (data.subjectId is string && data.subjectId.size() <= 64)) &&
+        (!('subjectNameBn' in data) || (data.subjectNameBn is string && data.subjectNameBn.size() <= 120)) &&
+        (!('chapter' in data) || (data.chapter is string && data.chapter.size() <= 160)) &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 240 &&
+        data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 128 &&
+        data.fileSizeBytes is number && data.fileSizeBytes >= 0 && data.fileSizeBytes <= 104857600 &&
+        data.fileUrl is string && data.fileUrl.size() >= 1 && data.fileUrl.size() <= 1000 &&
+        (!('isExternalUrl' in data) || data.isExternalUrl is bool) &&
+        data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 160 &&
+        (!('uploadedByRole' in data) || data.uploadedByRole in ['official', 'employee']) &&
+        data.downloadsCount is number && data.downloadsCount >= 0 && data.downloadsCount <= 10000000 &&
+        data.academicYear is string && data.academicYear.size() >= 1 && data.academicYear.size() <= 24 &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     match /admins/{uid} {
       allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
       allow list: if isBootstrappedAdmin();
@@ -314,6 +350,36 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['checkOutTime', 'status', 'updatedAt'])
           ));
         allow delete: if isAdmin() && isValidId(schoolId) && isValidId(attId);
+      }
+
+      match /libraryMaterials/{materialId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() ||
+          (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
+          isValidLibraryMaterial(incoming()) &&
+          incoming().id == materialId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+          (isAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
+          isValidLibraryMaterial(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'category', 'classId', 'subjectId',
+              'subjectNameBn', 'chapter', 'downloadsCount', 'academicYear', 'updatedAt'
+            ])
+          ));
+        allow delete: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
+          (isAdmin() || existing().ownerUid == request.auth.uid);
       }
     }
   }

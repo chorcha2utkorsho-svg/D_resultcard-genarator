@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Award,
   BellRing,
@@ -18,6 +18,7 @@ import {
   Home,
   Image as ImageIcon,
   KeyRound,
+  Library,
   Lock,
   LogOut,
   Map as MapIcon,
@@ -76,10 +77,17 @@ import { TimeManagementView } from './TimeManagementView';
 import { ExamCountdownWidget } from './ExamCountdownWidget';
 import { StudentBadgesPanel } from './StudentBadgesPanel';
 import { AcademicMilestoneRoadmap } from './AcademicMilestoneRoadmap';
+import { DigitalLibraryView } from './DigitalLibraryView';
 import {
   applyStudentPassportAppIcon,
   getShortStudentAppName,
 } from '../utils/studentAppIcon';
+import {
+  isMobileAudioUnlocked,
+  replayPendingBlockedSpeech,
+  subscribeMobileAudioUnlock,
+  subscribePendingBlockedSpeech,
+} from '../utils/gatepassAudio';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -94,7 +102,7 @@ interface StudentPersonalDashboardProps {
   isSubmittingAck: boolean;
   guardianReplyText: string;
   setGuardianReplyText: (val: string) => void;
-  onTestAudio: () => void;
+  onTestAudio: (playDemo?: boolean) => void;
   onReplayAlarm: (log: SecurityGatepassLog) => void;
   onAcknowledgeAlarm: (log: SecurityGatepassLog, customText?: string) => void;
   buildGuardianVoiceMessage: (student: Student, action: 'entry' | 'exit') => string;
@@ -166,12 +174,31 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     updateStudent,
     syllabi,
     calendarEvents,
+    libraryMaterials,
   } = useSchool();
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
+  const [mobileAudioUnlocked, setMobileAudioUnlocked] = useState<boolean>(() => isMobileAudioUnlocked());
+  const [pendingBlockedAlert, setPendingBlockedAlert] = useState<{
+    message: string;
+    logId: string;
+    studentNameBn?: string;
+    action?: 'entry' | 'exit';
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
+    const unsubPending = subscribePendingBlockedSpeech(setPendingBlockedAlert);
+    return () => {
+      unsubUnlock();
+      unsubPending();
+    };
+  }, []);
+
   const [dashboardSection, setDashboardSection] = useState<
     | 'overview'
+    | 'digital_library'
     | 'academic_roadmap'
     | 'moner_bari'
     | 'icche_dana'
@@ -180,6 +207,11 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     | 'achievements'
     | 'id_and_contact'
   >('overview');
+
+  const classLibraryCount = useMemo(
+    () => libraryMaterials.filter((m) => m.classId === 'all' || m.classId === student.classId).length,
+    [libraryMaterials, student.classId]
+  );
 
   const classObj = useMemo(
     () => classes.find((c) => c.id === student.classId),
@@ -630,15 +662,19 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           <div className="flex flex-wrap lg:flex-col items-stretch lg:items-end justify-between gap-2.5 shrink-0 border-t lg:border-t-0 lg:border-l border-slate-800 pt-4 lg:pt-0 lg:pl-6">
             <button
               type="button"
-              onClick={onTestAudio}
+              onClick={() => onTestAudio(false)}
               className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                 isGuardianAlarmRinging
                   ? 'bg-rose-600 text-white'
+                  : guardianAudioTested || mobileAudioUnlocked
+                  ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
                   : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
               }`}
             >
               <BellRing className="w-4 h-4" />
-              <span>{guardianAudioTested ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}</span>
+              <span>
+                {guardianAudioTested || mobileAudioUnlocked ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
+              </span>
             </button>
 
             <div className="flex items-center gap-2">
@@ -703,6 +739,11 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         <div className="bg-slate-900/90 border-t border-slate-800 px-4 sm:px-7 py-2.5 flex items-center gap-2 overflow-x-auto">
           {[
             { id: 'overview' as const, label: 'পড়াশোনা ও প্রগ্রেস', icon: TrendingUp },
+            {
+              id: 'digital_library' as const,
+              label: `ডিজিটাল লাইব্রেরি (${toBengaliNumber(classLibraryCount)})`,
+              icon: Library,
+            },
             { id: 'academic_roadmap' as const, label: 'একাডেমিক রোডম্যাপ', icon: MapIcon },
             { id: 'moner_bari' as const, label: 'মনের বাড়ি', icon: Home },
             { id: 'icche_dana' as const, label: 'ইচ্ছে ডানা', icon: Rocket },
@@ -735,6 +776,46 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           })}
         </div>
       </section>
+
+      {/* Pending Autoplay-Blocked Voice Alert (if scan arrived before user tapped mobile screen) */}
+      {pendingBlockedAlert && (
+        <div className="bg-rose-600 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-sm sm:text-base font-bold flex items-center gap-2">
+              <BellRing className="w-5 h-5 text-amber-300 shrink-0" />
+              <span>নতুন গেটপাস ভয়েস মেসেজ এসেছে — শুনতে ট্যাপ করুন</span>
+            </div>
+            <p className="text-xs sm:text-sm text-rose-50 leading-relaxed">{pendingBlockedAlert.message}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => replayPendingBlockedSpeech()}
+            className="px-4 py-2.5 bg-amber-300 hover:bg-amber-200 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shrink-0 shadow-sm"
+          >
+            <Volume2 className="w-4 h-4" />
+            <span>এখনই ভয়েস শুনুন</span>
+          </button>
+        </div>
+      )}
+
+      {/* One-Tap Mobile Audio Unlock Prompt (shown until user unlocks browser speaker permission) */}
+      {!mobileAudioUnlocked && !guardianAudioTested && guardianAudioEnabled && !pendingBlockedAlert && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start sm:items-center gap-2.5 text-xs sm:text-sm text-amber-950">
+            <Volume2 className="w-5 h-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+            <span>
+              <strong>অটোমেটিক গেটপাস ভয়েস এলার্ম:</strong> স্কুলের গেটে আইডি কার্ড স্ক্যান হওয়া মাত্রই এই ফোনে সরাসরি বাংলা ভয়েস মেসেজ শুনতে নিচের বাটনে একবার ট্যাপ করুন।
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onTestAudio(false)}
+            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap self-start sm:self-auto"
+          >
+            ভয়েস এলার্ম সক্রিয় করুন
+          </button>
+        </div>
+      )}
 
       {/* PWA Install Notice */}
       <PWAInstallButton variant="banner" />
@@ -951,10 +1032,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </div>
                 <button
                   type="button"
-                  onClick={onTestAudio}
+                  onClick={() => onTestAudio(true)}
                   className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap self-start sm:self-auto"
                 >
-                  স্যাম্পল অডিও শুনুন
+                  ডেমো ভয়েস টেস্ট
                 </button>
               </div>
             )}
@@ -1748,6 +1829,17 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             })
           }
           onOpenIccheDana={() => setDashboardSection('icche_dana')}
+        />
+      )}
+
+      {/* =================================================================== */}
+      {/* SECTION 1B: DIGITAL LIBRARY (ডিজিটাল লাইব্রেরি — বই ও পিডিএফ ডাউনলোড) */}
+      {/* =================================================================== */}
+      {dashboardSection === 'digital_library' && (
+        <DigitalLibraryView
+          mode="student"
+          defaultClassId={student.classId}
+          embedded
         />
       )}
 

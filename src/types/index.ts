@@ -613,4 +613,42 @@ export interface PortalAuthSession {
   staffCode?: string;
 }
 
+// ==================== DIGITAL LIBRARY MODULE TYPES ====================
 
+export type LibraryCategory =
+  | 'ebook'
+  | 'pdf_lecture'
+  | 'notes'
+  | 'question_bank'
+  | 'guide';
+
+export type LibraryFileType =
+  | 'pdf'
+  | 'ebook'
+  | 'document'
+  | 'presentation'
+  | 'image'
+  | 'link';
+
+export interface LibraryMaterial {
+  id: string;
+  title: string;
+  description?: string;
+  category: LibraryCategory;
+  fileType: LibraryFileType;
+  classId: string; // 'all' or specific SchoolClass.id
+  subjectId?: string;
+  subjectNameBn?: string;
+  chapter?: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  fileUrl: string; // '/api/library/file/<id>/<safeName>' or external HTTPS URL
+  isExternalUrl?: boolean;
+  uploadedBy: string;
+  uploadedByRole?: 'official' | 'employee';
+  downloadsCount: number;
+  academicYear: string;
+  createdAt: string;
+  updatedAt: string;
+}

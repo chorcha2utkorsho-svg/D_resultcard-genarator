@@ -24,6 +24,7 @@ import {
   LayoutGrid,
   FileBadge,
   Briefcase,
+  Library,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -43,6 +44,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
     examTerms,
     syllabi,
     questionPapers,
+    libraryMaterials,
     notes,
     exportDatabaseBackup,
     selectedYear,
@@ -186,6 +188,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
       icon: BookOpen,
       color: 'bg-rose-600 text-white',
       badge: 'প্রিন্ট উপযোগী',
+    },
+    {
+      id: 'digital_library',
+      title: 'ডিজিটাল লাইব্রেরি (ই-বুক ও পিডিএফ)',
+      desc: 'ই-বুক, পিডিএফ লেকচার শিট, নোট ও প্রশ্নব্যাংক আপলোড করে শিক্ষার্থীদের জন্য ডাউনলোডযোগ্য করুন',
+      icon: Library,
+      color: 'bg-slate-900 text-amber-300',
+      badge: `${toBengaliNumber(libraryMaterials.length)}টি রিসোর্স`,
     },
   ];
 

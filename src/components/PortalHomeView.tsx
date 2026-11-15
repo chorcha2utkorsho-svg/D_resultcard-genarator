@@ -28,6 +28,7 @@ import {
   safeFetchJson,
   saveLocalStaffAccounts,
 } from '../utils/portalAuthFallback';
+import { unlockMobileAudioAndSpeech } from '../utils/gatepassAudio';
 
 interface PortalHomeViewProps {
   onLoginSuccess: (session: PortalAuthSession, matchedStudent?: Student | null) => void;
@@ -85,6 +86,10 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
 
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (selectedPortal === 'student') {
+      // Unlock mobile Chrome / iOS Safari AudioContext + speechSynthesis inside synchronous user gesture
+      unlockMobileAudioAndSpeech(false);
+    }
     setFeedback(null);
     setIsLoading(true);
     try {
@@ -228,6 +233,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
 
   const handleStudentSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    unlockMobileAudioAndSpeech(false);
     setFeedback(null);
     setIsLoading(true);
     try {

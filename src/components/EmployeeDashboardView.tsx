@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   LogIn,
   LogOut,
+  Library,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession, StaffAccount, StaffAttendanceRecord } from '../types';
@@ -184,6 +185,13 @@ export const EmployeeDashboardView: React.FC<EmployeeDashboardViewProps> = ({
       desc: 'সৃজনশীল ও বহুনির্বাচনী পরীক্ষার প্রশ্নপত্র তৈরি',
       icon: HelpCircle,
       color: 'bg-amber-700 text-white',
+    },
+    {
+      id: 'digital_library',
+      title: 'ডিজিটাল লাইব্রেরি ও ই-বুক',
+      desc: 'পিডিএফ, ই-বুক, লেকচার শিট ও নোট আপলোড করে শিক্ষার্থীদের ডাউনলোডের জন্য উন্মুক্ত করুন',
+      icon: Library,
+      color: 'bg-slate-900 text-amber-300',
     },
     {
       id: 'calendar',

@@ -31,6 +31,7 @@ import {
   Cloud,
   CloudOff,
   Unlock,
+  Library,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession } from '../types';
@@ -93,6 +94,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
     { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
     { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
+    { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
   ];
 
   const employeeNavItems = [
@@ -100,6 +102,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'attendance', label: 'শিক্ষার্থী হাজিরা', icon: CalendarCheck },
     { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
     { id: 'employee_scanner', label: 'গেটপাস স্ক্যানার', icon: QrCode },
+    { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
     { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
     { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
     { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
@@ -108,6 +111,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const studentNavItems = [
     { id: 'dashboard', label: 'আমার ড্যাশবোর্ড ও গেটপাস', icon: User },
+    { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
     { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
   ];
 

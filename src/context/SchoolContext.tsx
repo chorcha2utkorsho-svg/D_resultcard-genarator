@@ -25,6 +25,9 @@ import {
   FeeInvoiceStatus,
   StudentFeeBillItem,
   SecurityGatepassLog,
+  LibraryMaterial,
+  LibraryCategory,
+  LibraryFileType,
 } from '../types';
 import { idbSet, idbGet } from '../utils/indexedDbStorage';
 import { compressImageBase64 } from '../utils/imageCompressor';
@@ -42,6 +45,7 @@ import {
   DEFAULT_FEE_HEADS,
   INITIAL_FEE_INVOICES,
   INITIAL_PAYMENT_RECEIPTS,
+  INITIAL_LIBRARY_MATERIALS,
 } from '../data/defaultData';
 import { calculateGrade, formatGpa, getOverallGradeFromGpa, toBengaliOrdinal, toBengaliNumber } from '../utils/bengali';
 import { numberToBengaliWords } from '../utils/bengaliWords';
@@ -55,10 +59,13 @@ import {
 import {
   acknowledgeSecurityLogInFirestore,
   batchPushStudentsToFirestore,
+  deleteLibraryMaterialFromFirestore,
   ensureSchoolDocument,
+  pullLibraryMaterialsFromFirestore,
   pullStudentsFromFirestore,
   pushSecurityLogToFirestore,
   subscribeCloudSecurityLogs,
+  syncLibraryMaterialToFirestore,
   syncStudentRecordToFirestore,
 } from '../services/firestoreSyncService';
 
@@ -126,6 +133,37 @@ interface SchoolContextType {
   questionPapers: QuestionPaper[];
   addQuestionPaper: (paper: Omit<QuestionPaper, 'id' | 'createdAt'>) => void;
   deleteQuestionPaper: (id: string) => void;
+  // Digital Library Module
+  libraryMaterials: LibraryMaterial[];
+  uploadLibraryMaterial: (params: {
+    title: string;
+    description?: string;
+    category: LibraryCategory;
+    fileType: LibraryFileType;
+    classId: string;
+    subjectId?: string;
+    subjectNameBn?: string;
+    chapter?: string;
+    fileName: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    fileDataUrl?: string;
+    externalUrl?: string;
+    uploadedBy: string;
+    uploadedByRole?: 'official' | 'employee';
+    academicYear: string;
+  }) => Promise<{ success: boolean; material?: LibraryMaterial; message?: string }>;
+  updateLibraryMaterial: (
+    id: string,
+    updates: Partial<
+      Pick<
+        LibraryMaterial,
+        'title' | 'description' | 'category' | 'classId' | 'subjectId' | 'subjectNameBn' | 'chapter' | 'academicYear'
+      >
+    >
+  ) => Promise<{ success: boolean; message?: string }>;
+  deleteLibraryMaterial: (id: string) => Promise<void>;
+  trackLibraryDownload: (id: string) => Promise<void>;
   exportDatabaseBackup: () => void;
   importDatabaseBackup: (jsonContent: string) => { success: boolean; message: string };
   resetToDefaultData: () => void;
@@ -368,6 +406,19 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return saved ? JSON.parse(saved) : INITIAL_QUESTION_PAPERS;
     } catch {
       return INITIAL_QUESTION_PAPERS;
+    }
+  });
+
+  const [libraryMaterials, setLibraryMaterials] = useState<LibraryMaterial[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_library_materials`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return INITIAL_LIBRARY_MATERIALS;
+    } catch {
+      return INITIAL_LIBRARY_MATERIALS;
     }
   });
 
@@ -729,6 +780,27 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
       hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
       syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
+      pullLibraryMaterialsFromFirestore(cloudUser)
+        .then((cloudMats) => {
+          if (cloudMats.length === 0) return;
+          setLibraryMaterials((prev) => {
+            const merged = new Map<string, LibraryMaterial>();
+            for (const item of prev) merged.set(item.id, item);
+            for (const cm of cloudMats) {
+              const ex = merged.get(cm.id);
+              if (!ex || new Date(cm.updatedAt).getTime() > new Date(ex.updatedAt).getTime()) {
+                merged.set(cm.id, {
+                  ...cm,
+                  downloadsCount: Math.max(cm.downloadsCount || 0, ex?.downloadsCount || 0),
+                });
+              }
+            }
+            return Array.from(merged.values()).sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+          });
+        })
+        .catch(() => {});
     }
 
     const unsub = subscribeCloudSecurityLogs(cloudUser, (cloudLogs) => {
@@ -805,6 +877,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     syllabi,
     notes,
     questionPapers,
+    libraryMaterials,
     smsLogs,
     smsGatewayConfig,
     attendanceRecords,
@@ -824,6 +897,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       syllabi,
       notes,
       questionPapers,
+      libraryMaterials,
       smsLogs,
       smsGatewayConfig,
       attendanceRecords,
@@ -1173,6 +1247,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               return db.calendarEvents;
             });
           }
+          if (Array.isArray(db.libraryMaterials) && db.libraryMaterials.length > 0) {
+            setLibraryMaterials((prev) => {
+              const serverList = db.libraryMaterials as LibraryMaterial[];
+              if (JSON.stringify(prev) === JSON.stringify(serverList)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
+              return serverList;
+            });
+          }
 
           if (!stateChangedFromServer) {
             suppressNextAutoPushRef.current = false;
@@ -1288,6 +1371,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     feeReceipts,
     securityLogs,
     calendarEvents,
+    libraryMaterials,
     pushToServer,
   ]);
 
@@ -1358,6 +1442,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.error('Failed to save question papers', e);
     }
   }, [questionPapers]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${STORAGE_KEY}_library_materials`, JSON.stringify(libraryMaterials));
+    } catch (e) {
+      console.error('Failed to save library materials', e);
+    }
+  }, [libraryMaterials]);
 
   const updateSchoolInfo = (info: Partial<SchoolInfo>) => {
     setSchoolInfo((prev) => ({ ...prev, ...info }));
@@ -2680,6 +2772,164 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setQuestionPapers((prev) => prev.filter((p) => p.id !== id));
   };
 
+  const uploadLibraryMaterial = async (params: {
+    title: string;
+    description?: string;
+    category: LibraryCategory;
+    fileType: LibraryFileType;
+    classId: string;
+    subjectId?: string;
+    subjectNameBn?: string;
+    chapter?: string;
+    fileName: string;
+    mimeType: string;
+    fileSizeBytes: number;
+    fileDataUrl?: string;
+    externalUrl?: string;
+    uploadedBy: string;
+    uploadedByRole?: 'official' | 'employee';
+    academicYear: string;
+  }): Promise<{ success: boolean; material?: LibraryMaterial; message?: string }> => {
+    const newId = `lib_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const nowIso = new Date().toISOString();
+
+    try {
+      const res = await fetch('/api/library/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: newId,
+          ...params,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success || !json.material) {
+        return {
+          success: false,
+          message: json?.message || 'সার্ভারে ফাইল আপলোড করতে সমস্যা হয়েছে।',
+        };
+      }
+      const savedMaterial = json.material as LibraryMaterial;
+      suppressNextAutoPushRef.current = true;
+      setLibraryMaterials((prev) => [savedMaterial, ...prev.filter((m) => m.id !== savedMaterial.id)]);
+      if (cloudUser && cloudUser.emailVerified) {
+        syncLibraryMaterialToFirestore(savedMaterial, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      }
+      return { success: true, material: savedMaterial };
+    } catch (err: any) {
+      // Offline / serverless fallback when external URL is used or small local file
+      if (params.externalUrl || (params.fileDataUrl && params.fileDataUrl.length < 300_000)) {
+        const fallbackMaterial: LibraryMaterial = {
+          id: newId,
+          title: params.title.trim(),
+          description: params.description?.trim() || '',
+          category: params.category,
+          fileType: params.fileType,
+          classId: params.classId || 'all',
+          subjectId: params.subjectId || '',
+          subjectNameBn: params.subjectNameBn || '',
+          chapter: params.chapter?.trim() || '',
+          fileName: params.fileName,
+          mimeType: params.mimeType,
+          fileSizeBytes: params.fileSizeBytes,
+          fileUrl: params.externalUrl || params.fileDataUrl || '',
+          isExternalUrl: Boolean(params.externalUrl),
+          uploadedBy: params.uploadedBy || 'শিক্ষক',
+          uploadedByRole: params.uploadedByRole || 'employee',
+          downloadsCount: 0,
+          academicYear: params.academicYear || '২০২৬',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        setLibraryMaterials((prev) => [fallbackMaterial, ...prev]);
+        return { success: true, material: fallbackMaterial };
+      }
+      return {
+        success: false,
+        message: err?.message || 'ফাইল আপলোড সম্পন্ন করা যায়নি।',
+      };
+    }
+  };
+
+  const updateLibraryMaterial = async (
+    id: string,
+    updates: Partial<
+      Pick<
+        LibraryMaterial,
+        'title' | 'description' | 'category' | 'classId' | 'subjectId' | 'subjectNameBn' | 'chapter' | 'academicYear'
+      >
+    >
+  ): Promise<{ success: boolean; message?: string }> => {
+    const nowIso = new Date().toISOString();
+    let updatedMaterial: LibraryMaterial | null = null;
+    setLibraryMaterials((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          updatedMaterial = { ...m, ...updates, updatedAt: nowIso };
+          return updatedMaterial;
+        }
+        return m;
+      })
+    );
+    try {
+      const res = await fetch(`/api/library/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) {
+        suppressNextAutoPushRef.current = true;
+      }
+    } catch {
+      // Auto-sync will persist state
+    }
+    if (updatedMaterial && cloudUser && cloudUser.emailVerified) {
+      syncLibraryMaterialToFirestore(updatedMaterial, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+    }
+    return { success: true };
+  };
+
+  const deleteLibraryMaterial = async (id: string): Promise<void> => {
+    setLibraryMaterials((prev) => prev.filter((m) => m.id !== id));
+    try {
+      const res = await fetch(`/api/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok) {
+        suppressNextAutoPushRef.current = true;
+      }
+    } catch {
+      // Non-fatal
+    }
+    if (cloudUser && cloudUser.emailVerified) {
+      deleteLibraryMaterialFromFirestore(id, cloudUser).catch(() => {});
+    }
+  };
+
+  const trackLibraryDownload = async (id: string): Promise<void> => {
+    let nextMat: LibraryMaterial | null = null;
+    setLibraryMaterials((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          nextMat = { ...m, downloadsCount: (m.downloadsCount || 0) + 1 };
+          return nextMat;
+        }
+        return m;
+      })
+    );
+    try {
+      const res = await fetch(`/api/library/${encodeURIComponent(id)}/download`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        suppressNextAutoPushRef.current = true;
+      }
+    } catch {
+      // Non-fatal
+    }
+    if (nextMat && cloudUser && cloudUser.emailVerified) {
+      syncLibraryMaterialToFirestore(nextMat, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+    }
+  };
+
   const addSMSLog = (log: Omit<SMSLog, 'id' | 'sentAt'>) => {
     const newLog: SMSLog = {
       ...log,
@@ -2872,6 +3122,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       syllabi,
       notes,
       questionPapers,
+      libraryMaterials,
       smsLogs,
       smsGatewayConfig,
       attendanceRecords,
@@ -2906,6 +3157,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (Array.isArray(data.syllabi)) setSyllabi(data.syllabi);
       if (Array.isArray(data.notes)) setNotes(data.notes);
       if (Array.isArray(data.questionPapers)) setQuestionPapers(data.questionPapers);
+      if (Array.isArray(data.libraryMaterials)) setLibraryMaterials(data.libraryMaterials);
       if (Array.isArray(data.smsLogs)) setSmsLogs(data.smsLogs);
       if (data.smsGatewayConfig) setSmsGatewayConfig(data.smsGatewayConfig);
       if (data.attendanceRecords) setAttendanceRecords(data.attendanceRecords);
@@ -3153,6 +3405,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setSyllabi(INITIAL_SYLLABI);
     setNotes(INITIAL_NOTES);
     setQuestionPapers(INITIAL_QUESTION_PAPERS);
+    setLibraryMaterials(INITIAL_LIBRARY_MATERIALS);
     setAttendanceRecords(INITIAL_ATTENDANCE_RECORDS);
     setCalendarEvents(INITIAL_CALENDAR_EVENTS);
     setFeeHeads(DEFAULT_FEE_HEADS);
@@ -3197,6 +3450,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         questionPapers,
         addQuestionPaper,
         deleteQuestionPaper,
+        libraryMaterials,
+        uploadLibraryMaterial,
+        updateLibraryMaterial,
+        deleteLibraryMaterial,
+        trackLibraryDownload,
         exportDatabaseBackup,
         importDatabaseBackup,
         resetToDefaultData,

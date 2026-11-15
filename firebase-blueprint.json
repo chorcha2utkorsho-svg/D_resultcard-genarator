@@ -342,6 +342,100 @@
       },
       "required": ["id", "staffId", "staffNameBn", "date", "checkInTime", "status", "ownerUid", "staffUid", "createdAt", "updatedAt"]
     },
+    "LibraryMaterial": {
+      "title": "LibraryMaterial",
+      "description": "Digital library resource metadata uploaded by teachers or school officials.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "category": {
+          "type": "string",
+          "enum": ["ebook", "pdf_lecture", "notes", "question_bank", "guide"],
+          "maxLength": 32
+        },
+        "fileType": {
+          "type": "string",
+          "enum": ["pdf", "ebook", "document", "presentation", "image", "link"],
+          "maxLength": 32
+        },
+        "classId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "subjectId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "subjectNameBn": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "chapter": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "fileSizeBytes": {
+          "type": "number"
+        },
+        "fileUrl": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "isExternalUrl": {
+          "type": "boolean"
+        },
+        "uploadedBy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "uploadedByRole": {
+          "type": "string",
+          "enum": ["official", "employee"],
+          "maxLength": 16
+        },
+        "downloadsCount": {
+          "type": "number"
+        },
+        "academicYear": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "title", "category", "fileType", "classId", "fileName", "mimeType", "fileSizeBytes", "fileUrl", "uploadedBy", "downloadsCount", "academicYear", "ownerUid", "createdAt", "updatedAt"]
+    },
     "ConnectionCheck": {
       "title": "ConnectionCheck",
       "description": "Health check document for validating server reachability.",
@@ -378,6 +472,10 @@
     "/schools/{schoolId}/staffAttendance/{attId}": {
       "schema": { "$ref": "#/entities/StaffAttendance" },
       "description": "Stores daily employee check-in and check-out logs."
+    },
+    "/schools/{schoolId}/libraryMaterials/{materialId}": {
+      "schema": { "$ref": "#/entities/LibraryMaterial" },
+      "description": "Stores categorized digital library PDFs, ebooks, and learning material metadata."
     },
     "/test/{docId}": {
       "schema": { "$ref": "#/entities/ConnectionCheck" },

@@ -75,6 +75,7 @@ export interface Student {
   dreamGallery?: DreamGalleryPhoto[];
   monerBari?: MonerBariData;
   timeManagement?: StudentTimeManagementData;
+  academicRoadmap?: StudentAcademicRoadmapData;
 
   // ডিজিটাল সিকিউরিটি ও স্মার্ট আইডি কিউআর কোড
   securityQrCode?: string; // সিকিউর কিউআর কোড টোকেন
@@ -176,6 +177,23 @@ export interface StudentTimeManagementData {
   routineBlocks: StudentRoutineBlock[];
   dailyLogs?: StudentDailyMomentumLog[];
   totalFocusMinutes?: number;
+  updatedAt?: string;
+}
+
+export type AcademicMilestoneStatus =
+  | 'not_started'
+  | 'in_progress'
+  | 'completed'
+  | 'needs_revision';
+
+export interface AcademicSyllabusMilestoneItem {
+  status: AcademicMilestoneStatus;
+  noteBn?: string;
+  updatedAt: string;
+}
+
+export interface StudentAcademicRoadmapData {
+  milestones: Record<string, AcademicSyllabusMilestoneItem>;
   updatedAt?: string;
 }
 

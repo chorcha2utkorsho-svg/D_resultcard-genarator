@@ -6,6 +6,7 @@ import {
   PlusSquare,
   Share,
   Smartphone,
+  Unlock,
   X,
 } from 'lucide-react';
 
@@ -21,6 +22,7 @@ interface HowToInstallModalProps {
   isInstallable?: boolean;
   isInstalled?: boolean;
   onTriggerNativeInstall?: () => Promise<boolean> | void;
+  onUnlockDevice?: () => void;
 }
 
 export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
@@ -35,6 +37,7 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
   isInstallable = false,
   isInstalled = false,
   onTriggerNativeInstall,
+  onUnlockDevice,
 }) => {
   const [platform, setPlatform] = useState<'android' | 'ios'>(defaultPlatform);
 
@@ -297,26 +300,42 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
           )}
 
           {/* Actions */}
-          <div className="flex flex-col sm:flex-row gap-2 pt-2">
-            {isInstallable && !isInstalled && onTriggerNativeInstall && (
+          <div className="space-y-2 pt-2">
+            <div className="flex flex-col sm:flex-row gap-2">
+              {isInstallable && !isInstalled && onTriggerNativeInstall && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onTriggerNativeInstall();
+                  }}
+                  className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>অটো ইনস্টল প্রম্পট খুলুন</span>
+                </button>
+              )}
               <button
                 type="button"
-                onClick={async () => {
-                  await onTriggerNativeInstall();
-                }}
-                className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                onClick={onClose}
+                className="flex-1 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition cursor-pointer"
               >
-                <Download className="w-4 h-4" />
-                <span>অটো ইনস্টল প্রম্পট খুলুন</span>
+                বুঝেছি, বন্ধ করুন
+              </button>
+            </div>
+
+            {isDeviceLocked && onUnlockDevice && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onUnlockDevice();
+                }}
+                className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Unlock className="w-3.5 h-3.5" />
+                <span>অন্য শিক্ষার্থী টেস্ট করতে চান? এখান থেকে ড্যাশবোর্ড আনলক করুন</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition cursor-pointer"
-            >
-              বুঝেছি, বন্ধ করুন
-            </button>
           </div>
         </div>
       </div>

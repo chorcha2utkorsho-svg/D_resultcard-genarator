@@ -3,6 +3,7 @@ import { idbDelete, idbGet, idbSet } from './indexedDbStorage';
 
 export const LOCKED_STUDENT_STORAGE_KEY = 'dlikon_locked_student_id';
 export const LOCKED_STUDENT_SNAPSHOT_KEY = 'dlikon_locked_student_snapshot';
+export const EXPLICITLY_UNLOCKED_KEY = 'dlikon_device_explicitly_unlocked';
 const SESSION_STORAGE_KEY = 'dlikon_portal_auth_session_v1';
 
 export interface LockedStudentSnapshot {
@@ -11,8 +12,26 @@ export interface LockedStudentSnapshot {
   lockedAt: string;
 }
 
+export function isDeviceExplicitlyUnlockedSync(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(EXPLICITLY_UNLOCKED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function clearExplicitUnlockFlag(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(EXPLICITLY_UNLOCKED_KEY);
+  } catch {
+    // Ignore storage error
+  }
+}
+
 export function getLockedStudentSnapshotSync(): LockedStudentSnapshot | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || isDeviceExplicitlyUnlockedSync()) return null;
   try {
     const raw = localStorage.getItem(LOCKED_STUDENT_SNAPSHOT_KEY);
     if (raw) {
@@ -28,7 +47,7 @@ export function getLockedStudentSnapshotSync(): LockedStudentSnapshot | null {
 }
 
 export function getLockedStudentIdSync(): string | null {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined' || isDeviceExplicitlyUnlockedSync()) return null;
   try {
     const params = new URLSearchParams(window.location.search);
     if (params.get('locked') === '1' && params.get('guardian')) {
@@ -61,6 +80,7 @@ export async function lockDeviceToStudent(
 
   if (typeof window !== 'undefined') {
     try {
+      localStorage.removeItem(EXPLICITLY_UNLOCKED_KEY);
       localStorage.setItem(LOCKED_STUDENT_STORAGE_KEY, student.id);
       localStorage.setItem(LOCKED_STUDENT_SNAPSHOT_KEY, JSON.stringify(snapshot));
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
@@ -84,6 +104,7 @@ export async function lockDeviceToStudent(
 }
 
 export async function loadLockedStudentFromStorage(): Promise<LockedStudentSnapshot | null> {
+  if (isDeviceExplicitlyUnlockedSync()) return null;
   const syncSnap = getLockedStudentSnapshotSync();
   if (syncSnap) return syncSnap;
 
@@ -140,6 +161,7 @@ export async function loadLockedStudentFromStorage(): Promise<LockedStudentSnaps
 export async function unlockDeviceFromStudent(): Promise<void> {
   if (typeof window !== 'undefined') {
     try {
+      localStorage.setItem(EXPLICITLY_UNLOCKED_KEY, '1');
       localStorage.removeItem(LOCKED_STUDENT_STORAGE_KEY);
       localStorage.removeItem(LOCKED_STUDENT_SNAPSHOT_KEY);
       localStorage.removeItem(SESSION_STORAGE_KEY);

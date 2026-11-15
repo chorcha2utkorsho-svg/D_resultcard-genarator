@@ -56,6 +56,7 @@ import { compressImageBase64 } from '../utils/imageCompressor';
 import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport';
 import { PWAInstallButton } from './PWAInstallButton';
 import { StudentPersonalDashboard } from './StudentPersonalDashboard';
+import { isDeviceExplicitlyUnlockedSync } from '../utils/deviceLock';
 
 // Shared Web Audio API context so background async polls can play alarm chimes on mobile after user gesture unlock
 let sharedAudioCtx: AudioContext | null = null;
@@ -168,6 +169,7 @@ interface DigitalSecurityGatepassViewProps {
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
   onAdminUnlockDevice?: (adminPin: string) => Promise<boolean>;
+  onUnlockDevice?: () => Promise<void> | void;
 }
 
 export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewProps> = ({
@@ -178,6 +180,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   isDeviceLocked = false,
   onInstallLockedDashboard,
   onAdminUnlockDevice,
+  onUnlockDevice,
 }) => {
   const {
     schoolInfo,
@@ -743,7 +746,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (students.length === 0) return;
 
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    const urlGuardian = params?.get('guardian');
+    const urlGuardian = !isDeviceExplicitlyUnlockedSync() ? params?.get('guardian') : null;
     const savedPairedId =
       typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
     const targetId = forcedStudentId || urlGuardian || savedPairedId;
@@ -2246,6 +2249,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   : undefined
               }
               onAdminUnlockDevice={onAdminUnlockDevice}
+              onUnlockDevice={onUnlockDevice}
             />
           )}
         </div>

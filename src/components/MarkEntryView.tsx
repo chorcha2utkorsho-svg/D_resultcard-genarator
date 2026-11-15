@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Save,
   CheckCircle2,
@@ -6,12 +6,21 @@ import {
   BookOpen,
   Calendar,
   Layers,
-  Sparkles,
   ArrowRight,
-  TrendingUp,
+  Mic,
+  MicOff,
+  Volume2,
+  RotateCcw,
+  AlertCircle,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
+import { AttendanceStatus } from '../types';
 import { calculateGrade, toBengaliNumber, toBengaliRoll } from '../utils/bengali';
+import {
+  BrowserSpeechRecognition,
+  getSpeechRecognitionConstructor,
+  parseClassroomVoiceCommands,
+} from '../utils/voiceCommandParser';
 
 interface MarkEntryViewProps {
   onNavigate?: (tab: string) => void;
@@ -25,6 +34,8 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
     examRecords,
     saveMarkRecord,
     bulkSaveSubjectMarks,
+    saveDailyAttendance,
+    getDailyAttendance,
     selectedYear,
     setSelectedYear,
     selectedExamId,
@@ -175,6 +186,413 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
       setSaveStatus(null);
     }, 2000);
   };
+
+  // Today's daily roll-call attendance map for quick voice & table entry
+  const todayIso = useMemo(() => {
+    const now = new Date();
+    const tzOffsetMs = now.getTimezoneOffset() * 60000;
+    return new Date(now.getTime() - tzOffsetMs).toISOString().split('T')[0];
+  }, []);
+
+  const todayAttendanceRecord = useMemo(
+    () => getDailyAttendance(selectedClassId, selectedSection || '', todayIso),
+    [getDailyAttendance, selectedClassId, selectedSection, todayIso]
+  );
+
+  const todayAttendanceMap = todayAttendanceRecord?.records || {};
+
+  const handleDailyAttendanceToggle = (studentId: string, status: AttendanceStatus) => {
+    const nextRecords = {
+      ...todayAttendanceMap,
+      [studentId]: { status },
+    };
+    saveDailyAttendance(
+      selectedClassId,
+      selectedSection || '',
+      todayIso,
+      selectedYear,
+      nextRecords
+    );
+    triggerSavedFeedback();
+  };
+
+  // Web Speech API state & continuous command processing
+  const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
+  const [speechLang, setSpeechLang] = useState<'bn-BD' | 'en-US'>('bn-BD');
+  const [isListening, setIsListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [voiceInterim, setVoiceInterim] = useState('');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [lastHighlightedStudentId, setLastHighlightedStudentId] = useState<string | null>(null);
+  const [voiceHistory, setVoiceHistory] = useState<
+    { id: string; time: string; transcript: string; summary: string; ok: boolean; undo?: () => void }[]
+  >([]);
+
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const isListeningIntentRef = useRef(false);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const executeVoiceRef = useRef<(transcript: string) => void>(() => {});
+
+  const highlightStudentRow = (studentId: string) => {
+    setLastHighlightedStudentId(studentId);
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    highlightTimeoutRef.current = setTimeout(() => {
+      setLastHighlightedStudentId(null);
+    }, 3500);
+  };
+
+  const executeVoiceTranscript = (rawText: string) => {
+    const commands = parseClassroomVoiceCommands(rawText, subjects);
+    const timeLabel = new Date().toLocaleTimeString('bn-BD', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
+    if (commands.length === 0) {
+      setVoiceHistory((prev) => [
+        {
+          id: `v_${Date.now()}_${Math.random()}`,
+          time: timeLabel,
+          transcript: rawText,
+          summary: 'কমান্ড বোঝা যায়নি — "রোল ৫ নম্বর ৮৫" বা "রোল ৩ উপস্থিত" বলুন',
+          ok: false,
+        },
+        ...prev.slice(0, 4),
+      ]);
+      return;
+    }
+
+    const appliedSummaries: string[] = [];
+    const undoCallbacks: (() => void)[] = [];
+
+    for (const cmd of commands) {
+      if (cmd.type === 'navigate_student') {
+        const idx = filteredStudents.findIndex((s) => s.id === activeStudentId);
+        const safeIdx = idx >= 0 ? idx : 0;
+        const targetIdx =
+          cmd.direction === 'next'
+            ? Math.min(filteredStudents.length - 1, safeIdx + 1)
+            : Math.max(0, safeIdx - 1);
+        const nextStudent = filteredStudents[targetIdx];
+        if (nextStudent) {
+          const prevActiveId = activeStudentId;
+          setActiveStudentId(nextStudent.id);
+          highlightStudentRow(nextStudent.id);
+          appliedSummaries.push(`রোল ${toBengaliRoll(nextStudent.roll)} (${nextStudent.nameBn})-এ স্থানান্তর`);
+          undoCallbacks.push(() => setActiveStudentId(prevActiveId));
+        }
+        continue;
+      }
+
+      const targetStudent =
+        cmd.roll !== undefined
+          ? filteredStudents.find((s) => s.roll === cmd.roll)
+          : entryMode === 'student_wise'
+          ? filteredStudents.find((s) => s.id === activeStudentId)
+          : (lastHighlightedStudentId && filteredStudents.find((s) => s.id === lastHighlightedStudentId)) ||
+            filteredStudents[0];
+
+      if (!targetStudent) {
+        appliedSummaries.push(
+          cmd.roll !== undefined
+            ? `রোল ${toBengaliRoll(cmd.roll)} এই শ্রেণিতে পাওয়া যায়নি`
+            : 'লক্ষ্য শিক্ষার্থী নির্বাচন করা যায়নি'
+        );
+        continue;
+      }
+
+      const recId = `${targetStudent.id}_${selectedExamId}_${selectedYear}`;
+      const existingRec = examRecords[recId];
+
+      if (cmd.type === 'daily_attendance') {
+        const prevStatus = todayAttendanceMap[targetStudent.id]?.status;
+        handleDailyAttendanceToggle(targetStudent.id, cmd.status);
+        highlightStudentRow(targetStudent.id);
+        const statusLabel =
+          cmd.status === 'present' ? 'উপস্থিত' : cmd.status === 'absent' ? 'অনুপস্থিত' : 'বিলম্ব';
+        appliedSummaries.push(
+          `রোল ${toBengaliRoll(targetStudent.roll)} (${targetStudent.nameBn}): আজকের হাজিরা → ${statusLabel}`
+        );
+        undoCallbacks.push(() => {
+          const next = { ...todayAttendanceMap };
+          if (prevStatus) {
+            next[targetStudent.id] = { status: prevStatus };
+          } else {
+            delete next[targetStudent.id];
+          }
+          saveDailyAttendance(selectedClassId, selectedSection || '', todayIso, selectedYear, next);
+        });
+        continue;
+      }
+
+      if (cmd.type === 'attendance_days') {
+        const maxDays = existingRec?.workingDays || 120;
+        const clampedDays = Math.min(maxDays, Math.max(0, cmd.value));
+        const prevDays = existingRec?.attendance ?? 110;
+        saveMarkRecord(
+          targetStudent.id,
+          selectedExamId,
+          selectedYear,
+          selectedClassId,
+          selectedSection,
+          selectedSubjectId || subjects[0]?.id || '',
+          {},
+          { attendance: clampedDays }
+        );
+        setLocalMarks((prev) => ({
+          ...prev,
+          [targetStudent.id]: {
+            ...(prev[targetStudent.id] || { examMarks: '', monthly20: '', workingDays: '120', attendance: '110', remarks: '' }),
+            attendance: String(clampedDays),
+          },
+        }));
+        highlightStudentRow(targetStudent.id);
+        triggerSavedFeedback();
+        appliedSummaries.push(
+          `রোল ${toBengaliRoll(targetStudent.roll)}: উপস্থিতির দিন → ${toBengaliNumber(clampedDays)}`
+        );
+        undoCallbacks.push(() => {
+          saveMarkRecord(
+            targetStudent.id,
+            selectedExamId,
+            selectedYear,
+            selectedClassId,
+            selectedSection,
+            selectedSubjectId || subjects[0]?.id || '',
+            {},
+            { attendance: prevDays }
+          );
+        });
+        continue;
+      }
+
+      const targetSubId = cmd.subjectId || selectedSubjectId || subjects[0]?.id || '';
+      const targetSub = subjects.find((s) => s.id === targetSubId);
+      const subFull = targetSub?.fullMarks || fullMarks;
+      const existingSubMark = existingRec?.marks[targetSubId];
+
+      if (cmd.type === 'monthly_mark') {
+        if (targetSub?.hasMonthlyExam === false) {
+          appliedSummaries.push(`${targetSub.nameBn} বিষয়ে মাসিক ২০% প্রযোজ্য নয়`);
+          continue;
+        }
+        const clampedMonthly = Math.min(20, Math.max(0, cmd.value));
+        const prevMonthly = existingSubMark?.monthlyMarks20 ?? null;
+        const examNum = existingSubMark?.examMarks ?? null;
+        saveMarkRecord(
+          targetStudent.id,
+          selectedExamId,
+          selectedYear,
+          selectedClassId,
+          selectedSection,
+          targetSubId,
+          { examMarks: examNum, monthlyMarks20: clampedMonthly }
+        );
+        if (targetSubId === selectedSubjectId) {
+          setLocalMarks((prev) => ({
+            ...prev,
+            [targetStudent.id]: {
+              ...(prev[targetStudent.id] || { examMarks: '', monthly20: '', workingDays: '120', attendance: '110', remarks: '' }),
+              monthly20: String(clampedMonthly),
+            },
+          }));
+        }
+        highlightStudentRow(targetStudent.id);
+        triggerSavedFeedback();
+        appliedSummaries.push(
+          `রোল ${toBengaliRoll(targetStudent.roll)} (${targetSub?.nameBn || 'বিষয়'}): মাসিক ২০% → ${toBengaliNumber(clampedMonthly)}`
+        );
+        undoCallbacks.push(() => {
+          saveMarkRecord(
+            targetStudent.id,
+            selectedExamId,
+            selectedYear,
+            selectedClassId,
+            selectedSection,
+            targetSubId,
+            { examMarks: examNum, monthlyMarks20: prevMonthly }
+          );
+        });
+        continue;
+      }
+
+      if (cmd.type === 'exam_mark') {
+        const clampedExam = Math.min(subFull, Math.max(0, cmd.value));
+        const prevExam = existingSubMark?.examMarks ?? null;
+        const monthlyNum = existingSubMark?.monthlyMarks20 ?? null;
+        saveMarkRecord(
+          targetStudent.id,
+          selectedExamId,
+          selectedYear,
+          selectedClassId,
+          selectedSection,
+          targetSubId,
+          { examMarks: clampedExam, monthlyMarks20: monthlyNum }
+        );
+        if (targetSubId === selectedSubjectId) {
+          setLocalMarks((prev) => ({
+            ...prev,
+            [targetStudent.id]: {
+              ...(prev[targetStudent.id] || { examMarks: '', monthly20: '', workingDays: '120', attendance: '110', remarks: '' }),
+              examMarks: String(clampedExam),
+            },
+          }));
+        }
+        highlightStudentRow(targetStudent.id);
+        triggerSavedFeedback();
+        appliedSummaries.push(
+          `রোল ${toBengaliRoll(targetStudent.roll)} (${targetSub?.nameBn || 'বিষয়'}): প্রাপ্ত নম্বর → ${toBengaliNumber(clampedExam)}`
+        );
+        undoCallbacks.push(() => {
+          saveMarkRecord(
+            targetStudent.id,
+            selectedExamId,
+            selectedYear,
+            selectedClassId,
+            selectedSection,
+            targetSubId,
+            { examMarks: prevExam, monthlyMarks20: monthlyNum }
+          );
+        });
+      }
+    }
+
+    setVoiceHistory((prev) => [
+      {
+        id: `v_${Date.now()}_${Math.random()}`,
+        time: timeLabel,
+        transcript: rawText,
+        summary: appliedSummaries.join(' • '),
+        ok: undoCallbacks.length > 0,
+        undo:
+          undoCallbacks.length > 0
+            ? () => {
+                undoCallbacks.forEach((fn) => fn());
+              }
+            : undefined,
+      },
+      ...prev.slice(0, 4),
+    ]);
+  };
+
+  executeVoiceRef.current = executeVoiceTranscript;
+
+  const stopVoiceListening = () => {
+    isListeningIntentRef.current = false;
+    setIsListening(false);
+    setVoiceInterim('');
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        // ignore stop errors
+      }
+      recognitionRef.current = null;
+    }
+  };
+
+  const startVoiceListening = (overrideLang?: 'bn-BD' | 'en-US') => {
+    const RecognitionCtor = getSpeechRecognitionConstructor();
+    if (!RecognitionCtor) {
+      setVoiceError('এই ব্রাউজারে Web Speech API সাপোর্ট করে না। অনুগ্রহ করে Chrome বা Edge ব্রাউজার ব্যবহার করুন।');
+      return;
+    }
+
+    stopVoiceListening();
+    setVoiceError(null);
+    const activeLang = overrideLang || speechLang;
+
+    try {
+      const rec = new RecognitionCtor();
+      rec.lang = activeLang;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+
+      isListeningIntentRef.current = true;
+      recognitionRef.current = rec;
+
+      rec.onstart = () => {
+        setIsListening(true);
+        setVoiceError(null);
+      };
+
+      rec.onresult = (event) => {
+        let interimBuffer = '';
+        let finalBuffer = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const res = event.results[i];
+          const text = res[0]?.transcript || '';
+          if (res.isFinal) {
+            finalBuffer += `${text} `;
+          } else {
+            interimBuffer += text;
+          }
+        }
+
+        setVoiceInterim(interimBuffer.trim());
+
+        if (finalBuffer.trim()) {
+          const finalText = finalBuffer.trim();
+          setVoiceTranscript(finalText);
+          executeVoiceRef.current(finalText);
+        }
+      };
+
+      rec.onerror = (ev) => {
+        if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+          setVoiceError('মাইক্রোফোনের অনুমতি পাওয়া যায়নি। ব্রাউজার অ্যাড্রেস বার থেকে Microphone Allow করুন।');
+          isListeningIntentRef.current = false;
+          setIsListening(false);
+        } else if (ev.error === 'audio-capture') {
+          setVoiceError('কোনো মাইক্রোফোন পাওয়া যায়নি।');
+          isListeningIntentRef.current = false;
+          setIsListening(false);
+        } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
+          setVoiceError(`ভয়েস ত্রুটি: ${ev.error}`);
+        }
+      };
+
+      rec.onend = () => {
+        if (isListeningIntentRef.current) {
+          try {
+            rec.start();
+          } catch {
+            setIsListening(false);
+            isListeningIntentRef.current = false;
+          }
+        } else {
+          setIsListening(false);
+        }
+      };
+
+      rec.start();
+    } catch {
+      setVoiceError('ভয়েস রেকগনিশন চালু করা যায়নি।');
+      setIsListening(false);
+      isListeningIntentRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      isListeningIntentRef.current = false;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.onend = null;
+          recognitionRef.current.stop();
+        } catch {
+          // ignore
+        }
+      }
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Quick fill monthly assessment
   const handleBulkFillMonthly = (val: number) => {
@@ -371,6 +789,186 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
         </div>
       </div>
 
+      {/* WEB SPEECH API: VOICE ATTENDANCE & MARK ENTRY DOCK */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition ${
+                isListening
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+              }`}
+            >
+              {isListening ? <Volume2 className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 font-serif">
+                  ভয়েস কমান্ড এন্ট্রি (হাজিরা ও নম্বর)
+                </h3>
+                {isListening ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                    মাইক্রোফোন সক্রিয় — কথা বলুন
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600">
+                    Web Speech API
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                ক্লাসরুমে বসে মুখে বললেই রোল নম্বর অনুযায়ী হাজিরা ও পরীক্ষার নম্বর স্বয়ংক্রিয়ভাবে এন্ট্রি হয়ে যাবে।
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Speech Recognition Language Selector */}
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setSpeechLang('bn-BD');
+                  if (isListening) startVoiceListening('bn-BD');
+                }}
+                className={`px-2.5 py-1.5 rounded-md font-semibold transition cursor-pointer ${
+                  speechLang === 'bn-BD' ? 'bg-white text-indigo-800 shadow-sm font-bold' : 'text-slate-600'
+                }`}
+              >
+                বাংলা
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSpeechLang('en-US');
+                  if (isListening) startVoiceListening('en-US');
+                }}
+                className={`px-2.5 py-1.5 rounded-md font-semibold transition cursor-pointer ${
+                  speechLang === 'en-US' ? 'bg-white text-indigo-800 shadow-sm font-bold' : 'text-slate-600'
+                }`}
+              >
+                English
+              </button>
+            </div>
+
+            {isListening ? (
+              <button
+                type="button"
+                onClick={stopVoiceListening}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold transition flex items-center gap-2 cursor-pointer"
+              >
+                <MicOff className="w-4 h-4" />
+                <span>ভয়েস বন্ধ করুন</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!speechSupported}
+                onClick={() => startVoiceListening()}
+                className="px-4 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:bg-slate-300 disabled:text-slate-500 text-white text-xs sm:text-sm font-bold transition flex items-center gap-2 cursor-pointer"
+              >
+                <Mic className="w-4 h-4" />
+                <span>ভয়েস এন্ট্রি চালু করুন</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!speechSupported && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-700" />
+            <span>
+              আপনার বর্তমান ব্রাউজার Web Speech Recognition সাপোর্ট করে না। ভয়েস এন্ট্রি ব্যবহারের জন্য Google Chrome বা Microsoft Edge ব্যবহার করুন। তবে নিচের উদাহরণগুলোতে ক্লিক করে দ্রুত পরীক্ষা করতে পারবেন।
+            </span>
+          </div>
+        )}
+
+        {voiceError && (
+          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+            <span>{voiceError}</span>
+          </div>
+        )}
+
+        {/* Live Transcript + Clickable Command Samples */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 pt-1">
+          <div className="lg:col-span-5 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 flex flex-col justify-center">
+            <div className="text-[11px] font-semibold text-slate-500 mb-1">লাইভ শ্রুত কমান্ড:</div>
+            <div className="text-xs sm:text-sm font-medium text-slate-900 min-h-[20px]">
+              {voiceInterim ? (
+                <span className="text-indigo-700 italic">{voiceInterim}...</span>
+              ) : voiceTranscript ? (
+                <span>&ldquo;{voiceTranscript}&rdquo;</span>
+              ) : (
+                <span className="text-slate-400">
+                  যেমন বলুন: &ldquo;রোল ১ নম্বর ৮৮&rdquo; অথবা &ldquo;রোল ২ উপস্থিত&rdquo;
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="lg:col-span-7 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-slate-500 mr-1">নমুনা কমান্ড (ক্লিকেও চলবে):</span>
+            {[
+              'রোল ১ নম্বর ৮৫',
+              'রোল ১ মাসিক ১৮',
+              'রোল ১ উপস্থিত',
+              'রোল ২ অনুপস্থিত',
+              'রোল ৩ উপস্থিতি ১১৪',
+            ].map((sample) => (
+              <button
+                key={sample}
+                type="button"
+                onClick={() => {
+                  setVoiceTranscript(sample);
+                  executeVoiceTranscript(sample);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-indigo-50 hover:text-indigo-800 border border-slate-200 hover:border-indigo-200 text-xs font-medium text-slate-700 transition cursor-pointer"
+              >
+                {sample}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Recent Voice Actions Log with 1-click Undo */}
+        {voiceHistory.length > 0 && (
+          <div className="border-t border-slate-100 pt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-500">সর্বশেষ কমান্ড:</span>
+              <span
+                className={`px-2.5 py-1 rounded-lg font-medium border ${
+                  voiceHistory[0].ok
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-200'
+                }`}
+              >
+                {voiceHistory[0].summary}
+              </span>
+              <span className="text-[11px] text-slate-400 tabular-nums">{voiceHistory[0].time}</span>
+            </div>
+
+            {voiceHistory[0].undo && (
+              <button
+                type="button"
+                onClick={() => {
+                  const fn = voiceHistory[0].undo;
+                  if (fn) {
+                    fn();
+                    setVoiceHistory((prev) => prev.slice(1));
+                  }
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>পূর্বাবস্থায় ফিরুন</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* SUBJECT-WISE ENTRY TABLE (All Students of this Class for Selected Subject) */}
       {entryMode === 'subject_wise' && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -421,6 +1019,10 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
                 <tr className="bg-slate-100/80 text-slate-700 text-xs font-bold border-b border-slate-200 uppercase tracking-wider">
                   <th className="py-3 px-3 text-center w-16">রোল</th>
                   <th className="py-3 px-3">শিক্ষার্থীর নাম</th>
+                  <th className="py-3 px-2 text-center w-36 bg-emerald-50/40">
+                    আজকের হাজিরা
+                    <div className="text-[10px] text-slate-500 font-normal">(ভয়েস / ক্লিক)</div>
+                  </th>
                   <th className="py-3 px-2 text-center w-32 bg-amber-50/60">
                     প্রাপ্ত নম্বর
                     <div className="text-[10px] text-amber-800 font-normal">
@@ -443,13 +1045,13 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
                     মোট প্রাপ্ত নম্বর
                   </th>
                   <th className="py-3 px-2 text-center w-24">গ্রেড / পয়েন্ট</th>
-                  <th className="py-3 px-3 w-52">শিক্ষকের মন্তব্য / নোট</th>
+                  <th className="py-3 px-3 w-48">শিক্ষকের মন্তব্য / নোট</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {filteredStudents.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-500 font-medium">
+                    <td colSpan={9} className="py-8 text-center text-slate-500 font-medium">
                       এই শ্রেণি ও শাখায় কোন শিক্ষার্থী পাওয়া যায়নি। &quot;শিক্ষার্থী তথ্য&quot; ট্যাব থেকে শিক্ষার্থী যুক্ত করুন।
                     </td>
                   </tr>
@@ -476,16 +1078,20 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
                     }
 
                     const grade = calculateGrade(totalObtained, fullMarks);
+                    const todayStatus = todayAttendanceMap[std.id]?.status;
+                    const isVoiceHighlighted = lastHighlightedStudentId === std.id;
 
                     return (
                       <tr
                         key={std.id}
-                        className={`hover:bg-indigo-50/30 transition ${
-                          index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
+                        className={`transition ${
+                          isVoiceHighlighted
+                            ? 'bg-indigo-50 ring-1 ring-inset ring-indigo-300'
+                            : `hover:bg-indigo-50/30 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`
                         }`}
                       >
                         {/* Roll */}
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-900">
+                        <td className="py-2.5 px-3 text-center font-bold text-slate-900 tabular-nums">
                           {toBengaliRoll(std.roll)}
                         </td>
 
@@ -495,6 +1101,32 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
                           {std.section && (
                             <span className="text-[11px] text-slate-500">শাখা: {std.section}</span>
                           )}
+                        </td>
+
+                        {/* Today's Roll-call Attendance Quick Toggle */}
+                        <td className="py-2.5 px-2 text-center bg-emerald-50/20">
+                          <div className="inline-flex items-center gap-1">
+                            {(
+                              [
+                                { id: 'present' as const, label: 'উপস্থিত', active: 'bg-emerald-600 text-white border-emerald-600' },
+                                { id: 'absent' as const, label: 'অনু.', active: 'bg-rose-600 text-white border-rose-600' },
+                                { id: 'late' as const, label: 'দেরি', active: 'bg-amber-500 text-slate-950 border-amber-500' },
+                              ]
+                            ).map((st) => (
+                              <button
+                                key={st.id}
+                                type="button"
+                                onClick={() => handleDailyAttendanceToggle(std.id, st.id)}
+                                className={`px-1.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
+                                  todayStatus === st.id
+                                    ? st.active
+                                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                                }`}
+                              >
+                                {st.label}
+                              </button>
+                            ))}
+                          </div>
                         </td>
 
                         {/* Exam Marks Input */}
@@ -599,15 +1231,40 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
               </h3>
             </div>
 
-            {/* Quick Next/Prev student navigation */}
-            <div className="flex items-center space-x-2">
+            {/* Today's attendance + Quick Next/Prev student navigation */}
+            <div className="flex flex-wrap items-center gap-2">
+              {activeStudentId && (
+                <div className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                  <span className="text-[11px] font-semibold text-slate-600 mr-1">আজকের হাজিরা:</span>
+                  {(
+                    [
+                      { id: 'present' as const, label: 'উপস্থিত', active: 'bg-emerald-600 text-white border-emerald-600' },
+                      { id: 'absent' as const, label: 'অনুপস্থিত', active: 'bg-rose-600 text-white border-rose-600' },
+                      { id: 'late' as const, label: 'বিলম্ব', active: 'bg-amber-500 text-slate-950 border-amber-500' },
+                    ]
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => handleDailyAttendanceToggle(activeStudentId, st.id)}
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold border transition cursor-pointer ${
+                        todayAttendanceMap[activeStudentId]?.status === st.id
+                          ? st.active
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button
                 disabled={filteredStudents.findIndex((s) => s.id === activeStudentId) <= 0}
                 onClick={() => {
                   const idx = filteredStudents.findIndex((s) => s.id === activeStudentId);
                   if (idx > 0) setActiveStudentId(filteredStudents[idx - 1].id);
                 }}
-                className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
               >
                 পূর্ববর্তী
               </button>
@@ -617,7 +1274,7 @@ export const MarkEntryView: React.FC<MarkEntryViewProps> = ({ onNavigate }) => {
                   const idx = filteredStudents.findIndex((s) => s.id === activeStudentId);
                   if (idx < filteredStudents.length - 1) setActiveStudentId(filteredStudents[idx + 1].id);
                 }}
-                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 flex items-center"
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 flex items-center cursor-pointer"
               >
                 পরবর্তী শিক্ষার্থী <ArrowRight className="w-3.5 h-3.5 ml-1" />
               </button>

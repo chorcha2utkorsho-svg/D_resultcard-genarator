@@ -28,8 +28,10 @@ import { DigitalSecurityGatepassView } from './components/DigitalSecurityGatepas
 import { PortalAuthSession, Student } from './types';
 import { getStudentPortalId } from './utils/bengali';
 import {
+  clearExplicitUnlockFlag,
   getLockedStudentIdSync,
   getLockedStudentSnapshotSync,
+  isDeviceExplicitlyUnlockedSync,
   loadLockedStudentFromStorage,
   lockDeviceToStudent,
   unlockDeviceFromStudent,
@@ -51,18 +53,27 @@ function MainContent() {
   }
 
   const { schoolInfo, students, classes } = useSchool();
-  const urlGuardianParam = urlParams.get('guardian') || '';
+  const isUnlockUrlRequested = urlParams.get('unlock') === '1';
+  const urlGuardianParam =
+    !isUnlockUrlRequested && !isDeviceExplicitlyUnlockedSync()
+      ? urlParams.get('guardian') || ''
+      : '';
   const isSavedGuardianMode =
     typeof window !== 'undefined' &&
+    !isUnlockUrlRequested &&
     localStorage.getItem('dlikon_pwa_guardian_mode') === 'true' &&
     Boolean(localStorage.getItem('dlikon_guardian_paired_student_id'));
 
   const [isDeviceLocked, setIsDeviceLocked] = useState<boolean>(() =>
-    Boolean(getLockedStudentIdSync() || getLockedStudentSnapshotSync())
+    !isUnlockUrlRequested && Boolean(getLockedStudentIdSync() || getLockedStudentSnapshotSync())
+  );
+
+  const [preferStudentPortalOnLogin, setPreferStudentPortalOnLogin] = useState<boolean>(() =>
+    Boolean(urlGuardianParam || isUnlockUrlRequested)
   );
 
   const [authSession, setAuthSession] = useState<PortalAuthSession | null>(() => {
-    if (typeof window === 'undefined') return null;
+    if (typeof window === 'undefined' || isUnlockUrlRequested) return null;
     const lockedSnap = getLockedStudentSnapshotSync();
     if (lockedSnap?.session) {
       return lockedSnap.session;
@@ -79,8 +90,16 @@ function MainContent() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
-  // Restore permanent device lock from IndexedDB even if localStorage was evicted or launched from Home Screen icon
+  // Instant ?unlock=1 recovery & permanent device lock restore from IndexedDB
   useEffect(() => {
+    if (isUnlockUrlRequested) {
+      void unlockDeviceFromStudent().then(() => {
+        resetStudentAppIcon();
+        setIsDeviceLocked(false);
+        setAuthSession(null);
+      });
+      return;
+    }
     let active = true;
     loadLockedStudentFromStorage().then((snap) => {
       if (!active || !snap) return;
@@ -95,11 +114,11 @@ function MainContent() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isUnlockUrlRequested]);
 
   // Seamless support for ?guardian=... direct pairing links, locked device IDs, or saved Guardian PWA smartphone sessions
   useEffect(() => {
-    if (students.length === 0) return;
+    if (students.length === 0 || isUnlockUrlRequested) return;
     const lockedId = getLockedStudentIdSync();
     if (authSession && !lockedId) return;
 
@@ -146,15 +165,21 @@ function MainContent() {
   }, [authSession, students, classes, urlGuardianParam, isSavedGuardianMode]);
 
   const handleLoginSuccess = (session: PortalAuthSession, matchedStudent?: Student | null) => {
+    clearExplicitUnlockFlag();
     setAuthSession(session);
     setCurrentTab('dashboard');
     if (typeof window !== 'undefined') {
+      if (window.location.search.includes('guardian=') || window.location.search.includes('locked=') || window.location.search.includes('unlock=')) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
       if (session.role === 'student' && matchedStudent) {
         localStorage.setItem('dlikon_guardian_paired_student_id', matchedStudent.id);
         localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
         void applyStudentPassportAppIcon(matchedStudent);
       } else {
+        localStorage.removeItem('dlikon_guardian_paired_student_id');
+        localStorage.removeItem('dlikon_pwa_guardian_mode');
         resetStudentAppIcon();
       }
     }
@@ -169,10 +194,28 @@ function MainContent() {
     setCurrentTab('dashboard');
   };
 
+  const handleUnlockDeviceNow = async () => {
+    await unlockDeviceFromStudent();
+    resetStudentAppIcon();
+    setIsDeviceLocked(false);
+    setAuthSession(null);
+    setPreferStudentPortalOnLogin(true);
+    setCurrentTab('dashboard');
+    setIsSettingsOpen(false);
+  };
+
   const handleAdminUnlockDevice = async (adminPin: string): Promise<boolean> => {
     const cleanPin = adminPin.trim();
+    const lockedStudent = authSession?.role === 'student'
+      ? students.find((s) => s.id === authSession.accountId)
+      : undefined;
+    const studentPinMatch =
+      Boolean(lockedStudent) &&
+      cleanPin === (lockedStudent?.guardianPin || '1234').trim();
+
     const localOfficialMatch =
       cleanPin === 'admin123' ||
+      studentPinMatch ||
       getLocalStaffAccounts().some((acc) => acc.role === 'official' && acc.password === cleanPin);
 
     let isValidOfficial = localOfficialMatch;
@@ -188,12 +231,7 @@ function MainContent() {
     }
 
     if (!isValidOfficial) return false;
-    await unlockDeviceFromStudent();
-    resetStudentAppIcon();
-    setIsDeviceLocked(false);
-    setAuthSession(null);
-    setCurrentTab('dashboard');
-    setIsSettingsOpen(false);
+    await handleUnlockDeviceNow();
     return true;
   };
 
@@ -219,7 +257,7 @@ function MainContent() {
       <div className="min-h-screen flex flex-col bg-[#F7F6F2]">
         <PortalHomeView
           onLoginSuccess={handleLoginSuccess}
-          initialPortal={urlGuardianParam ? 'student' : 'official'}
+          initialPortal={preferStudentPortalOnLogin ? 'student' : 'official'}
         />
         <footer className="no-print bg-white border-t border-stone-200 py-6 text-center text-xs text-stone-500">
           <div className="max-w-7xl mx-auto px-4 space-y-1">
@@ -246,6 +284,7 @@ function MainContent() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={handleLogout}
         isDeviceLocked={isDeviceLocked}
+        onUnlockDevice={handleUnlockDeviceNow}
       />
 
       {/* Strictly Role-Isolated Workspace Views */}
@@ -264,6 +303,7 @@ function MainContent() {
                 isDeviceLocked={isDeviceLocked}
                 onInstallLockedDashboard={handleInstallLockedDashboard}
                 onAdminUnlockDevice={handleAdminUnlockDevice}
+                onUnlockDevice={handleUnlockDeviceNow}
               />
             )}
           </>

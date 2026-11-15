@@ -20,6 +20,7 @@ import {
   KeyRound,
   Lock,
   LogOut,
+  Map as MapIcon,
   Maximize2,
   MessageSquare,
   Plus,
@@ -74,6 +75,7 @@ import { MonerBariView } from './MonerBariView';
 import { TimeManagementView } from './TimeManagementView';
 import { ExamCountdownWidget } from './ExamCountdownWidget';
 import { StudentBadgesPanel } from './StudentBadgesPanel';
+import { AcademicMilestoneRoadmap } from './AcademicMilestoneRoadmap';
 import {
   applyStudentPassportAppIcon,
   getShortStudentAppName,
@@ -100,6 +102,7 @@ interface StudentPersonalDashboardProps {
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: () => Promise<void> | void;
   onAdminUnlockDevice?: (adminPin: string) => Promise<boolean>;
+  onUnlockDevice?: () => Promise<void> | void;
 }
 
 const CAREER_SUGGESTIONS = [
@@ -150,6 +153,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   isDeviceLocked = false,
   onInstallLockedDashboard,
   onAdminUnlockDevice,
+  onUnlockDevice,
 }) => {
   const {
     schoolInfo,
@@ -167,7 +171,14 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
   const [dashboardSection, setDashboardSection] = useState<
-    'overview' | 'moner_bari' | 'icche_dana' | 'time_management' | 'future_plan' | 'achievements' | 'id_and_contact'
+    | 'overview'
+    | 'academic_roadmap'
+    | 'moner_bari'
+    | 'icche_dana'
+    | 'time_management'
+    | 'future_plan'
+    | 'achievements'
+    | 'id_and_contact'
   >('overview');
 
   const classObj = useMemo(
@@ -273,6 +284,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
 
   // Permanent Dashboard Install & Visual 'How to Install' Modal state
   const [showInstallLockModal, setShowInstallLockModal] = useState(false);
+  const [showUnlockConfirmModal, setShowUnlockConfirmModal] = useState(false);
   const [adminUnlockPin, setAdminUnlockPin] = useState('');
   const [adminUnlockError, setAdminUnlockError] = useState<string | null>(null);
   const [showAdminUnlockBox, setShowAdminUnlockBox] = useState(false);
@@ -664,7 +676,16 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </span>
               </button>
 
-              {!isDeviceLocked && (
+              {isDeviceLocked && onUnlockDevice ? (
+                <button
+                  type="button"
+                  onClick={() => setShowUnlockConfirmModal(true)}
+                  className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 border border-amber-300 text-slate-950 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Unlock className="w-3.5 h-3.5" />
+                  <span>লক সরান / অন্য শিক্ষার্থী</span>
+                </button>
+              ) : !isDeviceLocked ? (
                 <button
                   type="button"
                   onClick={onLogout}
@@ -673,7 +694,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   <LogOut className="w-3.5 h-3.5" />
                   <span>সাইন আউট</span>
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
@@ -682,6 +703,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         <div className="bg-slate-900/90 border-t border-slate-800 px-4 sm:px-7 py-2.5 flex items-center gap-2 overflow-x-auto">
           {[
             { id: 'overview' as const, label: 'পড়াশোনা ও প্রগ্রেস', icon: TrendingUp },
+            { id: 'academic_roadmap' as const, label: 'একাডেমিক রোডম্যাপ', icon: MapIcon },
             { id: 'moner_bari' as const, label: 'মনের বাড়ি', icon: Home },
             { id: 'icche_dana' as const, label: 'ইচ্ছে ডানা', icon: Rocket },
             { id: 'time_management' as const, label: 'সময় ব্যবস্থাপনা ও রুটিন', icon: Clock },
@@ -1110,7 +1132,16 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
 
               {/* Upcoming Events & Syllabus */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
-                <div className="text-xs font-semibold text-slate-500">আসন্ন একাডেমিক সূচি ও সিলেবাস</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-slate-500">আসন্ন একাডেমিক সূচি ও সিলেবাস</div>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSection('academic_roadmap')}
+                    className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 cursor-pointer whitespace-nowrap"
+                  >
+                    একাডেমিক রোডম্যাপ →
+                  </button>
+                </div>
                 {upcomingEvents.length > 0 ? (
                   <ul className="space-y-2.5 text-xs">
                     {upcomingEvents.map((ev) => (
@@ -1760,6 +1791,26 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       )}
 
       {/* =================================================================== */}
+      {/* SECTION 8: ACADEMIC MILESTONE ROADMAP (সিলেবাস ও পাঠ্যক্রম রোডম্যাপ) */}
+      {/* =================================================================== */}
+      {dashboardSection === 'academic_roadmap' && (
+        <AcademicMilestoneRoadmap
+          student={student}
+          classNameBn={classNameBn}
+          subjects={classObj?.defaultSubjects || []}
+          examTerms={examTerms}
+          syllabi={classSyllabi}
+          onSaveRoadmap={(nextData) =>
+            updateStudent({
+              ...student,
+              academicRoadmap: nextData,
+            })
+          }
+          onOpenTimeManagement={() => setDashboardSection('time_management')}
+        />
+      )}
+
+      {/* =================================================================== */}
       {/* SECTION 4: DIGITAL ID CARD, PASSWORD & SCHOOL MESSAGE               */}
       {/* =================================================================== */}
       {dashboardSection === 'id_and_contact' && (
@@ -1889,46 +1940,60 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             </div>
           </div>
 
-          {/* Discreet Official Admin Device Unlock (Only visible when phone is permanently locked) */}
-          {isDeviceLocked && onAdminUnlockDevice && (
-            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 space-y-3">
+          {/* Official Admin or Direct Device Unlock (When phone is locked) */}
+          {isDeviceLocked && (onUnlockDevice || onAdminUnlockDevice) && (
+            <div className="bg-amber-50/70 rounded-2xl border border-amber-200 p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs text-slate-600 flex items-center gap-2">
-                  <Lock className="w-3.5 h-3.5 text-emerald-700" />
+                <div className="text-xs text-slate-700 flex items-center gap-2">
+                  <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
                   <span>
-                    এই ডিভাইসটি স্থায়ীভাবে <strong>{student.nameBn}</strong>-এর ড্যাশবোর্ডে সেট করা রয়েছে (সাইন-আউট বন্ধ)।
+                    এই ডিভাইসটি বর্তমানে <strong>{student.nameBn}</strong>-এর ড্যাশবোর্ডে লক করা আছে।
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAdminUnlockBox((v) => !v);
-                    setAdminUnlockError(null);
-                  }}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-900 underline cursor-pointer"
-                >
-                  {showAdminUnlockBox ? 'বন্ধ করুন' : 'অফিসিয়াল অ্যাডমিন আনলক'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onUnlockDevice && (
+                    <button
+                      type="button"
+                      onClick={() => setShowUnlockConfirmModal(true)}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>লক সরান ও অন্য শিক্ষার্থীতে লগইন</span>
+                    </button>
+                  )}
+                  {onAdminUnlockDevice && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAdminUnlockBox((v) => !v);
+                        setAdminUnlockError(null);
+                      }}
+                      className="text-xs font-semibold text-slate-600 hover:text-slate-900 underline cursor-pointer"
+                    >
+                      {showAdminUnlockBox ? 'বন্ধ করুন' : 'পিন দিয়ে আনলক'}
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {showAdminUnlockBox && (
+              {showAdminUnlockBox && onAdminUnlockDevice && (
                 <form
                   onSubmit={async (e) => {
                     e.preventDefault();
                     setAdminUnlockError(null);
                     const ok = await onAdminUnlockDevice(adminUnlockPin.trim());
                     if (!ok) {
-                      setAdminUnlockError('ভুল অফিসিয়াল অ্যাডমিন পাসওয়ার্ড! শুধুমাত্র স্কুল কর্তৃপক্ষ ডিভাইস আনলক করতে পারেন।');
+                      setAdminUnlockError('ভুল পাসওয়ার্ড/পিন! শিক্ষার্থীর পিন (যেমন 1234) অথবা অ্যাডমিন পিন দিন।');
                     }
                   }}
-                  className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200"
+                  className="flex flex-wrap items-center gap-2 pt-2 border-t border-amber-200"
                 >
                   <input
                     type="password"
                     required
                     value={adminUnlockPin}
                     onChange={(e) => setAdminUnlockPin(e.target.value)}
-                    placeholder="অফিসিয়াল অ্যাডমিন পিন লিখুন"
+                    placeholder="শিক্ষার্থীর পিন (1234) বা অ্যাডমিন পিন লিখুন"
                     className="flex-1 min-w-[200px] px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white"
                   />
                   <button
@@ -1961,7 +2026,76 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         isInstallable={isInstallable}
         isInstalled={isInstalled}
         onTriggerNativeInstall={install}
+        onUnlockDevice={onUnlockDevice ? () => setShowUnlockConfirmModal(true) : undefined}
       />
+
+      {/* Device Unlock & Switch Student Modal */}
+      {showUnlockConfirmModal && onUnlockDevice && (
+        <div
+          className="fixed inset-0 z-[9999] bg-slate-950/80 flex items-center justify-center p-4"
+          onClick={() => setShowUnlockConfirmModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-[#091e42] text-white px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-400 text-slate-950 rounded-xl">
+                  <Unlock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold font-serif">
+                    ড্যাশবোর্ড লক সরান ও শিক্ষার্থী পরিবর্তন
+                  </h3>
+                  <p className="text-[11px] text-slate-300">{student.nameBn}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUnlockConfirmModal(false)}
+                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs sm:text-sm">
+              <p className="text-slate-700 leading-relaxed">
+                <strong>{student.nameBn}</strong>-এর স্থায়ী ড্যাশবোর্ড লক সরিয়ে দিলে আপনি সাথে সাথে সাইন-ইন স্ক্রিনে ফিরে যাবেন এবং অন্য যেকোনো শিক্ষার্থীর রোল, ইউনিক আইডি বা মোবাইল নম্বর দিয়ে লগইন করতে পারবেন।
+              </p>
+
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 space-y-1.5">
+                <div className="font-bold">হোম স্ক্রিন অ্যাপ আইকন পরিবর্তন করতে চাইলে:</div>
+                <p className="leading-relaxed">
+                  আগে থেকে ফোনের হোম স্ক্রিনে এই শিক্ষার্থীর আইকন ইনস্টল করা থাকলে আইকনের ওপর চেপে ধরে <strong>Uninstall / Remove</strong> করুন। এরপর নতুন শিক্ষার্থীতে সাইন ইন করে পুনরায় <strong>Install App</strong> চাপলে নতুন শিক্ষার্থীর পাসপোর্ট ছবিসহ আইকন যুক্ত হবে।
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowUnlockConfirmModal(false);
+                    await onUnlockDevice();
+                  }}
+                  className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Unlock className="w-4 h-4" />
+                  <span>হ্যাঁ, বর্তমান লক সরিয়ে সাইন-ইন পেজে যান</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUnlockConfirmModal(false)}
+                  className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer"
+                >
+                  বাতিল
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Fullscreen Lightbox for Achievement Memories */}
       {lightboxAchievement && (

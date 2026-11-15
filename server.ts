@@ -218,6 +218,12 @@ async function startServer() {
                 ? srvStd.timeManagement
                 : incStd.timeManagement
               : incStd.timeManagement || srvStd.timeManagement;
+          const mergedAcademicRoadmap =
+            incStd.academicRoadmap && srvStd.academicRoadmap
+              ? new Date(srvStd.academicRoadmap.updatedAt || 0).getTime() > new Date(incStd.academicRoadmap.updatedAt || 0).getTime()
+                ? srvStd.academicRoadmap
+                : incStd.academicRoadmap
+              : incStd.academicRoadmap || srvStd.academicRoadmap;
           return {
             ...incStd,
             futurePlan: mergedFuturePlan,
@@ -225,6 +231,7 @@ async function startServer() {
             dreamGallery: mergedDreamGallery,
             monerBari: mergedMonerBari,
             timeManagement: mergedTimeManagement,
+            academicRoadmap: mergedAcademicRoadmap,
             portalUserId: incStd.portalUserId || srvStd.portalUserId,
             guardianPin: incStd.guardianPin || srvStd.guardianPin,
           };

@@ -254,7 +254,7 @@ export const StudentManagement: React.FC = () => {
       classId: activeClassId,
       section: selectedSection || 'ক',
       academicYear: selectedYear || '২০২৬',
-      securityQrCode: `DLIKON-${activeClassId.toUpperCase()}-${nextRoll}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+      securityQrCode: `DLIKON-SEC-${activeClassId.toUpperCase()}-${nextRoll}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
     });
     setStudentModalTab('student');
     setEditingStudent(null);
@@ -314,7 +314,7 @@ export const StudentManagement: React.FC = () => {
       motherName: student.motherName || student.motherNameBn || '',
 
       // সিকিউরিটি কোড
-      securityQrCode: student.securityQrCode || `DLIKON-${student.classId.toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`,
+      securityQrCode: student.securityQrCode || `DLIKON-SEC-${student.classId.toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`,
       dreamGallery: student.dreamGallery || [],
     });
     setDreamDraftCareer(student.futurePlan?.dreamCareer || DREAM_CAREER_PRESETS[0].careerTag);
@@ -2025,7 +2025,7 @@ export const StudentManagement: React.FC = () => {
                         onClick={() =>
                           setFormData({
                             ...formData,
-                            securityQrCode: `DLIKON-${formData.classId.toUpperCase()}-${formData.roll}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+                            securityQrCode: `DLIKON-SEC-${formData.classId.toUpperCase()}-${formData.roll}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
                           })
                         }
                         className="text-xs text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1"
@@ -2371,7 +2371,7 @@ export const StudentManagement: React.FC = () => {
                 <div className="text-right">
                   <span className="text-[10px] text-slate-500 block">সিকিউরিটি কিউআর টোকেন:</span>
                   <span className="font-mono text-xs font-bold text-indigo-700">
-                    {detailStudent.securityQrCode || `DLIKON-${detailStudent.roll}`}
+                    {detailStudent.securityQrCode || `DLIKON-SEC-${detailStudent.classId.toUpperCase()}-${detailStudent.roll}-${detailStudent.id.slice(-4).toUpperCase()}`}
                   </span>
                 </div>
               </div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import QRCode from 'qrcode';
 import { SchoolInfo, Student } from '../types';
-import { toBengaliRoll, toBengaliNumber } from '../utils/bengali';
+import { getStudentPortalId, toBengaliRoll, toBengaliNumber } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
 import { User, ShieldCheck, Phone, Heart, Camera, CheckCircle2, Edit3 } from 'lucide-react';
 
@@ -463,7 +463,7 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
               </div>
               <div className="text-left text-[7.5px] text-slate-600 leading-tight">
                 <div className="font-bold text-slate-950 font-mono text-[8.5px]">
-                  {student.securityQrCode ? student.securityQrCode.slice(0, 9) : `ID:${student.roll}`}
+                  {getStudentPortalId(student)}
                 </div>
                 <div className="text-[6.5px] font-semibold text-indigo-900">ডিজিটাল গেটপাস</div>
               </div>

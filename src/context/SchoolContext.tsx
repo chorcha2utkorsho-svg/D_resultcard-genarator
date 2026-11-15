@@ -1577,7 +1577,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addStudent = (studentData: Omit<Student, 'id'>): Student => {
     const newId = `std_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const qrCode = studentData.securityQrCode || `DLIKON-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
+    const qrCode = studentData.securityQrCode || `DLIKON-SEC-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
     const hasAnyPhoto = Boolean(studentData.avatarUrl || studentData.fatherAvatarUrl || studentData.motherAvatarUrl);
     const newStudent: Student = {
       ...studentData,
@@ -1612,7 +1612,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const updateStudent = (student: Student) => {
-    const qrCode = student.securityQrCode || `DLIKON-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
+    const qrCode = student.securityQrCode || `DLIKON-SEC-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
     const existing = students.find((s) => s.id === student.id);
     const photosModified =
       (student.avatarUrl || '') !== (existing?.avatarUrl || '') ||

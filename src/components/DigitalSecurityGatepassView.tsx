@@ -50,6 +50,7 @@ import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
 import { Student, SecurityGatepassLog } from '../types';
 import { toBengaliNumber, toBengaliRoll, formatBengaliDate, getStudentPortalId } from '../utils/bengali';
+import { matchStudentByQrOrQuery } from '../utils/gatepassQrMatcher';
 import { SchoolLogo } from './SchoolLogo';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { compressImageBase64 } from '../utils/imageCompressor';
@@ -385,7 +386,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     setRecentScannedStudent(student);
     setLiveAnnouncement(voiceMsg);
-    setScannerFeedback(`✓ ${student.nameBn} (${toBengaliRoll(student.roll)}) — ${actionLabel} অনুমোদিত!`);
+    setScannerFeedback(
+      `✓ ${student.nameBn} (${classNameBn}, রোল ${toBengaliRoll(student.roll)}) — ${actionLabel} অনুমোদিত!`
+    );
 
     // 3. Play Bengali Voice Announcement on scanner device
     if (voiceEnabled) {
@@ -400,64 +403,20 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     }, 4500);
   };
 
-  // Filter and match students based on scanned QR code, barcode, roll, or phone (exact ID/QR matches take strict priority!)
+  // Filter and match students strictly by unique QR token, student ID, portal ID, birth reg, phone, or unambiguous roll
   const handleBarcodeSearchSubmit = (inputQuery: string) => {
-    if (!inputQuery.trim()) return;
-    const q = inputQuery.toLowerCase().trim();
-    const cleanDigitsQ = q.replace(/\D/g, '');
+    const trimmedQuery = (inputQuery || '').trim();
+    if (!trimmedQuery) return;
 
-    // Pass 1: Strict unique matches (printed QR payload, student ID, birth registration, exact roll/phone)
-    let matched = students.find((s) => {
-      const sBirthDigits = s.birthRegNo ? s.birthRegNo.replace(/\D/g, '') : '';
-      const matchBirth = Boolean(sBirthDigits && cleanDigitsQ && sBirthDigits === cleanDigitsQ);
+    const result = matchStudentByQrOrQuery(trimmedQuery, students, classes);
 
-      const sIdLower = s.id.toLowerCase();
-      const matchId = sIdLower === q || (q.length >= 4 && sIdLower.endsWith(q)) || q.includes(sIdLower);
-
-      const matchQr = Boolean(
-        s.securityQrCode &&
-          (s.securityQrCode.toLowerCase() === q || q.includes(s.securityQrCode.toLowerCase()))
-      );
-
-      const sClassStr = (s.classId || '').toLowerCase();
-      const defaultQr = `dlikon-sec-${sClassStr}-${s.roll}-${s.id.slice(-4)}`.toLowerCase();
-      const matchDefaultQr = defaultQr === q || q.includes(defaultQr);
-
-      const rollStr = String(s.roll).trim();
-      const rollBn = toBengaliNumber(s.roll).trim();
-      const matchExactRoll = rollStr === q || rollBn === q;
-
-      return matchBirth || matchId || matchQr || matchDefaultQr || matchExactRoll;
-    });
-
-    // Pass 2: Tokenized class+roll / name / phone match (strict token boundary on roll so Roll 1 never collides with Roll 10)
-    if (!matched) {
-      matched = students.find((s) => {
-        const rollStr = String(s.roll).trim();
-        const sClassStr = (s.classId || '').toLowerCase();
-        const rollBoundaryRegex = new RegExp(`(?:^|[-_\\s])${rollStr}(?:$|[-_\\s])`);
-        const hasRollSegment = rollBoundaryRegex.test(q);
-        const matchClassAndRoll = Boolean(sClassStr && q.includes(sClassStr) && hasRollSegment);
-
-        const matchName =
-          s.nameBn.toLowerCase().includes(q) || Boolean(s.nameEn && s.nameEn.toLowerCase().includes(q));
-
-        const sFatherPhoneDigits = s.fatherPhone ? s.fatherPhone.replace(/\D/g, '') : '';
-        const sGuardianPhoneDigits = s.guardianPhone ? s.guardianPhone.replace(/\D/g, '') : '';
-        const matchPhone = Boolean(
-          (cleanDigitsQ.length >= 6 && sFatherPhoneDigits && sFatherPhoneDigits.includes(cleanDigitsQ)) ||
-            (cleanDigitsQ.length >= 6 && sGuardianPhoneDigits && sGuardianPhoneDigits.includes(cleanDigitsQ))
-        );
-
-        return matchClassAndRoll || (hasRollSegment && q.includes(s.id.toLowerCase().slice(-4))) || matchName || matchPhone;
-      });
-    }
-
-    if (matched) {
-      handleVerifyStudent(matched);
+    if (result.student) {
+      handleVerifyStudent(result.student);
     } else {
-      setScannerFeedback(`❌ "${inputQuery}" কিউআর কোড বা নম্বরে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।`);
-      setTimeout(() => setScannerFeedback(null), 3500);
+      setScannerFeedback(
+        result.errorMessage || `❌ "${trimmedQuery}" কিউআর কোড বা নম্বরে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।`
+      );
+      setTimeout(() => setScannerFeedback(null), 5000);
     }
   };
 
@@ -483,13 +442,41 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     let barcodeDetector: any = null;
     if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
       try {
+        // Restrict strictly to QR codes so 1D borders/text lines can never misfire as Roll "1"
         barcodeDetector = new (window as any).BarcodeDetector({
-          formats: ['qr_code', 'code_128', 'ean_13', 'code_39', 'data_matrix'],
+          formats: ['qr_code'],
         });
       } catch {
         barcodeDetector = null;
       }
     }
+
+    const pickBestQrCode = (barcodes: any[], targetW: number, targetH: number): string | null => {
+      if (!Array.isArray(barcodes) || barcodes.length === 0) return null;
+      const qrOnly = barcodes.filter((b) => {
+        const fmt = (b?.format || 'qr_code').toLowerCase();
+        const val = typeof b?.rawValue === 'string' ? b.rawValue.trim() : '';
+        return fmt === 'qr_code' && val.length >= 4;
+      });
+      if (qrOnly.length === 0) return null;
+      if (qrOnly.length === 1) return qrOnly[0].rawValue.trim();
+      const cx = targetW / 2;
+      const cy = targetH / 2;
+      let best = qrOnly[0];
+      let bestDist = Infinity;
+      for (const b of qrOnly) {
+        const box = b.boundingBox;
+        if (!box) continue;
+        const bx = box.x + box.width / 2;
+        const by = box.y + box.height / 2;
+        const dist = (bx - cx) * (bx - cx) + (by - cy) * (by - cy);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = b;
+        }
+      }
+      return best.rawValue.trim();
+    };
 
     let lastScanTime = 0;
 
@@ -510,26 +497,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
         try {
           let detectedCode: string | null = null;
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
 
-          // 1. Try native BarcodeDetector on Chrome Android first
-          if (barcodeDetector) {
-            try {
-              const barcodes = await barcodeDetector.detect(video);
-              if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-                detectedCode = barcodes[0].rawValue;
-              }
-            } catch {
-              // Fallback to jsQR
-            }
-          }
-
-          // 2. High-Precision jsQR Decoder (Dual-Pass: Center Viewfinder 1:1 ROI + Full-Frame)
-          if (!detectedCode && ctx) {
-            const vw = video.videoWidth;
-            const vh = video.videoHeight;
-
-            // Pass A: Center Viewfinder ROI at FULL 1:1 Camera Resolution (crucial for small printed QR codes!)
-            const cropSize = Math.floor(Math.min(vw, vh) * 0.7);
+          // Pass A: Center Viewfinder ROI at FULL 1:1 Camera Resolution (keeps nearby cards out of focus)
+          if (ctx) {
+            const cropSize = Math.floor(Math.min(vw, vh) * 0.68);
             const cropX = Math.floor((vw - cropSize) / 2);
             const cropY = Math.floor((vh - cropSize) / 2);
 
@@ -539,34 +512,56 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             }
 
             ctx.drawImage(video, cropX, cropY, cropSize, cropSize, 0, 0, cropSize, cropSize);
-            const centerImgData = ctx.getImageData(0, 0, cropSize, cropSize);
-            let qrResult = jsQR(centerImgData.data, cropSize, cropSize, {
-              inversionAttempts: 'attemptBoth',
-            });
 
-            if (qrResult && qrResult.data) {
-              detectedCode = qrResult.data;
+            if (barcodeDetector) {
+              try {
+                const centerBarcodes = await barcodeDetector.detect(canvas);
+                detectedCode = pickBestQrCode(centerBarcodes, cropSize, cropSize);
+              } catch {
+                // Fallback to jsQR
+              }
             }
 
-            // Pass B: Full frame fallback at crisp 800px max scale
             if (!detectedCode) {
-              const scale = Math.min(1, 800 / Math.max(vw, vh));
-              const cw = Math.floor(vw * scale);
-              const ch = Math.floor(vh * scale);
-
-              if (canvas.width !== cw || canvas.height !== ch) {
-                canvas.width = cw;
-                canvas.height = ch;
+              const centerImgData = ctx.getImageData(0, 0, cropSize, cropSize);
+              const qrResult = jsQR(centerImgData.data, cropSize, cropSize, {
+                inversionAttempts: 'attemptBoth',
+              });
+              if (qrResult && qrResult.data && qrResult.data.trim().length >= 4) {
+                detectedCode = qrResult.data.trim();
               }
+            }
+          }
 
-              ctx.drawImage(video, 0, 0, cw, ch);
+          // Pass B: Full frame fallback (closest QR to center) if center ROI didn't lock
+          if (!detectedCode && ctx) {
+            const scale = Math.min(1, 800 / Math.max(vw, vh));
+            const cw = Math.floor(vw * scale);
+            const ch = Math.floor(vh * scale);
+
+            if (canvas.width !== cw || canvas.height !== ch) {
+              canvas.width = cw;
+              canvas.height = ch;
+            }
+
+            ctx.drawImage(video, 0, 0, cw, ch);
+
+            if (barcodeDetector) {
+              try {
+                const fullBarcodes = await barcodeDetector.detect(canvas);
+                detectedCode = pickBestQrCode(fullBarcodes, cw, ch);
+              } catch {
+                // Fallback to jsQR
+              }
+            }
+
+            if (!detectedCode) {
               const fullImgData = ctx.getImageData(0, 0, cw, ch);
               const fullResult = jsQR(fullImgData.data, cw, ch, {
                 inversionAttempts: 'attemptBoth',
               });
-
-              if (fullResult && fullResult.data) {
-                detectedCode = fullResult.data;
+              if (fullResult && fullResult.data && fullResult.data.trim().length >= 4) {
+                detectedCode = fullResult.data.trim();
               }
             }
           }
@@ -1694,7 +1689,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                             handleBarcodeSearchSubmit(barcodeInput);
                           }
                         }}
-                        placeholder="শিক্ষার্থীর রোল নম্বর, বাংলা নাম বা ১৭ ডিজিটের জন্ম নিবন্ধন নম্বর লিখুন..."
+                        placeholder="ইউনিক আইডি (যেমন: DL-C1-01), QR কোড, বাংলা নাম বা জন্ম নিবন্ধন লিখুন..."
                         className="w-full text-sm pl-11 pr-4 py-2.5 border-2 border-indigo-200 rounded-xl focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 font-medium text-slate-900 bg-white placeholder-slate-400 transition"
                         autoFocus
                       />
@@ -1721,7 +1716,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     }`}
                   >
                     <span className="flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      {scannerFeedback.includes('✓') ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                      )}
                       <span>{scannerFeedback}</span>
                     </span>
                     {liveAnnouncement && (

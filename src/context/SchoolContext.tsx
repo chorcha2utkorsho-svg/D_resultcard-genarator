@@ -54,7 +54,9 @@ import {
 } from '../firebase';
 import {
   acknowledgeSecurityLogInFirestore,
+  batchPushStudentsToFirestore,
   ensureSchoolDocument,
+  pullStudentsFromFirestore,
   pushSecurityLogToFirestore,
   subscribeCloudSecurityLogs,
   syncStudentRecordToFirestore,
@@ -261,10 +263,11 @@ interface SchoolContextType {
   ) => Promise<void>;
   clearSecurityLogs: () => void;
   clearAllStudents: () => Promise<void>;
-  scanAndRecoverBrowserData: () => Promise<{ studentCount: number; message: string }>;
+  scanAndRecoverBrowserData: () => Promise<{ studentCount: number; recoveredPhotoCount?: number; message: string }>;
   // Multi-Device Server Synchronization
   isServerSyncing: boolean;
   serverSyncStatus: 'synced' | 'syncing' | 'offline' | 'error';
+  syncErrorMessage: string | null;
   lastSyncedTime: string;
   forceServerSync: () => Promise<void>;
   seedParentDetailsForClass: (classId: string) => number;
@@ -272,8 +275,11 @@ interface SchoolContextType {
   cloudUser: User | null;
   cloudSyncError: string | null;
   cloudUnauthorizedDomain: string | null;
+  isCloudPhotoSyncing: boolean;
+  cloudPhotoSyncProgress: { done: number; total: number } | null;
   connectCloudSync: () => Promise<boolean>;
   disconnectCloudSync: () => Promise<void>;
+  syncAllPhotosToCloud: () => Promise<{ ok: boolean; pushedCount: number; pulledCount: number; message: string }>;
   broadcastSecurityLogToCloud: (log: SecurityGatepassLog) => Promise<void>;
 }
 
@@ -560,13 +566,19 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isIdbInitialized, setIsIdbInitialized] = useState(false);
   const [isServerSyncing, setIsServerSyncing] = useState<boolean>(false);
   const [serverSyncStatus, setServerSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('syncing');
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
   const [lastSyncedTime, setLastSyncedTime] = useState<string>('');
   const lastSyncTimestampRef = useRef<number>(0);
   const isInitialServerLoadDone = useRef<boolean>(false);
+  const suppressNextAutoPushRef = useRef<boolean>(false);
+  const isPushingRef = useRef<boolean>(false);
+  const hasAutoSyncedCloudSessionRef = useRef<string | null>(null);
 
   const [cloudUser, setCloudUser] = useState<User | null>(null);
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [cloudUnauthorizedDomain, setCloudUnauthorizedDomain] = useState<string | null>(null);
+  const [isCloudPhotoSyncing, setIsCloudPhotoSyncing] = useState<boolean>(false);
+  const [cloudPhotoSyncProgress, setCloudPhotoSyncProgress] = useState<{ done: number; total: number } | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -574,14 +586,151 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (user) {
         setCloudSyncError(null);
         setCloudUnauthorizedDomain(null);
+      } else {
+        hasAutoSyncedCloudSessionRef.current = null;
       }
     });
     return () => unsub();
   }, []);
 
+  const mergeCloudStudentPhotos = useCallback((cloudRecords: Partial<Student>[]): { pulledCount: number; mergedList: Student[] } => {
+    if (!cloudRecords || cloudRecords.length === 0) {
+      return { pulledCount: 0, mergedList: latestStateRef.current.students };
+    }
+    const cloudMap = new Map<string, Partial<Student>>();
+    for (const cr of cloudRecords) {
+      if (cr && cr.id) cloudMap.set(cr.id, cr);
+    }
+
+    let pulledCount = 0;
+    const currentList = latestStateRef.current.students;
+    const mergedList = currentList.map((localStd) => {
+      const cloudStd = cloudMap.get(localStd.id);
+      if (!cloudStd) return localStd;
+
+      const localTime = new Date(localStd.photoUpdatedAt || 0).getTime();
+      const cloudTime = new Date(cloudStd.photoUpdatedAt || 0).getTime();
+
+      const pickPhoto = (localVal?: string, cloudVal?: string) => {
+        if (!localVal && cloudVal) return cloudVal;
+        if (cloudVal && cloudTime > localTime) return cloudVal;
+        return localVal || '';
+      };
+
+      const nextAvatar = pickPhoto(localStd.avatarUrl, cloudStd.avatarUrl);
+      const nextFather = pickPhoto(localStd.fatherAvatarUrl, cloudStd.fatherAvatarUrl);
+      const nextMother = pickPhoto(localStd.motherAvatarUrl, cloudStd.motherAvatarUrl);
+
+      const changed =
+        nextAvatar !== (localStd.avatarUrl || '') ||
+        nextFather !== (localStd.fatherAvatarUrl || '') ||
+        nextMother !== (localStd.motherAvatarUrl || '');
+
+      if (!changed) return localStd;
+      pulledCount++;
+      return {
+        ...localStd,
+        avatarUrl: nextAvatar,
+        fatherAvatarUrl: nextFather,
+        motherAvatarUrl: nextMother,
+        photoUpdatedAt:
+          cloudTime > localTime
+            ? cloudStd.photoUpdatedAt
+            : localStd.photoUpdatedAt || cloudStd.photoUpdatedAt,
+      };
+    });
+
+    if (pulledCount > 0) {
+      setStudents(mergedList);
+      idbSet(`${STORAGE_KEY}_students`, mergedList);
+    }
+
+    return { pulledCount, mergedList };
+  }, []);
+
+  const syncAllPhotosToCloudWithUser = useCallback(
+    async (
+      targetUser: User | null
+    ): Promise<{ ok: boolean; pushedCount: number; pulledCount: number; message: string }> => {
+      if (!targetUser || !targetUser.emailVerified) {
+        return {
+          ok: false,
+          pushedCount: 0,
+          pulledCount: 0,
+          message: 'প্রথমে উপরের "ক্লাউড সিঙ্ক চালু" বাটনে ক্লিক করে গুগল অ্যাকাউন্ট দিয়ে সাইন ইন করুন।',
+        };
+      }
+
+      setIsCloudPhotoSyncing(true);
+      setCloudSyncError(null);
+      try {
+        await ensureSchoolDocument(targetUser, latestStateRef.current.schoolInfo);
+
+        // Step 1: Pull any photos already saved in Firestore so we don't lose other devices' uploads
+        let pulledCount = 0;
+        let workingStudents = latestStateRef.current.students;
+        try {
+          const cloudRecords = await pullStudentsFromFirestore(targetUser);
+          const mergedRes = mergeCloudStudentPhotos(cloudRecords);
+          pulledCount = mergedRes.pulledCount;
+          workingStudents = mergedRes.mergedList;
+        } catch (pullErr) {
+          console.warn('Firestore pull warning (proceeding with push):', pullErr);
+        }
+
+        // Step 2: Push all student records + photos to Firestore in safe chunks of 10
+        const { pushedCount, failedCount } = await batchPushStudentsToFirestore(
+          workingStudents,
+          targetUser,
+          latestStateRef.current.schoolInfo,
+          (done, total) => setCloudPhotoSyncProgress({ done, total })
+        );
+
+        setCloudPhotoSyncProgress(null);
+        setLastSyncedTime(
+          new Date().toLocaleTimeString('bn-BD', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        );
+
+        const photoTotal = workingStudents.filter(
+          (s) => Boolean(s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl)
+        ).length;
+
+        return {
+          ok: failedCount === 0,
+          pushedCount,
+          pulledCount,
+          message: `✓ ক্লাউডে ${toBengaliNumber(pushedCount)} জন শিক্ষার্থীর তথ্য (${toBengaliNumber(photoTotal)}টি ছবিসহ) স্থায়ীভাবে সংরক্ষিত হয়েছে${pulledCount > 0 ? ` এবং ${toBengaliNumber(pulledCount)}টি ছবি ক্লাউড থেকে পুনরুদ্ধার হয়েছে` : ''}।`,
+        };
+      } catch (err: any) {
+        const msg = err?.message || 'ক্লাউডে ছবি সিঙ্ক করতে সমস্যা হয়েছে।';
+        setCloudSyncError(msg);
+        return { ok: false, pushedCount: 0, pulledCount: 0, message: msg };
+      } finally {
+        setIsCloudPhotoSyncing(false);
+        setCloudPhotoSyncProgress(null);
+      }
+    },
+    [mergeCloudStudentPhotos]
+  );
+
+  const syncAllPhotosToCloud = useCallback(async () => {
+    return syncAllPhotosToCloudWithUser(cloudUser);
+  }, [cloudUser, syncAllPhotosToCloudWithUser]);
+
   useEffect(() => {
     if (!cloudUser || !cloudUser.emailVerified) return;
     ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+
+    // Automatically run 2-way student & photo sync once per verified sign-in
+    if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
+      hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
+      syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
+    }
+
     const unsub = subscribeCloudSecurityLogs(cloudUser, (cloudLogs) => {
       setServerSyncStatus('synced');
       setLastSyncedTime(
@@ -621,7 +770,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     });
     return () => unsub();
-  }, [cloudUser]);
+  }, [cloudUser, syncAllPhotosToCloudWithUser]);
 
   const connectCloudSync = useCallback(async (): Promise<boolean> => {
     setCloudSyncError(null);
@@ -636,11 +785,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     if (res.user) {
       await ensureSchoolDocument(res.user, latestStateRef.current.schoolInfo).catch(() => {});
+      hasAutoSyncedCloudSessionRef.current = res.user.uid;
+      await syncAllPhotosToCloudWithUser(res.user).catch(() => {});
     }
     return true;
-  }, []);
+  }, [syncAllPhotosToCloudWithUser]);
 
   const disconnectCloudSync = useCallback(async (): Promise<void> => {
+    hasAutoSyncedCloudSessionRef.current = null;
     await signOutCloudSync();
   }, []);
 
@@ -683,18 +835,83 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   });
 
-  // Push latest application data to central full-stack server with stable callback
+  // Helper: upload student photos in safe 10-student chunks so proxy payload limits never cause silent failures
+  const pushPhotosInChunks = useCallback(async (targetStudents: Student[]): Promise<boolean> => {
+    const items = targetStudents
+      .filter((s) => Boolean(s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl || s.photoUpdatedAt))
+      .map((s) => ({
+        id: s.id,
+        avatarUrl: s.avatarUrl || '',
+        fatherAvatarUrl: s.fatherAvatarUrl || '',
+        motherAvatarUrl: s.motherAvatarUrl || '',
+        photoUpdatedAt: s.photoUpdatedAt || new Date().toISOString(),
+      }));
+
+    if (items.length === 0) return true;
+
+    const CHUNK_SIZE = 10;
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE);
+      const res = await fetch('/api/students/batch-photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: chunk }),
+      });
+      if (!res.ok) {
+        return false;
+      }
+    }
+    return true;
+  }, []);
+
+  // Push latest application data to central full-stack server with chunked fallback for large photo sets
   const pushToServer = useCallback(async () => {
+    if (isPushingRef.current) return;
+    isPushingRef.current = true;
     try {
       setIsServerSyncing(true);
       const payload = latestStateRef.current;
-      const res = await fetch('/api/school-data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
+      const serialized = JSON.stringify(payload);
+
+      // If payload fits comfortably (< 1.2 MB), send directly; otherwise send lightweight core + chunked photos
+      let coreOk = false;
+      let photosSynced = true;
+
+      if (serialized.length <= 1_200_000) {
+        const res = await fetch('/api/school-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: serialized,
+        });
+        coreOk = res.ok;
+      }
+
+      if (!coreOk) {
+        // Safe split: strip inline photos in core JSON (server preserves existing photos) then upload photos in 10-student chunks
+        const lightweightPayload = {
+          ...payload,
+          students: payload.students.map((s) => ({
+            ...s,
+            avatarUrl: '',
+            fatherAvatarUrl: '',
+            motherAvatarUrl: '',
+            _photosStripped: true,
+          })),
+        };
+        const coreRes = await fetch('/api/school-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lightweightPayload),
+        });
+        coreOk = coreRes.ok;
+        if (coreOk) {
+          photosSynced = await pushPhotosInChunks(payload.students);
+        }
+      }
+
+      if (coreOk && photosSynced) {
         setServerSyncStatus('synced');
+        setSyncErrorMessage(null);
         setLastSyncedTime(
           new Date().toLocaleTimeString('bn-BD', {
             hour: '2-digit',
@@ -704,18 +921,22 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         );
         lastSyncTimestampRef.current = Date.now();
       } else {
-        setServerSyncStatus('offline');
+        setServerSyncStatus('error');
+        setSyncErrorMessage('সার্ভারে সম্পূর্ণ ডেটা/ছবি সেভ হতে সমস্যা হয়েছে। পুনরায় চেষ্টা করুন।');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Could not push to server database:', e);
       setServerSyncStatus('offline');
+      setSyncErrorMessage(e?.message || 'সার্ভার সংযোগ পাওয়া যাচ্ছে না।');
     } finally {
       setIsServerSyncing(false);
+      isPushingRef.current = false;
     }
-  }, []);
+  }, [pushPhotosInChunks]);
 
-  // Pull latest data from central server across all PCs/smartphones
+  // Pull latest data from central server across all PCs/smartphones without overwriting local unsynced photos
   const fetchFromServer = useCallback(async () => {
+    if (isPushingRef.current) return;
     try {
       setIsServerSyncing(true);
       const res = await fetch('/api/school-data');
@@ -723,14 +944,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const json = await res.json();
         if (json.exists && json.data) {
           const db = json.data;
+          let stateChangedFromServer = false;
+          const localPhotosMissingOnServer: Student[] = [];
 
           if (Array.isArray(db.students)) {
             const cleanedStudents = db.students.filter(
               (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
             );
             setStudents((prev) => {
-              // CRITICAL SAFEGUARD: If server sends 0 students but client already has real students,
-              // DO NOT wipe the client's data! Push client's data to the server instead!
+              // CRITICAL SAFEGUARD: If server sends 0 students but client already has real students, push client data
               if (cleanedStudents.length === 0 && prev.length > 0) {
                 console.warn('[Sync Safeguard] Server is empty but client has data. Pushing client data to server.');
                 setTimeout(() => pushToServer(), 500);
@@ -738,25 +960,99 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               }
 
               if (prev.length === 0 && cleanedStudents.length === 0) return prev;
-              if (
-                prev.length === cleanedStudents.length &&
-                prev.every(
-                  (p, idx) =>
-                    p.id === cleanedStudents[idx]?.id &&
-                    p.nameBn === cleanedStudents[idx]?.nameBn &&
-                    p.roll === cleanedStudents[idx]?.roll
-                )
-              ) {
-                return prev;
+
+              const prevMap = new Map<string, Student>();
+              for (const p of prev) {
+                if (p && p.id) prevMap.set(p.id, p);
               }
-              idbSet(`${STORAGE_KEY}_students`, cleanedStudents);
-              return cleanedStudents;
+
+              // Merge server students with local photos so neither side wipes freshly uploaded photos
+              const mergedStudents: Student[] = cleanedStudents.map((srvStd: Student) => {
+                const prevStd = prevMap.get(srvStd.id);
+                if (!prevStd) return srvStd;
+
+                const prevPhotoTime = new Date(prevStd.photoUpdatedAt || 0).getTime();
+                const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
+
+                const mergePhoto = (prevVal?: string, srvVal?: string) => {
+                  const p = prevVal || '';
+                  const s = srvVal || '';
+                  if (p && !s && prevPhotoTime >= srvPhotoTime) return p;
+                  if (s && !p && srvPhotoTime >= prevPhotoTime) return s;
+                  if (p && s) return srvPhotoTime > prevPhotoTime ? s : p;
+                  return s || p;
+                };
+
+                const nextAvatar = mergePhoto(prevStd.avatarUrl, srvStd.avatarUrl);
+                const nextFather = mergePhoto(prevStd.fatherAvatarUrl, srvStd.fatherAvatarUrl);
+                const nextMother = mergePhoto(prevStd.motherAvatarUrl, srvStd.motherAvatarUrl);
+                const nextPhotoUpdatedAt =
+                  srvPhotoTime > prevPhotoTime
+                    ? srvStd.photoUpdatedAt
+                    : prevStd.photoUpdatedAt || srvStd.photoUpdatedAt;
+
+                const serverMissedLocalPhoto =
+                  (Boolean(nextAvatar) && !srvStd.avatarUrl) ||
+                  (Boolean(nextFather) && !srvStd.fatherAvatarUrl) ||
+                  (Boolean(nextMother) && !srvStd.motherAvatarUrl);
+
+                const resultStd: Student = {
+                  ...srvStd,
+                  avatarUrl: nextAvatar,
+                  fatherAvatarUrl: nextFather,
+                  motherAvatarUrl: nextMother,
+                  ...(nextPhotoUpdatedAt ? { photoUpdatedAt: nextPhotoUpdatedAt } : {}),
+                };
+
+                if (serverMissedLocalPhoto) {
+                  localPhotosMissingOnServer.push(resultStd);
+                }
+
+                return resultStd;
+              });
+
+              const isUnchanged =
+                prev.length === mergedStudents.length &&
+                prev.every((p, idx) => {
+                  const m = mergedStudents[idx];
+                  if (!m) return false;
+                  return (
+                    p.id === m.id &&
+                    p.nameBn === m.nameBn &&
+                    p.roll === m.roll &&
+                    p.classId === m.classId &&
+                    p.section === m.section &&
+                    (p.avatarUrl || '') === (m.avatarUrl || '') &&
+                    (p.fatherAvatarUrl || '') === (m.fatherAvatarUrl || '') &&
+                    (p.motherAvatarUrl || '') === (m.motherAvatarUrl || '') &&
+                    (p.photoUpdatedAt || '') === (m.photoUpdatedAt || '') &&
+                    (p.guardianPhone || '') === (m.guardianPhone || '') &&
+                    (p.portalUserId || '') === (m.portalUserId || '') &&
+                    (p.monerBari?.updatedAt || '') === (m.monerBari?.updatedAt || '') &&
+                    (p.timeManagement?.updatedAt || '') === (m.timeManagement?.updatedAt || '') &&
+                    (p.academicRoadmap?.updatedAt || '') === (m.academicRoadmap?.updatedAt || '')
+                  );
+                });
+
+              if (isUnchanged) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
+              idbSet(`${STORAGE_KEY}_students`, mergedStudents);
+              return mergedStudents;
             });
+
+            if (localPhotosMissingOnServer.length > 0) {
+              setTimeout(() => {
+                pushPhotosInChunks(localPhotosMissingOnServer).catch(() => {});
+              }, 300);
+            }
           }
 
           if (Array.isArray(db.classes) && db.classes.length > 0) {
             setClasses((prev) => {
-              if (prev.length === db.classes.length) return prev;
+              if (JSON.stringify(prev) === JSON.stringify(db.classes)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.classes;
             });
           }
@@ -766,45 +1062,58 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               if (
                 prev.name === db.schoolInfo.name &&
                 prev.address === db.schoolInfo.address &&
-                prev.logoUrl === db.schoolInfo.logoUrl
-              )
+                prev.logoUrl === db.schoolInfo.logoUrl &&
+                prev.principalSignatureUrl === db.schoolInfo.principalSignatureUrl
+              ) {
                 return prev;
+              }
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.schoolInfo;
             });
           }
 
           if (db.examRecords && typeof db.examRecords === 'object') {
             setExamRecords((prev) => {
-              const prevKeys = Object.keys(prev);
-              const dbKeys = Object.keys(db.examRecords);
-              if (prevKeys.length === 0 && dbKeys.length === 0) return prev;
+              if (JSON.stringify(prev) === JSON.stringify(db.examRecords)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.examRecords;
             });
           }
 
           if (db.attendanceRecords && typeof db.attendanceRecords === 'object') {
             setAttendanceRecords((prev) => {
-              const prevKeys = Object.keys(prev);
-              const dbKeys = Object.keys(db.attendanceRecords);
-              if (prevKeys.length === 0 && dbKeys.length === 0) return prev;
+              if (JSON.stringify(prev) === JSON.stringify(db.attendanceRecords)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.attendanceRecords;
             });
           }
 
           if (Array.isArray(db.feeHeads) && db.feeHeads.length > 0) {
-            setFeeHeads((prev) => (prev.length === db.feeHeads.length ? prev : db.feeHeads));
+            setFeeHeads((prev) => {
+              if (JSON.stringify(prev) === JSON.stringify(db.feeHeads)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
+              return db.feeHeads;
+            });
           }
 
           if (Array.isArray(db.feeInvoices)) {
             setFeeInvoices((prev) => {
-              if (prev.length === 0 && db.feeInvoices.length === 0) return prev;
+              if (JSON.stringify(prev) === JSON.stringify(db.feeInvoices)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.feeInvoices;
             });
           }
 
           if (Array.isArray(db.feeReceipts)) {
             setFeeReceipts((prev) => {
-              if (prev.length === 0 && db.feeReceipts.length === 0) return prev;
+              if (JSON.stringify(prev) === JSON.stringify(db.feeReceipts)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
               return db.feeReceipts;
             });
           }
@@ -833,19 +1142,44 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                   }
                 }
               }
-              return Array.from(mergedMap.values())
+              const nextLogs = Array.from(mergedMap.values())
                 .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                 .slice(0, 1000);
+              if (
+                prev.length === nextLogs.length &&
+                prev[0]?.id === nextLogs[0]?.id &&
+                prev[0]?.guardianAcknowledged === nextLogs[0]?.guardianAcknowledged
+              ) {
+                return prev;
+              }
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
+              return nextLogs;
             });
           }
 
-          if (Array.isArray(db.smsLogs)) setSmsLogs(db.smsLogs);
+          if (Array.isArray(db.smsLogs)) {
+            setSmsLogs((prev) => {
+              if (prev.length === db.smsLogs.length && prev[0]?.id === db.smsLogs[0]?.id) return prev;
+              return db.smsLogs;
+            });
+          }
           if (db.smsGatewayConfig) setSmsGatewayConfig(db.smsGatewayConfig);
           if (Array.isArray(db.calendarEvents) && db.calendarEvents.length > 0) {
-            setCalendarEvents((prev) => (prev.length === db.calendarEvents.length ? prev : db.calendarEvents));
+            setCalendarEvents((prev) => {
+              if (JSON.stringify(prev) === JSON.stringify(db.calendarEvents)) return prev;
+              stateChangedFromServer = true;
+              suppressNextAutoPushRef.current = true;
+              return db.calendarEvents;
+            });
+          }
+
+          if (!stateChangedFromServer) {
+            suppressNextAutoPushRef.current = false;
           }
 
           setServerSyncStatus('synced');
+          setSyncErrorMessage(null);
           setLastSyncedTime(
             new Date().toLocaleTimeString('bn-BD', {
               hour: '2-digit',
@@ -868,7 +1202,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsServerSyncing(false);
       isInitialServerLoadDone.current = true;
     }
-  }, [pushToServer]);
+  }, [pushToServer, pushPhotosInChunks]);
 
   // Initial load: IndexedDB local cache + Server Sync (Runs ONCE on mount)
   useEffect(() => {
@@ -932,9 +1266,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, []); // Run strictly once on mount to prevent infinite re-render loops
 
-  // Debounced auto-save to central server on state changes
+  // Debounced auto-save to central server ONLY on actual local user mutations
   useEffect(() => {
     if (!isInitialServerLoadDone.current) return;
+    if (suppressNextAutoPushRef.current) {
+      suppressNextAutoPushRef.current = false;
+      return;
+    }
     const timer = setTimeout(() => {
       pushToServer();
     }, 1000);
@@ -1148,18 +1486,34 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const addStudent = (studentData: Omit<Student, 'id'>): Student => {
     const newId = `std_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const qrCode = studentData.securityQrCode || `DLIKON-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
+    const hasAnyPhoto = Boolean(studentData.avatarUrl || studentData.fatherAvatarUrl || studentData.motherAvatarUrl);
     const newStudent: Student = {
       ...studentData,
       id: newId,
       securityQrCode: qrCode,
+      ...(hasAnyPhoto ? { photoUpdatedAt: studentData.photoUpdatedAt || new Date().toISOString() } : {}),
     };
-    
-    // Asynchronously compress image in background if large
-    if (studentData.avatarUrl && studentData.avatarUrl.length > 50000) {
-      compressImageBase64(studentData.avatarUrl).then((compressed) => {
-        setStudents((prev) => prev.map((s) => (s.id === newId ? { ...s, avatarUrl: compressed } : s)));
-      });
-    }
+
+    const compressAndSyncNewStudent = async () => {
+      const updates: Partial<Student> = {};
+      if (studentData.avatarUrl && studentData.avatarUrl.length > 18000) {
+        updates.avatarUrl = await compressImageBase64(studentData.avatarUrl);
+      }
+      if (studentData.fatherAvatarUrl && studentData.fatherAvatarUrl.length > 18000) {
+        updates.fatherAvatarUrl = await compressImageBase64(studentData.fatherAvatarUrl);
+      }
+      if (studentData.motherAvatarUrl && studentData.motherAvatarUrl.length > 18000) {
+        updates.motherAvatarUrl = await compressImageBase64(studentData.motherAvatarUrl);
+      }
+      const finalized = { ...newStudent, ...updates };
+      if (Object.keys(updates).length > 0) {
+        setStudents((prev) => prev.map((s) => (s.id === newId ? finalized : s)));
+      }
+      if (cloudUser && cloudUser.emailVerified) {
+        syncStudentRecordToFirestore(finalized, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      }
+    };
+    compressAndSyncNewStudent();
 
     setStudents((prev) => [...prev, newStudent]);
     return newStudent;
@@ -1167,29 +1521,72 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const updateStudent = (student: Student) => {
     const qrCode = student.securityQrCode || `DLIKON-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
-    const studentWithQr = { ...student, securityQrCode: qrCode };
+    const existing = students.find((s) => s.id === student.id);
+    const photosModified =
+      (student.avatarUrl || '') !== (existing?.avatarUrl || '') ||
+      (student.fatherAvatarUrl || '') !== (existing?.fatherAvatarUrl || '') ||
+      (student.motherAvatarUrl || '') !== (existing?.motherAvatarUrl || '');
 
-    const pushProfileToServer = (payload: Student) => {
+    const studentWithQr: Student = {
+      ...student,
+      securityQrCode: qrCode,
+      photoUpdatedAt: photosModified
+        ? new Date().toISOString()
+        : student.photoUpdatedAt || existing?.photoUpdatedAt,
+    };
+
+    const pushProfileToServer = async (payload: Student) => {
       try {
-        fetch('/api/student/profile-update', {
+        const res = await fetch('/api/student/profile-update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ studentId: payload.id, updates: payload }),
-        }).catch(() => {});
+        });
+        if (res.ok) {
+          setServerSyncStatus('synced');
+          setSyncErrorMessage(null);
+          setLastSyncedTime(
+            new Date().toLocaleTimeString('bn-BD', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            })
+          );
+          lastSyncTimestampRef.current = Date.now();
+        } else {
+          // Fallback to chunked photo endpoint
+          await pushPhotosInChunks([payload]);
+        }
       } catch {
-        // Non-fatal fallback to standard sync
+        // Non-fatal fallback to debounced sync
       }
       if (cloudUser && cloudUser.emailVerified) {
         syncStudentRecordToFirestore(payload, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
       }
     };
 
-    if (student.avatarUrl && student.avatarUrl.length > 50000) {
-      compressImageBase64(student.avatarUrl).then((compressed) => {
-        const finalStudent = { ...studentWithQr, avatarUrl: compressed };
+    const needsCompression =
+      (studentWithQr.avatarUrl && studentWithQr.avatarUrl.length > 18000) ||
+      (studentWithQr.fatherAvatarUrl && studentWithQr.fatherAvatarUrl.length > 18000) ||
+      (studentWithQr.motherAvatarUrl && studentWithQr.motherAvatarUrl.length > 18000);
+
+    if (needsCompression) {
+      (async () => {
+        const finalStudent: Student = {
+          ...studentWithQr,
+          avatarUrl: studentWithQr.avatarUrl
+            ? await compressImageBase64(studentWithQr.avatarUrl)
+            : studentWithQr.avatarUrl,
+          fatherAvatarUrl: studentWithQr.fatherAvatarUrl
+            ? await compressImageBase64(studentWithQr.fatherAvatarUrl)
+            : studentWithQr.fatherAvatarUrl,
+          motherAvatarUrl: studentWithQr.motherAvatarUrl
+            ? await compressImageBase64(studentWithQr.motherAvatarUrl)
+            : studentWithQr.motherAvatarUrl,
+        };
         setStudents((prev) => prev.map((s) => (s.id === student.id ? finalStudent : s)));
         pushProfileToServer(finalStudent);
-      });
+      })();
     } else {
       pushProfileToServer(studentWithQr);
     }
@@ -2526,6 +2923,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const forceServerSync = async (): Promise<void> => {
     await pushToServer();
     await fetchFromServer();
+    if (cloudUser && cloudUser.emailVerified) {
+      await syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
+    }
   };
 
   const seedParentDetailsForClass = (classId: string): number => {
@@ -2612,8 +3012,20 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
-  const scanAndRecoverBrowserData = async (): Promise<{ studentCount: number; message: string }> => {
-    let recovered: Student[] = [];
+  const scanAndRecoverBrowserData = async (): Promise<{ studentCount: number; recoveredPhotoCount?: number; message: string }> => {
+    const candidates: Student[][] = [];
+
+    const collectValidStudents = (rawList: any[]) => {
+      const studentItems = rawList.filter(
+        (item: any) => item && typeof item === 'object' && item.nameBn && (item.roll !== undefined || item.classId)
+      );
+      if (studentItems.length > 0) {
+        const nonDemo = studentItems.filter(
+          (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+        );
+        if (nonDemo.length > 0) candidates.push(nonDemo);
+      }
+    };
 
     // 1. Scan all localStorage keys
     try {
@@ -2624,19 +3036,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const raw = localStorage.getItem(key);
           if (!raw) continue;
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const studentItems = parsed.filter(
-              (item: any) => item && typeof item === 'object' && item.nameBn && (item.roll !== undefined || item.classId)
-            );
-            if (studentItems.length > 0) {
-              const nonDemo = studentItems.filter(
-                (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
-              );
-              if (nonDemo.length > recovered.length) {
-                recovered = nonDemo;
-              }
-            }
-          }
+          if (Array.isArray(parsed)) collectValidStudents(parsed);
         } catch {
           // Ignore non-JSON
         }
@@ -2648,14 +3048,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // 2. Scan IndexedDB
     try {
       const idbData = await idbGet<Student[]>(`${STORAGE_KEY}_students`);
-      if (idbData && Array.isArray(idbData)) {
-        const nonDemo = idbData.filter(
-          (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
-        );
-        if (nonDemo.length > recovered.length) {
-          recovered = nonDemo;
-        }
-      }
+      if (idbData && Array.isArray(idbData)) collectValidStudents(idbData);
     } catch (e) {
       console.warn('Error reading IndexedDB during recovery:', e);
     }
@@ -2669,17 +3062,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const raw = sessionStorage.getItem(key);
           if (!raw) continue;
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const studentItems = parsed.filter(
-              (item: any) => item && typeof item === 'object' && item.nameBn && (item.roll !== undefined || item.classId)
-            );
-            const nonDemo = studentItems.filter(
-              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
-            );
-            if (nonDemo.length > recovered.length) {
-              recovered = nonDemo;
-            }
-          }
+          if (Array.isArray(parsed)) collectValidStudents(parsed);
         } catch {
           // Ignore
         }
@@ -2688,32 +3071,73 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.warn('Error scanning sessionStorage:', e);
     }
 
-    if (recovered.length > 0) {
+    if (candidates.length > 0) {
+      // Merge recovered records + any cached photos with current students
+      const currentList = latestStateRef.current.students;
+      const baseMap = new Map<string, Student>();
+      currentList.forEach((s) => baseMap.set(s.id, s));
+
+      let recoveredPhotoCount = 0;
+      let addedStudentCount = 0;
+
+      for (const batch of candidates) {
+        for (const item of batch) {
+          const existing = baseMap.get(item.id);
+          if (!existing) {
+            baseMap.set(item.id, item);
+            addedStudentCount++;
+            if (item.avatarUrl || item.fatherAvatarUrl || item.motherAvatarUrl) {
+              recoveredPhotoCount++;
+            }
+          } else {
+            let photoFound = false;
+            const nextAvatar = existing.avatarUrl || item.avatarUrl || '';
+            const nextFather = existing.fatherAvatarUrl || item.fatherAvatarUrl || '';
+            const nextMother = existing.motherAvatarUrl || item.motherAvatarUrl || '';
+            if (
+              (!existing.avatarUrl && item.avatarUrl) ||
+              (!existing.fatherAvatarUrl && item.fatherAvatarUrl) ||
+              (!existing.motherAvatarUrl && item.motherAvatarUrl)
+            ) {
+              photoFound = true;
+              recoveredPhotoCount++;
+            }
+            if (photoFound) {
+              baseMap.set(item.id, {
+                ...existing,
+                avatarUrl: nextAvatar,
+                fatherAvatarUrl: nextFather,
+                motherAvatarUrl: nextMother,
+                photoUpdatedAt: existing.photoUpdatedAt || item.photoUpdatedAt || new Date().toISOString(),
+              });
+            }
+          }
+        }
+      }
+
+      const recovered = Array.from(baseMap.values());
       setStudents(recovered);
       await idbSet(`${STORAGE_KEY}_students`, recovered);
-      try {
-        localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(recovered));
-      } catch {
-        // Ignore
+      await pushPhotosInChunks(recovered).catch(() => {});
+
+      if (cloudUser && cloudUser.emailVerified && recoveredPhotoCount > 0) {
+        batchPushStudentsToFirestore(recovered, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
       }
-      await fetch('/api/school-data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...latestStateRef.current,
-          students: recovered,
-          _lastUpdated: new Date().toISOString(),
-        }),
-      });
+
       return {
         studentCount: recovered.length,
-        message: `${toBengaliNumber(recovered.length)} জন শিক্ষার্থীর তথ্য ব্রাউজার ক্যাশ থেকে উদ্ধার করে সার্ভারে সংরক্ষিত হয়েছে!`,
+        recoveredPhotoCount,
+        message:
+          recoveredPhotoCount > 0 || addedStudentCount > 0
+            ? `ব্রাউজার ক্যাশ থেকে ${toBengaliNumber(recoveredPhotoCount)}টি হারানো ছবি ও ${toBengaliNumber(recovered.length)} জন শিক্ষার্থীর তথ্য উদ্ধার করে সার্ভারে সংরক্ষিত হয়েছে!`
+            : `বর্তমানে ব্রাউজার ক্যাশে অতিরিক্ত কোনো হারানো ছবি পাওয়া যায়নি (সর্বমোট ${toBengaliNumber(recovered.length)} জন শিক্ষার্থী রয়েছে)।`,
       };
     }
 
     return {
       studentCount: 0,
-      message: 'ব্রাউজারে পূর্বের সংরক্ষিত কোনো রেকর্ড পাওয়া যায়নি। অনুগ্রহ করে আপনার এক্সেল ফাইলটি পুনরায় আপলোড করুন।',
+      recoveredPhotoCount: 0,
+      message: 'এই ব্রাউজারে পূর্বের সংরক্ষিত কোনো বাড়তি ছবি বা রেকর্ড পাওয়া যায়নি।',
     };
   };
 
@@ -2821,6 +3245,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         clearSecurityLogs,
         isServerSyncing,
         serverSyncStatus,
+        syncErrorMessage,
         lastSyncedTime,
         forceServerSync,
         seedParentDetailsForClass,
@@ -2829,8 +3254,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cloudUser,
         cloudSyncError,
         cloudUnauthorizedDomain,
+        isCloudPhotoSyncing,
+        cloudPhotoSyncProgress,
         connectCloudSync,
         disconnectCloudSync,
+        syncAllPhotosToCloud,
         broadcastSecurityLogToCloud,
       }}
     >

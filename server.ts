@@ -52,20 +52,57 @@ if (!fs.existsSync(BACKUP_DIR)) {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 
+let lastBackupTimeMs = 0;
+let lastBackupSignature = '';
+
+function countStudentsWithPhotos(students: any[]): number {
+  if (!Array.isArray(students)) return 0;
+  let count = 0;
+  for (const s of students) {
+    if (s && ((s.avatarUrl && s.avatarUrl.length > 20) || (s.fatherAvatarUrl && s.fatherAvatarUrl.length > 20) || (s.motherAvatarUrl && s.motherAvatarUrl.length > 20))) {
+      count++;
+    }
+  }
+  return count;
+}
+
 function createTimestampedBackup(data: any) {
   try {
     if (!data || !Array.isArray(data.students) || data.students.length === 0) return;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    const photoCount = countStudentsWithPhotos(data.students);
+    const totalAvatarBytes = data.students.reduce(
+      (sum: number, s: any) =>
+        sum +
+        (s?.avatarUrl?.length || 0) +
+        (s?.fatherAvatarUrl?.length || 0) +
+        (s?.motherAvatarUrl?.length || 0),
+      0
+    );
+    const signature = `${data.students.length}:${photoCount}:${totalAvatarBytes}:${Object.keys(data.examRecords || {}).length}:${(data.feeReceipts || []).length}`;
+    const now = Date.now();
+
+    // Prevent 15-second sync polling from overwriting all 30 backup slots in 7.5 minutes
+    const signatureChanged = signature !== lastBackupSignature;
+    const elapsedMs = now - lastBackupTimeMs;
+    if (!signatureChanged && elapsedMs < 10 * 60 * 1000) {
+      return;
+    }
+
+    lastBackupSignature = signature;
+    lastBackupTimeMs = now;
+
+    const timestamp = new Date(now).toISOString().replace(/[:.]/g, '-');
     const backupFile = path.join(BACKUP_DIR, `school_db_${timestamp}.json`);
     fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf-8');
 
-    // Keep only last 30 backups
+    // Keep last 40 backups
     const files = fs
       .readdirSync(BACKUP_DIR)
       .filter((f) => f.startsWith('school_db_') && f.endsWith('.json'))
       .sort();
-    if (files.length > 30) {
-      files.slice(0, files.length - 30).forEach((f) => {
+    if (files.length > 40) {
+      files.slice(0, files.length - 40).forEach((f) => {
         try {
           fs.unlinkSync(path.join(BACKUP_DIR, f));
         } catch {
@@ -131,10 +168,12 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req, res) => {
+    const studentsList = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
     res.json({
       status: 'ok',
       time: new Date().toISOString(),
-      studentCount: memoryDb?.students?.length ?? 0,
+      studentCount: studentsList.length,
+      photoCount: countStudentsWithPhotos(studentsList),
       hasSavedData: !!memoryDb,
     });
   });
@@ -224,8 +263,39 @@ async function startServer() {
                 ? srvStd.academicRoadmap
                 : incStd.academicRoadmap
               : incStd.academicRoadmap || srvStd.academicRoadmap;
+          const incPhotoTime = new Date(incStd.photoUpdatedAt || 0).getTime();
+          const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
+
+          const resolvePhotoField = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') => {
+            const incVal = typeof incStd[field] === 'string' ? incStd[field] : '';
+            const srvVal = typeof srvStd[field] === 'string' ? srvStd[field] : '';
+            // Preserve existing server photo unless incoming explicitly has a newer photo timestamp or server has none
+            if (!incVal && srvVal && incPhotoTime <= srvPhotoTime) {
+              return srvVal;
+            }
+            if (srvVal && incVal && srvPhotoTime > incPhotoTime) {
+              return srvVal;
+            }
+            return incVal || srvVal || '';
+          };
+
+          const mergedAvatarUrl = resolvePhotoField('avatarUrl');
+          const mergedFatherAvatarUrl = resolvePhotoField('fatherAvatarUrl');
+          const mergedMotherAvatarUrl = resolvePhotoField('motherAvatarUrl');
+          const mergedPhotoUpdatedAt =
+            incPhotoTime > srvPhotoTime
+              ? incStd.photoUpdatedAt
+              : srvStd.photoUpdatedAt || incStd.photoUpdatedAt;
+
+          const cleanIncStd = { ...incStd };
+          delete cleanIncStd._photosStripped;
+
           return {
-            ...incStd,
+            ...cleanIncStd,
+            avatarUrl: mergedAvatarUrl,
+            fatherAvatarUrl: mergedFatherAvatarUrl,
+            motherAvatarUrl: mergedMotherAvatarUrl,
+            ...(mergedPhotoUpdatedAt ? { photoUpdatedAt: mergedPhotoUpdatedAt } : {}),
             futurePlan: mergedFuturePlan,
             achievements: mergedAchievements,
             dreamGallery: mergedDreamGallery,
@@ -367,13 +437,22 @@ async function startServer() {
         loadDatabaseFromFile();
       }
 
+      const hasPhotoUpdate =
+        Object.prototype.hasOwnProperty.call(updates, 'avatarUrl') ||
+        Object.prototype.hasOwnProperty.call(updates, 'fatherAvatarUrl') ||
+        Object.prototype.hasOwnProperty.call(updates, 'motherAvatarUrl');
+
+      const stampedUpdates = hasPhotoUpdate
+        ? { ...updates, photoUpdatedAt: updates.photoUpdatedAt || new Date().toISOString() }
+        : updates;
+
       const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
       let updatedStudent: any = null;
       const nextStudents = currentStudents.map((s) => {
         if (s.id === studentId) {
           updatedStudent = {
             ...s,
-            ...updates,
+            ...stampedUpdates,
             id: s.id,
           };
           return updatedStudent;
@@ -396,9 +475,74 @@ async function startServer() {
         success: true,
         message: 'শিক্ষার্থীর প্রোফাইল সফলভাবে সংরক্ষিত হয়েছে',
         student: updatedStudent,
+        photoCount: countStudentsWithPhotos(nextStudents),
       });
     } catch (err: any) {
       console.error('[Server API] Student profile update error:', err);
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // Chunked batch photo upload endpoint (avoids HTTP proxy payload size limits when uploading 176+ photos)
+  app.post('/api/students/batch-photos', (req, res) => {
+    try {
+      const { items } = req.body;
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'Photo items array required' });
+      }
+
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+
+      const itemMap = new Map<string, any>();
+      for (const it of items) {
+        if (it && it.id) {
+          itemMap.set(it.id, it);
+        }
+      }
+
+      let updatedCount = 0;
+      const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+      const nextStudents = currentStudents.map((s) => {
+        const inc = itemMap.get(s.id);
+        if (!inc) return s;
+
+        const incTime = new Date(inc.photoUpdatedAt || 0).getTime();
+        const srvTime = new Date(s.photoUpdatedAt || 0).getTime();
+        if (srvTime > incTime && incTime > 0) {
+          return s;
+        }
+
+        updatedCount++;
+        return {
+          ...s,
+          avatarUrl: inc.avatarUrl !== undefined ? inc.avatarUrl : s.avatarUrl,
+          fatherAvatarUrl: inc.fatherAvatarUrl !== undefined ? inc.fatherAvatarUrl : s.fatherAvatarUrl,
+          motherAvatarUrl: inc.motherAvatarUrl !== undefined ? inc.motherAvatarUrl : s.motherAvatarUrl,
+          photoUpdatedAt: inc.photoUpdatedAt || s.photoUpdatedAt || new Date().toISOString(),
+        };
+      });
+
+      const updatedDb = {
+        ...(memoryDb || {}),
+        students: nextStudents,
+        _lastUpdated: new Date().toISOString(),
+      };
+
+      const saved = saveDatabaseToFile(updatedDb);
+      if (!saved) {
+        return res.status(500).json({ success: false, message: 'Failed to persist chunked photos' });
+      }
+
+      return res.json({
+        success: true,
+        updatedCount,
+        photoCount: countStudentsWithPhotos(nextStudents),
+        lastUpdated: updatedDb._lastUpdated,
+      });
+    } catch (err: any) {
+      console.error('[Server API] Batch photo upload error:', err);
       return res.status(500).json({ success: false, message: err?.message || 'Server error' });
     }
   });

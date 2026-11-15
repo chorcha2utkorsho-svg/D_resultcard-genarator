@@ -4,17 +4,17 @@
  */
 export async function compressImageBase64(
   base64Str: string,
-  maxWidth = 360,
-  maxHeight = 450,
-  quality = 0.8
+  maxWidth = 220,
+  maxHeight = 280,
+  quality = 0.72
 ): Promise<string> {
   // If not a data URL or very short, return as is
   if (!base64Str || !base64Str.startsWith('data:image/')) {
     return base64Str;
   }
 
-  // If already small (< 50KB), return as is
-  if (base64Str.length < 50000) {
+  // If already compact (< 18KB), return as is
+  if (base64Str.length < 18000) {
     return base64Str;
   }
 
@@ -48,15 +48,19 @@ export async function compressImageBase64(
         return;
       }
 
+      // Fill white background to avoid black artifacts on transparent PNGs
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+
       // Smooth resizing
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Export as WebP or JPEG
+      // Export as JPEG
       try {
         const compressed = canvas.toDataURL('image/jpeg', quality);
-        resolve(compressed);
+        resolve(compressed.length < base64Str.length ? compressed : base64Str);
       } catch {
         resolve(base64Str);
       }

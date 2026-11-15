@@ -26,6 +26,7 @@ export interface Student {
   section: string;
   academicYear: string;
   avatarUrl?: string; // ছবি
+  photoUpdatedAt?: string; // ছবি আপডেটের সময় (ISO)
   dob?: string; // জন্ম তারিখ (YYYY-MM-DD)
   birthRegNo?: string; // জন্ম নিবন্ধন নম্বর (১৭ ডিজিট)
   gender?: 'ছাত্র' | 'ছাত্রী';

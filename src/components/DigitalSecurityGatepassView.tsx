@@ -1343,14 +1343,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const target = students.find((s) => s.id === studentId);
     if (!target) return;
 
-    const compressed = await compressImageBase64(base64, 240, 300, 0.75);
+    const compressed = await compressImageBase64(base64, 220, 280, 0.72);
+    const photoUpdatedAt = new Date().toISOString();
 
     if (role === 'student') {
-      updateStudent({ ...target, avatarUrl: compressed });
+      updateStudent({ ...target, avatarUrl: compressed, photoUpdatedAt });
     } else if (role === 'father') {
-      updateStudent({ ...target, fatherAvatarUrl: compressed });
+      updateStudent({ ...target, fatherAvatarUrl: compressed, photoUpdatedAt });
     } else if (role === 'mother') {
-      updateStudent({ ...target, motherAvatarUrl: compressed });
+      updateStudent({ ...target, motherAvatarUrl: compressed, photoUpdatedAt });
     }
   };
 

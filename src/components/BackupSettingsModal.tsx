@@ -12,7 +12,9 @@ import {
   Layers,
   Plus,
   Trash2,
-  BookOpen,
+  Cloud,
+  SearchCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { SchoolLogo } from './SchoolLogo';
@@ -29,16 +31,23 @@ export const BackupSettingsModal: React.FC<BackupSettingsModalProps> = ({ isOpen
     schoolInfo,
     updateSchoolInfo,
     classes,
+    students,
     updateClassSubjects,
     exportDatabaseBackup,
     importDatabaseBackup,
     resetToDefaultData,
+    scanAndRecoverBrowserData,
+    cloudUser,
+    connectCloudSync,
+    syncAllPhotosToCloud,
+    isCloudPhotoSyncing,
   } = useSchool();
 
   const [activeTab, setActiveTab] = useState<'profile' | 'subjects' | 'backup'>('profile');
   const [infoForm, setInfoForm] = useState({ ...schoolInfo });
   const [selectedClassId, setSelectedClassId] = useState<string>(classes[3]?.id || classes[0]?.id || '');
   const [restoreStatus, setRestoreStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [isScanningCache, setIsScanningCache] = useState(false);
 
   // New subject form for active class
   const [newSubName, setNewSubName] = useState('');
@@ -446,6 +455,57 @@ export const BackupSettingsModal: React.FC<BackupSettingsModalProps> = ({ isOpen
               </div>
             )}
 
+            {/* Cloud Photo Sync & Browser Cache Photo Recovery */}
+            <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/70 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-bold text-indigo-950 text-sm flex items-center">
+                  <Cloud className="w-4 h-4 mr-1.5 text-indigo-600" /> স্থায়ী ক্লাউড ফটো সিঙ্ক ও ক্যাশ পুনরুদ্ধার
+                </h4>
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-white text-indigo-800 border border-indigo-200">
+                  মোট {toBengaliNumber(students.length)} জন · ছবি আছে {toBengaliNumber(students.filter((s) => Boolean(s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl)).length)} জনে
+                </span>
+              </div>
+              <p className="text-xs text-indigo-900/80 leading-relaxed">
+                সব শিক্ষার্থীর ছবি স্থায়ীভাবে গুগল ফায়ারবেজ ক্লাউডে সেভ রাখুন যাতে সার্ভার রিস্টার্ট বা অন্য ডিভাইস থেকেও ছবি না হারায়। যে ব্রাউজারে আগে ছবি আপলোড করেছিলেন, সেখান থেকে হারানো ছবিও খুঁজতে পারেন।
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={isCloudPhotoSyncing}
+                  onClick={async () => {
+                    if (!cloudUser) {
+                      const ok = await connectCloudSync();
+                      if (!ok) return;
+                    }
+                    const res = await syncAllPhotosToCloud();
+                    setRestoreStatus({ success: res.ok, message: res.message });
+                  }}
+                  className="py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-lg text-xs font-bold shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isCloudPhotoSyncing ? 'animate-spin' : ''}`} />
+                  {cloudUser ? 'ক্লাউডে সকল ছবি সেভ ও সিঙ্ক করুন' : 'গুগল দিয়ে স্থায়ী ক্লাউড সিঙ্ক চালু করুন'}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isScanningCache}
+                  onClick={async () => {
+                    setIsScanningCache(true);
+                    const res = await scanAndRecoverBrowserData();
+                    setIsScanningCache(false);
+                    setRestoreStatus({
+                      success: (res.recoveredPhotoCount || 0) > 0 || res.studentCount > 0,
+                      message: res.message,
+                    });
+                  }}
+                  className="py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-slate-950 rounded-lg text-xs font-bold shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <SearchCheck className="w-3.5 h-3.5" />
+                  {isScanningCache ? 'খোঁজা হচ্ছে...' : 'ব্রাউজার ক্যাশ থেকে হারানো ছবি খুঁজুন'}
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Export Backup Card */}
               <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-slate-50">
@@ -453,12 +513,12 @@ export const BackupSettingsModal: React.FC<BackupSettingsModalProps> = ({ isOpen
                   <Download className="w-4 h-4 mr-1.5 text-emerald-600" /> ডাটাবেস ব্যাকআপ ডাউনলোড
                 </h4>
                 <p className="text-xs text-slate-600">
-                  এক ক্লিকে সকল শিক্ষার্থী, পরীক্ষার নম্বর ও কনফিগারেশন JSON ফাইল হিসেবে ডাউনলোড করুন।
+                  এক ক্লিকে সকল শিক্ষার্থী, পরীক্ষার নম্বর, ছবি ও কনফিগারেশন JSON ফাইল হিসেবে ডাউনলোড করুন।
                 </p>
                 <button
                   type="button"
                   onClick={exportDatabaseBackup}
-                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition"
+                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
                 >
                   ব্যাকআপ ফাইল ডাউনলোড করুন (.json)
                 </button>

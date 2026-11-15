@@ -35,6 +35,7 @@ import {
   QrCode,
   UserCheck,
   Image as ImageIcon,
+  Cloud,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { DreamGalleryPhoto, Student } from '../types';
@@ -64,12 +65,22 @@ export const StudentManagement: React.FC = () => {
     deleteMultipleStudents,
     clearAllStudents,
     scanAndRecoverBrowserData,
+    exportDatabaseBackup,
+    serverSyncStatus,
+    syncErrorMessage,
+    cloudUser,
+    connectCloudSync,
+    syncAllPhotosToCloud,
+    isCloudPhotoSyncing,
+    cloudPhotoSyncProgress,
     selectedClassId,
     setSelectedClassId,
     selectedSection,
     setSelectedSection,
     selectedYear,
   } = useSchool();
+
+  const [photoSyncBanner, setPhotoSyncBanner] = useState<string | null>(null);
 
   const [activeView, setActiveView] = useState<'list' | 'bulk_upload'>('list');
   const [searchTerm, setSearchTerm] = useState('');
@@ -320,10 +331,20 @@ export const StudentManagement: React.FC = () => {
       return;
     }
 
-    // Auto-compress photo if raw base64 uploaded
+    // Auto-compress student & parent photos if > 18KB so batch & cloud sync stays fast
     let finalAvatar = formData.avatarUrl;
-    if (finalAvatar && finalAvatar.length > 50000) {
+    if (finalAvatar && finalAvatar.length > 18000) {
       finalAvatar = await compressImageBase64(finalAvatar);
+    }
+
+    let finalFatherAvatar = formData.fatherAvatarUrl;
+    if (finalFatherAvatar && finalFatherAvatar.length > 18000) {
+      finalFatherAvatar = await compressImageBase64(finalFatherAvatar);
+    }
+
+    let finalMotherAvatar = formData.motherAvatarUrl;
+    if (finalMotherAvatar && finalMotherAvatar.length > 18000) {
+      finalMotherAvatar = await compressImageBase64(finalMotherAvatar);
     }
 
     // Keep legacy fatherName and motherName synchronized
@@ -331,9 +352,20 @@ export const StudentManagement: React.FC = () => {
     const syncMother = formData.motherNameBn || formData.motherName || '';
     const syncGuardianPhone = formData.guardianPhone || formData.fatherPhone || formData.motherPhone || '';
 
+    const photosChanged = editingStudent
+      ? (finalAvatar || '') !== (editingStudent.avatarUrl || '') ||
+        (finalFatherAvatar || '') !== (editingStudent.fatherAvatarUrl || '') ||
+        (finalMotherAvatar || '') !== (editingStudent.motherAvatarUrl || '')
+      : Boolean(finalAvatar || finalFatherAvatar || finalMotherAvatar);
+
     const payload = {
       ...formData,
       avatarUrl: finalAvatar,
+      fatherAvatarUrl: finalFatherAvatar,
+      motherAvatarUrl: finalMotherAvatar,
+      photoUpdatedAt: photosChanged
+        ? new Date().toISOString()
+        : editingStudent?.photoUpdatedAt,
       fatherName: syncFather,
       fatherNameBn: syncFather,
       motherName: syncMother,
@@ -348,6 +380,15 @@ export const StudentManagement: React.FC = () => {
       });
     } else {
       addStudent(payload);
+    }
+
+    if (photosChanged) {
+      setPhotoSyncBanner(
+        cloudUser
+          ? `✓ "${formData.nameBn}"-এর ছবি কেন্দ্রীয় সার্ভার ও ফায়ারবেজ ক্লাউডে স্থায়ীভাবে সংরক্ষিত হয়েছে।`
+          : `✓ "${formData.nameBn}"-এর ছবি সার্ভারে সংরক্ষিত হয়েছে। স্থায়ী ব্যাকআপের জন্য "ক্লাউড সেভ" বাটনে ক্লিক করে গুগলে সেভ রাখুন।`
+      );
+      setTimeout(() => setPhotoSyncBanner(null), 5000);
     }
 
     setIsAddModalOpen(false);
@@ -553,9 +594,86 @@ export const StudentManagement: React.FC = () => {
   };
 
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
+  const studentsWithPhotoCount = students.filter((s) => Boolean(s.avatarUrl)).length;
 
   return (
     <div className="space-y-6">
+      {/* Photo Persistence & Cloud Backup Strip */}
+      <div
+        className={`rounded-xl border p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 ${
+          syncErrorMessage || serverSyncStatus === 'error'
+            ? 'bg-rose-50 border-rose-300 text-rose-900'
+            : cloudUser
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+            : 'bg-amber-50 border-amber-200 text-amber-950'
+        }`}
+      >
+        <div className="flex items-start sm:items-center gap-2.5 text-xs">
+          <Cloud className={`w-5 h-5 shrink-0 mt-0.5 sm:mt-0 ${cloudUser ? 'text-emerald-600' : 'text-amber-600'}`} />
+          <div>
+            <div className="font-bold flex flex-wrap items-center gap-2">
+              <span>
+                মোট {toBengaliNumber(students.length)} জন শিক্ষার্থী · ছবি সংরক্ষিত:{' '}
+                {toBengaliNumber(studentsWithPhotoCount)} জন
+              </span>
+              <span className="px-2 py-0.5 rounded bg-white/80 border border-current/20 text-[11px]">
+                {serverSyncStatus === 'synced'
+                  ? 'সার্ভার সিঙ্ক ✓'
+                  : serverSyncStatus === 'syncing'
+                  ? 'সার্ভারে সেভ হচ্ছে...'
+                  : 'সার্ভার ত্রুটি!'}
+              </span>
+            </div>
+            <p className="text-[11px] opacity-85 mt-0.5">
+              {syncErrorMessage
+                ? syncErrorMessage
+                : photoSyncBanner
+                ? photoSyncBanner
+                : cloudUser
+                ? `গুগল ক্লাউড (${cloudUser.email}) সক্রিয় — ছবি চাঙ্ক আকারে সার্ভার ও ক্লাউডে স্থায়ীভাবে সংরক্ষিত হয়।`
+                : 'ছবি স্থায়ীভাবে হারাতে না চাইলে "ক্লাউডে স্থায়ী সেভ" বাটনে ক্লিক করে গুগল দিয়ে সাইন ইন রাখুন এবং কাজ শেষে JSON ব্যাকআপ ডাউনলোড করুন।'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={isCloudPhotoSyncing}
+            onClick={async () => {
+              if (!cloudUser) {
+                const ok = await connectCloudSync();
+                if (!ok) return;
+              }
+              const res = await syncAllPhotosToCloud();
+              setPhotoSyncBanner(res.message);
+              setTimeout(() => setPhotoSyncBanner(null), 6000);
+            }}
+            className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-60 ${
+              cloudUser
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isCloudPhotoSyncing ? 'animate-spin' : ''}`} />
+            {isCloudPhotoSyncing && cloudPhotoSyncProgress
+              ? `ক্লাউডে সেভ হচ্ছে (${toBengaliNumber(cloudPhotoSyncProgress.done)}/${toBengaliNumber(cloudPhotoSyncProgress.total)})`
+              : cloudUser
+              ? 'সব ছবি ক্লাউডে সিঙ্ক করুন'
+              : 'ক্লাউডে স্থায়ী সেভ (Google)'}
+          </button>
+
+          <button
+            type="button"
+            onClick={exportDatabaseBackup}
+            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-2xs transition cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+            ব্যাকআপ ডাউনলোড
+          </button>
+        </div>
+      </div>
+
       {/* Control bar */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4 mb-4">

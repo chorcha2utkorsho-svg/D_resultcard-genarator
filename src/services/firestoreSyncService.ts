@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -10,6 +11,7 @@ import {
   updateDoc,
   where,
   limit,
+  writeBatch,
   Unsubscribe,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
@@ -18,10 +20,16 @@ import { SchoolInfo, SecurityGatepassLog, Student } from '../types';
 
 export const DEFAULT_SCHOOL_ID = 'dlikon_academy';
 export const BOOTSTRAP_ADMIN_EMAIL = 'chorcho2utkosho@gmail.com';
+const MAX_FIRESTORE_PHOTO_LEN = 180000;
 
 const clampStr = (val: unknown, max: number): string => {
   const s = typeof val === 'string' ? val : String(val ?? '');
   return s.slice(0, max);
+};
+
+const safePhotoStr = (val: unknown): string => {
+  if (typeof val !== 'string') return '';
+  return val.length <= MAX_FIRESTORE_PHOTO_LEN ? val : '';
 };
 
 const safeId = (val: string): string => {
@@ -122,6 +130,47 @@ export async function acknowledgeSecurityLogInFirestore(
   }
 }
 
+function buildStudentFirestorePayload(
+  student: Student,
+  user: User,
+  existingData?: Record<string, any>
+): Record<string, any> {
+  const cleanStudentId = safeId(student.id);
+  const payload: Record<string, any> = {
+    id: cleanStudentId,
+    nameBn: clampStr(student.nameBn, 160),
+    roll: Number(student.roll) || 0,
+    classId: clampStr(student.classId, 64),
+    ownerUid: existingData?.ownerUid ? safeId(existingData.ownerUid) : safeId(user.uid),
+    createdAt: existingData?.createdAt || serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (student.section) payload.section = clampStr(student.section, 32);
+  if (student.portalUserId) payload.portalUserId = clampStr(student.portalUserId, 64);
+  if (student.guardianPhone) payload.guardianPhone = clampStr(student.guardianPhone, 32);
+  if (student.guardianName) payload.guardianNameBn = clampStr(student.guardianName, 160);
+  if (student.guardianPin) payload.guardianPin = clampStr(student.guardianPin, 32);
+  if (existingData?.guardianUid) payload.guardianUid = safeId(existingData.guardianUid);
+
+  const avatar = safePhotoStr(student.avatarUrl);
+  const fatherAvatar = safePhotoStr(student.fatherAvatarUrl);
+  const motherAvatar = safePhotoStr(student.motherAvatarUrl);
+
+  if (avatar) payload.avatarUrl = avatar;
+  else if (student.avatarUrl === '' && existingData?.avatarUrl) payload.avatarUrl = '';
+
+  if (fatherAvatar) payload.fatherAvatarUrl = fatherAvatar;
+  else if (student.fatherAvatarUrl === '' && existingData?.fatherAvatarUrl) payload.fatherAvatarUrl = '';
+
+  if (motherAvatar) payload.motherAvatarUrl = motherAvatar;
+  else if (student.motherAvatarUrl === '' && existingData?.motherAvatarUrl) payload.motherAvatarUrl = '';
+
+  if (student.photoUpdatedAt) payload.photoUpdatedAt = clampStr(student.photoUpdatedAt, 64);
+
+  return payload;
+}
+
 export async function syncStudentRecordToFirestore(
   student: Student,
   user: User,
@@ -136,26 +185,8 @@ export async function syncStudentRecordToFirestore(
 
   try {
     const existingSnap = await getDoc(ref);
-    const payload: Record<string, any> = {
-      id: cleanStudentId,
-      nameBn: clampStr(student.nameBn, 160),
-      roll: Number(student.roll) || 0,
-      classId: clampStr(student.classId, 64),
-      ownerUid: existingSnap.exists()
-        ? safeId(existingSnap.data().ownerUid || user.uid)
-        : safeId(user.uid),
-      updatedAt: serverTimestamp(),
-    };
-    if (!existingSnap.exists()) {
-      payload.createdAt = serverTimestamp();
-    } else {
-      payload.createdAt = existingSnap.data().createdAt || serverTimestamp();
-    }
-    if (student.section) payload.section = clampStr(student.section, 32);
-    if (student.portalUserId) payload.portalUserId = clampStr(student.portalUserId, 64);
-    if (student.guardianPhone) payload.guardianPhone = clampStr(student.guardianPhone, 32);
-    if (student.guardianName) payload.guardianNameBn = clampStr(student.guardianName, 160);
-    if (student.guardianPin) payload.guardianPin = clampStr(student.guardianPin, 32);
+    const existingData = existingSnap.exists() ? existingSnap.data() : undefined;
+    const payload = buildStudentFirestorePayload(student, user, existingData);
 
     if (existingSnap.exists()) {
       await updateDoc(ref, payload);
@@ -164,6 +195,103 @@ export async function syncStudentRecordToFirestore(
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function batchPushStudentsToFirestore(
+  students: Student[],
+  user: User,
+  schoolInfo: SchoolInfo,
+  onProgress?: (done: number, total: number) => void
+): Promise<{ pushedCount: number; failedCount: number }> {
+  if (!user.emailVerified || students.length === 0) {
+    return { pushedCount: 0, failedCount: 0 };
+  }
+
+  await ensureSchoolDocument(user, schoolInfo);
+
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'students');
+  const existingMap = new Map<string, Record<string, any>>();
+  try {
+    const snap = await getDocs(colRef);
+    snap.docs.forEach((d) => {
+      existingMap.set(d.id, d.data());
+    });
+  } catch {
+    // Non-fatal: continue with direct set/update fallback
+  }
+
+  const CHUNK_SIZE = 10;
+  let pushedCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < students.length; i += CHUNK_SIZE) {
+    const chunk = students.slice(i, i + CHUNK_SIZE);
+    try {
+      const batch = writeBatch(db);
+      for (const student of chunk) {
+        const cleanId = safeId(student.id);
+        const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'students', cleanId);
+        const existingData = existingMap.get(cleanId);
+        const payload = buildStudentFirestorePayload(student, user, existingData);
+        if (existingData) {
+          batch.update(ref, payload);
+        } else {
+          batch.set(ref, payload);
+        }
+      }
+      await batch.commit();
+      pushedCount += chunk.length;
+    } catch {
+      // Fallback one-by-one if a chunk fails
+      for (const student of chunk) {
+        try {
+          await syncStudentRecordToFirestore(student, user, schoolInfo);
+          pushedCount++;
+        } catch {
+          failedCount++;
+        }
+      }
+    }
+    onProgress?.(Math.min(i + chunk.length, students.length), students.length);
+  }
+
+  return { pushedCount, failedCount };
+}
+
+export async function pullStudentsFromFirestore(
+  user: User
+): Promise<Partial<Student>[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/students`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'students');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  const q = isAdminUser
+    ? query(colRef)
+    : query(colRef, where('ownerUid', '==', safeId(user.uid)));
+
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: data.id || d.id,
+        nameBn: data.nameBn,
+        roll: Number(data.roll) || 0,
+        classId: data.classId,
+        section: data.section,
+        portalUserId: data.portalUserId,
+        guardianPhone: data.guardianPhone,
+        guardianName: data.guardianNameBn,
+        guardianPin: data.guardianPin,
+        avatarUrl: typeof data.avatarUrl === 'string' ? data.avatarUrl : undefined,
+        fatherAvatarUrl: typeof data.fatherAvatarUrl === 'string' ? data.fatherAvatarUrl : undefined,
+        motherAvatarUrl: typeof data.motherAvatarUrl === 'string' ? data.motherAvatarUrl : undefined,
+        photoUpdatedAt: typeof data.photoUpdatedAt === 'string' ? data.photoUpdatedAt : undefined,
+      };
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
   }
 }
 

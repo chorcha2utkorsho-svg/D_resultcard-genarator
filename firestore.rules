@@ -55,8 +55,9 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'nameBn', 'roll', 'classId', 'ownerUid', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly([
           'id', 'nameBn', 'roll', 'classId', 'section', 'portalUserId',
-          'guardianPhone', 'guardianNameBn', 'guardianPin', 'ownerUid',
-          'guardianUid', 'createdAt', 'updatedAt'
+          'guardianPhone', 'guardianNameBn', 'guardianPin',
+          'avatarUrl', 'fatherAvatarUrl', 'motherAvatarUrl', 'photoUpdatedAt',
+          'ownerUid', 'guardianUid', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 160 &&
@@ -67,6 +68,10 @@ service cloud.firestore {
         (!('guardianPhone' in data) || (data.guardianPhone is string && data.guardianPhone.size() <= 32)) &&
         (!('guardianNameBn' in data) || (data.guardianNameBn is string && data.guardianNameBn.size() <= 160)) &&
         (!('guardianPin' in data) || (data.guardianPin is string && data.guardianPin.size() <= 32)) &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 180000)) &&
+        (!('fatherAvatarUrl' in data) || (data.fatherAvatarUrl is string && data.fatherAvatarUrl.size() <= 180000)) &&
+        (!('motherAvatarUrl' in data) || (data.motherAvatarUrl is string && data.motherAvatarUrl.size() <= 180000)) &&
+        (!('photoUpdatedAt' in data) || (data.photoUpdatedAt is string && data.photoUpdatedAt.size() <= 64)) &&
         isValidId(data.ownerUid) &&
         (!('guardianUid' in data) || (data.guardianUid is string && data.guardianUid.size() <= 128)) &&
         data.createdAt is timestamp &&
@@ -205,7 +210,9 @@ service cloud.firestore {
             existing().ownerUid == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'nameBn', 'roll', 'classId', 'section', 'portalUserId',
-              'guardianPhone', 'guardianNameBn', 'guardianPin', 'guardianUid', 'updatedAt'
+              'guardianPhone', 'guardianNameBn', 'guardianPin',
+              'avatarUrl', 'fatherAvatarUrl', 'motherAvatarUrl', 'photoUpdatedAt',
+              'guardianUid', 'updatedAt'
             ])
           ));
         allow delete: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&

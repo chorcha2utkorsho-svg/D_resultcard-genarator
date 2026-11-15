@@ -105,6 +105,22 @@
           "type": "string",
           "maxLength": 32
         },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 180000
+        },
+        "fatherAvatarUrl": {
+          "type": "string",
+          "maxLength": 180000
+        },
+        "motherAvatarUrl": {
+          "type": "string",
+          "maxLength": 180000
+        },
+        "photoUpdatedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
         "ownerUid": {
           "type": "string",
           "maxLength": 128,

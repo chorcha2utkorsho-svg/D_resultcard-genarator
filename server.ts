@@ -67,6 +67,9 @@ function countStudentsWithPhotos(students: any[]): number {
   return count;
 }
 
+let backupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastBackupPhotoCount = -1;
+
 function createTimestampedBackup(data: any) {
   try {
     if (!data || !Array.isArray(data.students) || data.students.length === 0) return;
@@ -83,7 +86,7 @@ function createTimestampedBackup(data: any) {
     const signature = `${data.students.length}:${photoCount}:${totalAvatarBytes}:${Object.keys(data.examRecords || {}).length}:${(data.feeReceipts || []).length}`;
     const now = Date.now();
 
-    // Prevent 15-second sync polling from overwriting all 30 backup slots in 7.5 minutes
+    // Prevent 15-second sync polling from overwriting all 40 backup slots in 10 minutes
     const signatureChanged = signature !== lastBackupSignature;
     const elapsedMs = now - lastBackupTimeMs;
     if (!signatureChanged && elapsedMs < 10 * 60 * 1000) {
@@ -92,10 +95,11 @@ function createTimestampedBackup(data: any) {
 
     lastBackupSignature = signature;
     lastBackupTimeMs = now;
+    lastBackupPhotoCount = photoCount;
 
     const timestamp = new Date(now).toISOString().replace(/[:.]/g, '-');
     const backupFile = path.join(BACKUP_DIR, `school_db_${timestamp}.json`);
-    fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf-8');
+    fs.writeFileSync(backupFile, JSON.stringify(data), 'utf-8');
 
     // Keep last 40 backups
     const files = fs
@@ -116,10 +120,29 @@ function createTimestampedBackup(data: any) {
   }
 }
 
-function saveDatabaseToFile(data: any): boolean {
+function scheduleTimestampedBackup(immediate = false) {
+  if (!memoryDb || !Array.isArray(memoryDb.students) || memoryDb.students.length === 0) return;
+  const currentPhotoCount = countStudentsWithPhotos(memoryDb.students);
+  const bigJump = lastBackupPhotoCount >= 0 && Math.abs(currentPhotoCount - lastBackupPhotoCount) >= 10;
+  if (immediate || bigJump) {
+    if (backupDebounceTimer) {
+      clearTimeout(backupDebounceTimer);
+      backupDebounceTimer = null;
+    }
+    createTimestampedBackup(memoryDb);
+    return;
+  }
+  if (backupDebounceTimer) clearTimeout(backupDebounceTimer);
+  backupDebounceTimer = setTimeout(() => {
+    backupDebounceTimer = null;
+    if (memoryDb) createTimestampedBackup(memoryDb);
+  }, 2500);
+}
+
+function saveDatabaseToFile(data: any, options?: { skipBackup?: boolean; immediateBackup?: boolean }): boolean {
   try {
     memoryDb = data;
-    const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
+    const tempFile = `${DB_FILE}.tmp.${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const serialized = JSON.stringify(data, null, 2);
 
     fs.writeFileSync(tempFile, serialized, 'utf-8');
@@ -135,9 +158,9 @@ function saveDatabaseToFile(data: any): boolean {
 
     fs.renameSync(tempFile, DB_FILE);
 
-    // Create timestamped snapshot if there are students
-    if (Array.isArray(data.students) && data.students.length > 0) {
-      createTimestampedBackup(data);
+    // Create timestamped snapshot (throttled during rapid sequential photo chunks)
+    if (!options?.skipBackup && Array.isArray(data.students) && data.students.length > 0) {
+      scheduleTimestampedBackup(Boolean(options?.immediateBackup));
     }
 
     return true;
@@ -232,6 +255,7 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     const studentsList = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
     res.json({
       status: 'ok',
@@ -244,6 +268,9 @@ async function startServer() {
 
   // GET complete school database
   app.get('/api/school-data', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     if (!memoryDb) {
       loadDatabaseFromFile();
     }
@@ -329,11 +356,19 @@ async function startServer() {
               : incStd.academicRoadmap || srvStd.academicRoadmap;
           const incPhotoTime = new Date(incStd.photoUpdatedAt || 0).getTime();
           const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
+          const isStrippedSync = Boolean(incStd._photosStripped);
 
           const resolvePhotoField = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') => {
             const incVal = typeof incStd[field] === 'string' ? incStd[field] : '';
             const srvVal = typeof srvStd[field] === 'string' ? srvStd[field] : '';
-            // Preserve existing server photo unless incoming explicitly has a newer photo timestamp or server has none
+            // If payload stripped photos for size, NEVER overwrite existing server photos
+            if (isStrippedSync && !incVal && srvVal) {
+              return srvVal;
+            }
+            // Never let general sync wipe an existing server photo unless explicit removal was stamped newer
+            if (!incVal && srvVal && !incStd._explicitPhotoClear) {
+              return srvVal;
+            }
             if (!incVal && srvVal && incPhotoTime <= srvPhotoTime) {
               return srvVal;
             }
@@ -353,6 +388,7 @@ async function startServer() {
 
           const cleanIncStd = { ...incStd };
           delete cleanIncStd._photosStripped;
+          delete cleanIncStd._explicitPhotoClear;
 
           return {
             ...cleanIncStd,
@@ -368,6 +404,10 @@ async function startServer() {
             academicRoadmap: mergedAcademicRoadmap,
             portalUserId: incStd.portalUserId || srvStd.portalUserId,
             guardianPin: incStd.guardianPin || srvStd.guardianPin,
+            securityQrCode:
+              incStd.securityQrCode ||
+              srvStd.securityQrCode ||
+              `DLIKON-SEC-${String(incStd.classId || srvStd.classId || 'CLS').toUpperCase()}-${incStd.roll ?? srvStd.roll ?? 0}-${String(incStd.id).slice(-4).toUpperCase()}`,
           };
         });
       }
@@ -440,10 +480,17 @@ async function startServer() {
         (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
       );
 
+      const existingScannerAuditLogs: any[] = Array.isArray(memoryDb?.scannerAuditLogs)
+        ? memoryDb.scannerAuditLogs
+        : [];
+
       const payload = {
         ...incoming,
         students: studentsToSave,
         securityLogs: mergedSecurityLogs,
+        scannerAuditLogs: incoming.isExplicitClearScannerAudit
+          ? []
+          : existingScannerAuditLogs,
         libraryMaterials:
           incomingLib.length === 0 && serverLib.length > 0 && !incoming.isExplicitClearLibrary
             ? serverLib
@@ -529,7 +576,7 @@ async function startServer() {
     }
   });
 
-  // Update individual student profile / futurePlan / achievements / password from Personal Dashboard
+  // Update individual student profile / photos / futurePlan / achievements / password
   app.post('/api/student/profile-update', (req, res) => {
     try {
       const { studentId, updates } = req.body;
@@ -546,9 +593,11 @@ async function startServer() {
         Object.prototype.hasOwnProperty.call(updates, 'fatherAvatarUrl') ||
         Object.prototype.hasOwnProperty.call(updates, 'motherAvatarUrl');
 
-      const stampedUpdates = hasPhotoUpdate
+      const stampedUpdates: Record<string, any> = hasPhotoUpdate
         ? { ...updates, photoUpdatedAt: updates.photoUpdatedAt || new Date().toISOString() }
-        : updates;
+        : { ...updates };
+      delete stampedUpdates._photosStripped;
+      delete stampedUpdates._explicitPhotoClear;
 
       const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
       let updatedStudent: any = null;
@@ -564,6 +613,15 @@ async function startServer() {
         return s;
       });
 
+      // Upsert if student was just added on client before 1s debounced sync arrived
+      if (!updatedStudent && stampedUpdates.nameBn && stampedUpdates.classId) {
+        updatedStudent = {
+          ...stampedUpdates,
+          id: studentId,
+        };
+        nextStudents.push(updatedStudent);
+      }
+
       if (!updatedStudent) {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
@@ -574,10 +632,13 @@ async function startServer() {
         _lastUpdated: new Date().toISOString(),
       };
 
-      saveDatabaseToFile(updatedDb);
+      const saved = saveDatabaseToFile(updatedDb);
+      if (!saved) {
+        return res.status(500).json({ success: false, message: 'Failed to persist student profile to disk' });
+      }
       return res.json({
         success: true,
-        message: 'শিক্ষার্থীর প্রোফাইল সফলভাবে সংরক্ষিত হয়েছে',
+        message: 'শিক্ষার্থীর প্রোফাইল ও ছবি সফলভাবে সংরক্ষিত হয়েছে',
         student: updatedStudent,
         photoCount: countStudentsWithPhotos(nextStudents),
       });
@@ -608,25 +669,38 @@ async function startServer() {
 
       let updatedCount = 0;
       const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+      const seenIds = new Set<string>();
       const nextStudents = currentStudents.map((s) => {
+        if (s?.id) seenIds.add(s.id);
         const inc = itemMap.get(s.id);
         if (!inc) return s;
 
         const incTime = new Date(inc.photoUpdatedAt || 0).getTime();
         const srvTime = new Date(s.photoUpdatedAt || 0).getTime();
-        if (srvTime > incTime && incTime > 0) {
+        // Only skip if server already has ALL incoming photos with strictly newer timestamp
+        if (srvTime > incTime && incTime > 0 && (s.avatarUrl || !inc.avatarUrl)) {
           return s;
         }
 
         updatedCount++;
         return {
           ...s,
-          avatarUrl: inc.avatarUrl !== undefined ? inc.avatarUrl : s.avatarUrl,
-          fatherAvatarUrl: inc.fatherAvatarUrl !== undefined ? inc.fatherAvatarUrl : s.fatherAvatarUrl,
-          motherAvatarUrl: inc.motherAvatarUrl !== undefined ? inc.motherAvatarUrl : s.motherAvatarUrl,
+          avatarUrl: inc.avatarUrl !== undefined ? (inc.avatarUrl || (inc.explicitClear ? '' : s.avatarUrl)) : s.avatarUrl,
+          fatherAvatarUrl: inc.fatherAvatarUrl !== undefined ? (inc.fatherAvatarUrl || (inc.explicitClear ? '' : s.fatherAvatarUrl)) : s.fatherAvatarUrl,
+          motherAvatarUrl: inc.motherAvatarUrl !== undefined ? (inc.motherAvatarUrl || (inc.explicitClear ? '' : s.motherAvatarUrl)) : s.motherAvatarUrl,
           photoUpdatedAt: inc.photoUpdatedAt || s.photoUpdatedAt || new Date().toISOString(),
         };
       });
+
+      // Also upsert any newly created student with photos if missing on server
+      for (const inc of items) {
+        if (inc && inc.id && !seenIds.has(inc.id) && inc.studentRecord && inc.studentRecord.nameBn && inc.studentRecord.classId) {
+          const cleanRec = { ...inc.studentRecord, id: inc.id };
+          delete cleanRec._photosStripped;
+          nextStudents.push(cleanRec);
+          updatedCount++;
+        }
+      }
 
       const updatedDb = {
         ...(memoryDb || {}),
@@ -871,6 +945,214 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message });
+    }
+  });
+
+  // GET persistent QR scanner audit events (all matched, ambiguous, and rejected scans)
+  app.get('/api/security/scanner-audit', (req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+
+      const allLogs: any[] = Array.isArray(memoryDb?.scannerAuditLogs)
+        ? memoryDb.scannerAuditLogs
+        : [];
+      const outcome = String(req.query.outcome || 'all').trim();
+      const source = String(req.query.source || 'all').trim();
+      const q = String(req.query.q || '').trim().toLowerCase();
+      const limit = Math.min(Math.max(Number(req.query.limit) || 250, 1), 500);
+
+      const stats = {
+        total: allLogs.length,
+        matched: allLogs.filter((l) => l?.outcome === 'matched').length,
+        ambiguous: allLogs.filter((l) => l?.outcome === 'ambiguous').length,
+        rejected: allLogs.filter((l) => l?.outcome === 'rejected').length,
+      };
+
+      const filtered = allLogs.filter((entry) => {
+        if (outcome !== 'all' && entry?.outcome !== outcome) return false;
+        if (source !== 'all' && entry?.source !== source) return false;
+        if (q) {
+          const hay = [
+            entry?.rawPayload,
+            entry?.extractedToken,
+            entry?.matchRuleOrReason,
+            entry?.diagnosticNote,
+            entry?.resolvedStudentNameBn,
+            entry?.resolvedStudentId,
+            entry?.resolvedPortalId,
+            entry?.resolvedClassNameBn,
+            ...(Array.isArray(entry?.ambiguousCandidates)
+              ? entry.ambiguousCandidates.map((c: any) => `${c?.nameBn || ''} ${c?.portalId || ''}`)
+              : []),
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+
+      return res.json({
+        success: true,
+        logs: filtered.slice(0, limit),
+        totalCount: allLogs.length,
+        filteredCount: filtered.length,
+        stats,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // POST a new QR scanner audit event (matched, ambiguous, or rejected)
+  app.post('/api/security/scanner-audit', (req, res) => {
+    try {
+      const event = req.body?.event;
+      if (!event || typeof event !== 'object' || !event.outcome || typeof event.rawPayload !== 'string') {
+        return res.status(400).json({ success: false, message: 'Valid scanner audit event required' });
+      }
+
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+
+      const savedEvent = {
+        ...event,
+        id:
+          event.id ||
+          `scanaudit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        timestamp: event.timestamp || new Date().toISOString(),
+        serverTimestamp: Date.now(),
+      };
+
+      const existingLogs: any[] = Array.isArray(memoryDb?.scannerAuditLogs)
+        ? memoryDb.scannerAuditLogs
+        : [];
+      const withoutDup = existingLogs.filter((l) => l?.id !== savedEvent.id);
+      const updatedLogs = [savedEvent, ...withoutDup].slice(0, 500);
+
+      const updatedDb = {
+        ...(memoryDb || {}),
+        scannerAuditLogs: updatedLogs,
+        _lastUpdated: new Date().toISOString(),
+      };
+
+      saveDatabaseToFile(updatedDb);
+
+      return res.json({
+        success: true,
+        event: savedEvent,
+        totalCount: updatedLogs.length,
+      });
+    } catch (err: any) {
+      console.error('[Server API] Scanner audit log error:', err);
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // DELETE all recorded QR scanner audit events
+  app.delete('/api/security/scanner-audit', (_req, res) => {
+    try {
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const updatedDb = {
+        ...(memoryDb || {}),
+        scannerAuditLogs: [],
+        _lastUpdated: new Date().toISOString(),
+      };
+      saveDatabaseToFile(updatedDb);
+      return res.json({ success: true, message: 'Scanner audit logs cleared' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // Bengali TTS audio endpoint (MP3) for reliable mobile Chrome / iOS Safari HTML5 <audio> playback
+  const ttsAudioCache = new Map<string, Buffer>();
+  const splitBengaliTtsChunks = (input: string, maxLen = 155): string[] => {
+    const cleaned = input.replace(/\s+/g, ' ').trim();
+    if (!cleaned) return [];
+    const sentences = cleaned
+      .split(/(?<=[।?!.])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const result: string[] = [];
+    for (const sentence of sentences) {
+      if (sentence.length <= maxLen) {
+        result.push(sentence);
+        continue;
+      }
+      const words = sentence.split(/\s+/);
+      let current = '';
+      for (const word of words) {
+        if ((current + ' ' + word).trim().length <= maxLen) {
+          current = (current + ' ' + word).trim();
+        } else {
+          if (current) result.push(current);
+          current = word.length > maxLen ? word.slice(0, maxLen) : word;
+        }
+      }
+      if (current) result.push(current);
+    }
+    return result.length > 0 ? result : [cleaned.slice(0, maxLen)];
+  };
+
+  app.get('/api/tts/bn', async (req, res) => {
+    try {
+      const rawText = typeof req.query.text === 'string' ? req.query.text : '';
+      const cleaned = rawText.replace(/\s+/g, ' ').trim().slice(0, 1500);
+      if (!cleaned) {
+        return res.status(400).json({ success: false, message: 'text parameter required' });
+      }
+
+      const cached = ttsAudioCache.get(cleaned);
+      if (cached && cached.length > 0) {
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Content-Length', String(cached.length));
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(cached);
+      }
+
+      const chunks = splitBengaliTtsChunks(cleaned, 155);
+      const audioBuffers = await Promise.all(
+        chunks.map(async (chunk) => {
+          const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=bn&q=${encodeURIComponent(chunk)}`;
+          const upstream = await fetch(ttsUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            },
+          });
+          if (!upstream.ok) {
+            throw new Error(`TTS upstream HTTP ${upstream.status}`);
+          }
+          const arrBuf = await upstream.arrayBuffer();
+          return Buffer.from(arrBuf);
+        })
+      );
+
+      const mergedAudio = Buffer.concat(audioBuffers);
+      if (mergedAudio.length === 0) {
+        return res.status(502).json({ success: false, message: 'Empty TTS response' });
+      }
+
+      if (ttsAudioCache.size >= 200) {
+        const oldestKey = ttsAudioCache.keys().next().value;
+        if (oldestKey) ttsAudioCache.delete(oldestKey);
+      }
+      ttsAudioCache.set(cleaned, mergedAudio);
+
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', String(mergedAudio.length));
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(mergedAudio);
+    } catch (err: any) {
+      console.warn('[TTS BN] Upstream fetch failed:', err?.message || err);
+      return res.status(502).json({ success: false, message: 'TTS synthesis unavailable' });
     }
   });
 

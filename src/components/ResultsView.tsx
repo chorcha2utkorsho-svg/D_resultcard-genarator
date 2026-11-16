@@ -52,20 +52,19 @@ export const ResultsView: React.FC = () => {
     selectedSection,
     setSelectedSection,
     students,
-    updateStudent,
+    updateStudentPhoto,
     getCalculatedResultsForClass,
     sendSingleSMS,
     sendBatchSMS,
   } = useSchool();
 
-  const handleStudentPhotoUpload = (studentId: string, base64: string) => {
-    const student = students.find((s) => s.id === studentId);
-    if (student) {
-      updateStudent({
-        ...student,
-        avatarUrl: base64,
-      });
-    }
+  const handleStudentPhotoUpload = async (studentId: string, base64: string) => {
+    setSmsFeedback('ছবি সার্ভারে সংরক্ষণ হচ্ছে...');
+    const res = await updateStudentPhoto(studentId, 'student', base64);
+    setSmsFeedback(res.message);
+    setTimeout(() => {
+      setSmsFeedback((prev) => (prev === res.message ? null : prev));
+    }, 4000);
   };
 
   const [viewMode, setViewMode] = useState<'single' | 'batch' | 'analytics'>('single');

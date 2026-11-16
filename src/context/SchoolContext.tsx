@@ -85,7 +85,15 @@ interface SchoolContextType {
   examTerms: ExamTerm[];
   students: Student[];
   addStudent: (student: Omit<Student, 'id'>) => Student;
-  updateStudent: (student: Student) => void;
+  updateStudent: (student: Student) => Promise<boolean>;
+  updateStudentPhoto: (
+    studentId: string,
+    role: 'student' | 'father' | 'mother',
+    base64: string
+  ) => Promise<{ ok: boolean; avatarUrl: string; message: string }>;
+  batchUpdateStudentPhotos: (
+    items: { id: string; avatarUrl?: string; fatherAvatarUrl?: string; motherAvatarUrl?: string; photoUpdatedAt?: string }[]
+  ) => Promise<{ ok: boolean; updatedCount: number; message: string }>;
   deleteStudent: (studentId: string) => void;
   bulkImportStudents: (
     students: Omit<Student, 'id'>[],
@@ -624,6 +632,23 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const suppressNextAutoPushRef = useRef<boolean>(false);
   const isPushingRef = useRef<boolean>(false);
   const hasAutoSyncedCloudSessionRef = useRef<string | null>(null);
+  // Track confirmed server photo signatures & in-flight local uploads so background polls never wipe Class 1-8 photos
+  const syncedServerPhotoSigRef = useRef<Map<string, string>>(new Map());
+  const recentLocalPhotoUploadsRef = useRef<
+    Map<
+      string,
+      {
+        avatarUrl?: string;
+        fatherAvatarUrl?: string;
+        motherAvatarUrl?: string;
+        photoUpdatedAt: string;
+        updatedAtMs: number;
+        explicitlyCleared?: { avatarUrl?: boolean; fatherAvatarUrl?: boolean; motherAvatarUrl?: boolean };
+      }
+    >
+  >(new Map());
+  const inFlightPhotoSyncCountRef = useRef<number>(0);
+  const lastLocalPhotoMutationTimeRef = useRef<number>(0);
 
   const [cloudUser, setCloudUser] = useState<User | null>(null);
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
@@ -909,7 +934,30 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   });
 
-  // Helper: upload student photos in safe 10-student chunks so proxy payload limits never cause silent failures
+  const getStudentPhotoSig = (s?: Partial<Student> | null): string => {
+    if (!s) return '0:0:0:';
+    return `${s.avatarUrl?.length || 0}:${s.fatherAvatarUrl?.length || 0}:${s.motherAvatarUrl?.length || 0}:${s.photoUpdatedAt || ''}`;
+  };
+
+  const persistStudentPhotoMapToIdb = useCallback((studentList: Student[]) => {
+    const mapObj: Record<
+      string,
+      { avatarUrl?: string; fatherAvatarUrl?: string; motherAvatarUrl?: string; photoUpdatedAt?: string }
+    > = {};
+    for (const s of studentList) {
+      if (s && s.id && (s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl)) {
+        mapObj[s.id] = {
+          ...(s.avatarUrl ? { avatarUrl: s.avatarUrl } : {}),
+          ...(s.fatherAvatarUrl ? { fatherAvatarUrl: s.fatherAvatarUrl } : {}),
+          ...(s.motherAvatarUrl ? { motherAvatarUrl: s.motherAvatarUrl } : {}),
+          ...(s.photoUpdatedAt ? { photoUpdatedAt: s.photoUpdatedAt } : {}),
+        };
+      }
+    }
+    idbSet(`${STORAGE_KEY}_student_photos_map`, mapObj);
+  }, []);
+
+  // Helper: upload student photos in safe 8-student chunks so proxy payload limits never cause silent failures
   const pushPhotosInChunks = useCallback(async (targetStudents: Student[]): Promise<boolean> => {
     const items = targetStudents
       .filter((s) => Boolean(s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl || s.photoUpdatedAt))
@@ -919,11 +967,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         fatherAvatarUrl: s.fatherAvatarUrl || '',
         motherAvatarUrl: s.motherAvatarUrl || '',
         photoUpdatedAt: s.photoUpdatedAt || new Date().toISOString(),
+        studentRecord: s,
       }));
 
     if (items.length === 0) return true;
 
-    const CHUNK_SIZE = 10;
+    const CHUNK_SIZE = 8;
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
       const res = await fetch('/api/students/batch-photos', {
@@ -934,34 +983,51 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!res.ok) {
         return false;
       }
+      for (const ch of chunk) {
+        syncedServerPhotoSigRef.current.set(ch.id, getStudentPhotoSig(ch));
+      }
     }
     return true;
   }, []);
 
-  // Push latest application data to central full-stack server with chunked fallback for large photo sets
+  // Push latest application data to central full-stack server with dirty-photo tracking & chunked fallback
   const pushToServer = useCallback(async () => {
     if (isPushingRef.current) return;
     isPushingRef.current = true;
     try {
       setIsServerSyncing(true);
       const payload = latestStateRef.current;
-      const serialized = JSON.stringify(payload);
 
-      // If payload fits comfortably (< 1.2 MB), send directly; otherwise send lightweight core + chunked photos
+      // Determine only students whose photos haven't yet been confirmed on server
+      const dirtyPhotoStudents = payload.students.filter((s) => {
+        const hasAnyPhoto = Boolean(s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl);
+        if (!hasAnyPhoto) return false;
+        const confirmedSig = syncedServerPhotoSigRef.current.get(s.id);
+        return confirmedSig !== getStudentPhotoSig(s);
+      });
+
       let coreOk = false;
       let photosSynced = true;
 
-      if (serialized.length <= 1_200_000) {
+      const serialized = JSON.stringify(payload);
+      if (serialized.length <= 900_000) {
         const res = await fetch('/api/school-data', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: serialized,
         });
         coreOk = res.ok;
+        if (coreOk) {
+          for (const s of payload.students) {
+            if (s.avatarUrl || s.fatherAvatarUrl || s.motherAvatarUrl) {
+              syncedServerPhotoSigRef.current.set(s.id, getStudentPhotoSig(s));
+            }
+          }
+        }
       }
 
       if (!coreOk) {
-        // Safe split: strip inline photos in core JSON (server preserves existing photos) then upload photos in 10-student chunks
+        // Send compact metadata payload (server preserves existing confirmed photos via _photosStripped)
         const lightweightPayload = {
           ...payload,
           students: payload.students.map((s) => ({
@@ -978,8 +1044,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           body: JSON.stringify(lightweightPayload),
         });
         coreOk = coreRes.ok;
-        if (coreOk) {
-          photosSynced = await pushPhotosInChunks(payload.students);
+        if (coreOk && dirtyPhotoStudents.length > 0) {
+          photosSynced = await pushPhotosInChunks(dirtyPhotoStudents);
         }
       }
 
@@ -1009,309 +1075,424 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [pushPhotosInChunks]);
 
   // Pull latest data from central server across all PCs/smartphones without overwriting local unsynced photos
-  const fetchFromServer = useCallback(async () => {
-    if (isPushingRef.current) return;
-    try {
-      setIsServerSyncing(true);
-      const res = await fetch('/api/school-data');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.exists && json.data) {
-          const db = json.data;
-          let stateChangedFromServer = false;
-          const localPhotosMissingOnServer: Student[] = [];
+  const fetchFromServer = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (isPushingRef.current) return;
+      if (
+        !options?.force &&
+        (inFlightPhotoSyncCountRef.current > 0 ||
+          Date.now() - lastLocalPhotoMutationTimeRef.current < 4000)
+      ) {
+        return;
+      }
 
-          if (Array.isArray(db.students)) {
-            const cleanedStudents = db.students.filter(
-              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
-            );
-            setStudents((prev) => {
-              // CRITICAL SAFEGUARD: If server sends 0 students but client already has real students, push client data
-              if (cleanedStudents.length === 0 && prev.length > 0) {
+      try {
+        setIsServerSyncing(true);
+        const res = await fetch('/api/school-data', { cache: 'no-store' });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.exists && json.data) {
+            const db = json.data;
+            const localPhotosMissingOnServer: Student[] = [];
+            let anySliceChanged = false;
+
+            if (Array.isArray(db.students)) {
+              const cleanedStudents: Student[] = db.students.filter(
+                (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+              );
+
+              // Record confirmed server photo signatures
+              for (const srvStd of cleanedStudents) {
+                if (srvStd && srvStd.id && (srvStd.avatarUrl || srvStd.fatherAvatarUrl || srvStd.motherAvatarUrl)) {
+                  syncedServerPhotoSigRef.current.set(srvStd.id, getStudentPhotoSig(srvStd));
+                }
+              }
+
+              const currentSnapshot = latestStateRef.current.students;
+              if (cleanedStudents.length === 0 && currentSnapshot.length > 0) {
                 console.warn('[Sync Safeguard] Server is empty but client has data. Pushing client data to server.');
                 setTimeout(() => pushToServer(), 500);
-                return prev;
-              }
+              } else {
+                const mergeServerWithPrev = (prev: Student[]): { merged: Student[]; changed: boolean; missingOnSrv: Student[] } => {
+                  if (prev.length === 0 && cleanedStudents.length === 0) {
+                    return { merged: prev, changed: false, missingOnSrv: [] };
+                  }
+                  const prevMap = new Map<string, Student>();
+                  for (const p of prev) {
+                    if (p && p.id) prevMap.set(p.id, p);
+                  }
 
-              if (prev.length === 0 && cleanedStudents.length === 0) return prev;
+                  const nowMs = Date.now();
+                  const missingList: Student[] = [];
+                  const seenServerIds = new Set<string>();
 
-              const prevMap = new Map<string, Student>();
-              for (const p of prev) {
-                if (p && p.id) prevMap.set(p.id, p);
-              }
+                  const mergedStudents: Student[] = cleanedStudents.map((srvStd: Student) => {
+                    seenServerIds.add(srvStd.id);
+                    const prevStd = prevMap.get(srvStd.id);
+                    const recentGuard = recentLocalPhotoUploadsRef.current.get(srvStd.id);
+                    const guardActive = Boolean(recentGuard && nowMs - recentGuard.updatedAtMs < 20_000);
 
-              // Merge server students with local photos so neither side wipes freshly uploaded photos
-              const mergedStudents: Student[] = cleanedStudents.map((srvStd: Student) => {
-                const prevStd = prevMap.get(srvStd.id);
-                if (!prevStd) return srvStd;
+                    if (!prevStd && !guardActive) return srvStd;
 
-                const prevPhotoTime = new Date(prevStd.photoUpdatedAt || 0).getTime();
-                const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
+                    const effectivePrev = prevStd || ({} as Student);
+                    const prevPhotoTime = new Date(
+                      guardActive && recentGuard ? recentGuard.photoUpdatedAt : effectivePrev.photoUpdatedAt || 0
+                    ).getTime();
+                    const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
 
-                const mergePhoto = (prevVal?: string, srvVal?: string) => {
-                  const p = prevVal || '';
-                  const s = srvVal || '';
-                  if (p && !s && prevPhotoTime >= srvPhotoTime) return p;
-                  if (s && !p && srvPhotoTime >= prevPhotoTime) return s;
-                  if (p && s) return srvPhotoTime > prevPhotoTime ? s : p;
-                  return s || p;
-                };
+                    const mergePhoto = (
+                      field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl',
+                      prevVal?: string,
+                      srvVal?: string
+                    ) => {
+                      const guardVal = guardActive && recentGuard ? recentGuard[field] : undefined;
+                      const wasExplicitClear = Boolean(guardActive && recentGuard?.explicitlyCleared?.[field]);
+                      const p = guardVal !== undefined ? guardVal : prevVal || '';
+                      const s = srvVal || '';
 
-                const nextAvatar = mergePhoto(prevStd.avatarUrl, srvStd.avatarUrl);
-                const nextFather = mergePhoto(prevStd.fatherAvatarUrl, srvStd.fatherAvatarUrl);
-                const nextMother = mergePhoto(prevStd.motherAvatarUrl, srvStd.motherAvatarUrl);
-                const nextPhotoUpdatedAt =
-                  srvPhotoTime > prevPhotoTime
-                    ? srvStd.photoUpdatedAt
-                    : prevStd.photoUpdatedAt || srvStd.photoUpdatedAt;
+                      if (wasExplicitClear && prevPhotoTime >= srvPhotoTime) return '';
+                      if (guardActive && p && !s) return p;
+                      if (p && !s && prevPhotoTime >= srvPhotoTime) return p;
+                      if (s && !p && srvPhotoTime >= prevPhotoTime) return s;
+                      if (p && s) return srvPhotoTime > prevPhotoTime ? s : p;
+                      return s || p;
+                    };
 
-                const serverMissedLocalPhoto =
-                  (Boolean(nextAvatar) && !srvStd.avatarUrl) ||
-                  (Boolean(nextFather) && !srvStd.fatherAvatarUrl) ||
-                  (Boolean(nextMother) && !srvStd.motherAvatarUrl);
+                    const nextAvatar = mergePhoto('avatarUrl', effectivePrev.avatarUrl, srvStd.avatarUrl);
+                    const nextFather = mergePhoto('fatherAvatarUrl', effectivePrev.fatherAvatarUrl, srvStd.fatherAvatarUrl);
+                    const nextMother = mergePhoto('motherAvatarUrl', effectivePrev.motherAvatarUrl, srvStd.motherAvatarUrl);
+                    const nextPhotoUpdatedAt =
+                      srvPhotoTime > prevPhotoTime
+                        ? srvStd.photoUpdatedAt
+                        : (guardActive && recentGuard?.photoUpdatedAt) || effectivePrev.photoUpdatedAt || srvStd.photoUpdatedAt;
 
-                const resultStd: Student = {
-                  ...srvStd,
-                  avatarUrl: nextAvatar,
-                  fatherAvatarUrl: nextFather,
-                  motherAvatarUrl: nextMother,
-                  ...(nextPhotoUpdatedAt ? { photoUpdatedAt: nextPhotoUpdatedAt } : {}),
-                };
+                    const serverMissedLocalPhoto =
+                      (Boolean(nextAvatar) && !srvStd.avatarUrl) ||
+                      (Boolean(nextFather) && !srvStd.fatherAvatarUrl) ||
+                      (Boolean(nextMother) && !srvStd.motherAvatarUrl) ||
+                      (guardActive && prevPhotoTime > srvPhotoTime && (nextAvatar !== (srvStd.avatarUrl || '') || nextFather !== (srvStd.fatherAvatarUrl || '') || nextMother !== (srvStd.motherAvatarUrl || '')));
 
-                if (serverMissedLocalPhoto) {
-                  localPhotosMissingOnServer.push(resultStd);
-                }
+                    const resultStd: Student = {
+                      ...srvStd,
+                      avatarUrl: nextAvatar,
+                      fatherAvatarUrl: nextFather,
+                      motherAvatarUrl: nextMother,
+                      ...(nextPhotoUpdatedAt ? { photoUpdatedAt: nextPhotoUpdatedAt } : {}),
+                    };
 
-                return resultStd;
-              });
+                    if (serverMissedLocalPhoto) {
+                      missingList.push(resultStd);
+                    }
+                    return resultStd;
+                  });
 
-              const isUnchanged =
-                prev.length === mergedStudents.length &&
-                prev.every((p, idx) => {
-                  const m = mergedStudents[idx];
-                  if (!m) return false;
-                  return (
-                    p.id === m.id &&
-                    p.nameBn === m.nameBn &&
-                    p.roll === m.roll &&
-                    p.classId === m.classId &&
-                    p.section === m.section &&
-                    (p.avatarUrl || '') === (m.avatarUrl || '') &&
-                    (p.fatherAvatarUrl || '') === (m.fatherAvatarUrl || '') &&
-                    (p.motherAvatarUrl || '') === (m.motherAvatarUrl || '') &&
-                    (p.photoUpdatedAt || '') === (m.photoUpdatedAt || '') &&
-                    (p.guardianPhone || '') === (m.guardianPhone || '') &&
-                    (p.portalUserId || '') === (m.portalUserId || '') &&
-                    (p.monerBari?.updatedAt || '') === (m.monerBari?.updatedAt || '') &&
-                    (p.timeManagement?.updatedAt || '') === (m.timeManagement?.updatedAt || '') &&
-                    (p.academicRoadmap?.updatedAt || '') === (m.academicRoadmap?.updatedAt || '')
-                  );
-                });
+                  // Preserve recently protected local students that server doesn't have yet
+                  for (const p of prev) {
+                    if (p && p.id && !seenServerIds.has(p.id) && recentLocalPhotoUploadsRef.current.has(p.id)) {
+                      mergedStudents.push(p);
+                      missingList.push(p);
+                    }
+                  }
 
-              if (isUnchanged) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              idbSet(`${STORAGE_KEY}_students`, mergedStudents);
-              return mergedStudents;
-            });
-
-            if (localPhotosMissingOnServer.length > 0) {
-              setTimeout(() => {
-                pushPhotosInChunks(localPhotosMissingOnServer).catch(() => {});
-              }, 300);
-            }
-          }
-
-          if (Array.isArray(db.classes) && db.classes.length > 0) {
-            setClasses((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.classes)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.classes;
-            });
-          }
-
-          if (db.schoolInfo && db.schoolInfo.name) {
-            setSchoolInfo((prev) => {
-              if (
-                prev.name === db.schoolInfo.name &&
-                prev.address === db.schoolInfo.address &&
-                prev.logoUrl === db.schoolInfo.logoUrl &&
-                prev.principalSignatureUrl === db.schoolInfo.principalSignatureUrl
-              ) {
-                return prev;
-              }
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.schoolInfo;
-            });
-          }
-
-          if (db.examRecords && typeof db.examRecords === 'object') {
-            setExamRecords((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.examRecords)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.examRecords;
-            });
-          }
-
-          if (db.attendanceRecords && typeof db.attendanceRecords === 'object') {
-            setAttendanceRecords((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.attendanceRecords)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.attendanceRecords;
-            });
-          }
-
-          if (Array.isArray(db.feeHeads) && db.feeHeads.length > 0) {
-            setFeeHeads((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.feeHeads)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.feeHeads;
-            });
-          }
-
-          if (Array.isArray(db.feeInvoices)) {
-            setFeeInvoices((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.feeInvoices)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.feeInvoices;
-            });
-          }
-
-          if (Array.isArray(db.feeReceipts)) {
-            setFeeReceipts((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.feeReceipts)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.feeReceipts;
-            });
-          }
-
-          if (Array.isArray(db.securityLogs)) {
-            setSecurityLogs((prev) => {
-              if (prev.length === 0 && db.securityLogs.length === 0) return prev;
-              const mergedMap = new Map<string, SecurityGatepassLog>();
-              for (const item of prev) {
-                if (item && item.id) mergedMap.set(item.id, item);
-              }
-              for (const item of db.securityLogs as SecurityGatepassLog[]) {
-                if (item && item.id) {
-                  const existing = mergedMap.get(item.id);
-                  if (existing) {
-                    mergedMap.set(item.id, {
-                      ...existing,
-                      ...item,
-                      guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
-                      acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
-                      guardianResponse: item.guardianResponse || existing.guardianResponse,
-                      acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+                  const isUnchanged =
+                    prev.length === mergedStudents.length &&
+                    prev.every((p, idx) => {
+                      const m = mergedStudents[idx];
+                      if (!m) return false;
+                      return (
+                        p.id === m.id &&
+                        p.nameBn === m.nameBn &&
+                        p.roll === m.roll &&
+                        p.classId === m.classId &&
+                        p.section === m.section &&
+                        (p.avatarUrl || '') === (m.avatarUrl || '') &&
+                        (p.fatherAvatarUrl || '') === (m.fatherAvatarUrl || '') &&
+                        (p.motherAvatarUrl || '') === (m.motherAvatarUrl || '') &&
+                        (p.photoUpdatedAt || '') === (m.photoUpdatedAt || '') &&
+                        (p.guardianPhone || '') === (m.guardianPhone || '') &&
+                        (p.portalUserId || '') === (m.portalUserId || '') &&
+                        (p.monerBari?.updatedAt || '') === (m.monerBari?.updatedAt || '') &&
+                        (p.timeManagement?.updatedAt || '') === (m.timeManagement?.updatedAt || '') &&
+                        (p.academicRoadmap?.updatedAt || '') === (m.academicRoadmap?.updatedAt || '')
+                      );
                     });
-                  } else {
-                    mergedMap.set(item.id, item);
+
+                  return { merged: mergedStudents, changed: !isUnchanged, missingOnSrv: missingList };
+                };
+
+                const preCheck = mergeServerWithPrev(currentSnapshot);
+                if (preCheck.changed) {
+                  anySliceChanged = true;
+                  suppressNextAutoPushRef.current = true;
+                  setStudents((prev) => {
+                    const resMerge = mergeServerWithPrev(prev);
+                    if (!resMerge.changed) return prev;
+                    idbSet(`${STORAGE_KEY}_students`, resMerge.merged);
+                    persistStudentPhotoMapToIdb(resMerge.merged);
+                    return resMerge.merged;
+                  });
+                }
+                if (preCheck.missingOnSrv.length > 0) {
+                  localPhotosMissingOnServer.push(...preCheck.missingOnSrv);
+                }
+              }
+
+              if (localPhotosMissingOnServer.length > 0) {
+                setTimeout(() => {
+                  pushPhotosInChunks(localPhotosMissingOnServer).catch(() => {});
+                }, 300);
+              }
+            }
+
+            if (Array.isArray(db.classes) && db.classes.length > 0) {
+              if (JSON.stringify(latestStateRef.current.classes) !== JSON.stringify(db.classes)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setClasses(db.classes);
+              }
+            }
+
+            if (db.schoolInfo && db.schoolInfo.name) {
+              const curInfo = latestStateRef.current.schoolInfo;
+              if (
+                curInfo.name !== db.schoolInfo.name ||
+                curInfo.address !== db.schoolInfo.address ||
+                curInfo.logoUrl !== db.schoolInfo.logoUrl ||
+                curInfo.principalSignatureUrl !== db.schoolInfo.principalSignatureUrl
+              ) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setSchoolInfo(db.schoolInfo);
+              }
+            }
+
+            if (db.examRecords && typeof db.examRecords === 'object') {
+              if (JSON.stringify(latestStateRef.current.examRecords) !== JSON.stringify(db.examRecords)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setExamRecords(db.examRecords);
+              }
+            }
+
+            if (db.attendanceRecords && typeof db.attendanceRecords === 'object') {
+              if (JSON.stringify(latestStateRef.current.attendanceRecords) !== JSON.stringify(db.attendanceRecords)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setAttendanceRecords(db.attendanceRecords);
+              }
+            }
+
+            if (Array.isArray(db.feeHeads) && db.feeHeads.length > 0) {
+              if (JSON.stringify(latestStateRef.current.feeHeads) !== JSON.stringify(db.feeHeads)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setFeeHeads(db.feeHeads);
+              }
+            }
+
+            if (Array.isArray(db.feeInvoices)) {
+              if (JSON.stringify(latestStateRef.current.feeInvoices) !== JSON.stringify(db.feeInvoices)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setFeeInvoices(db.feeInvoices);
+              }
+            }
+
+            if (Array.isArray(db.feeReceipts)) {
+              if (JSON.stringify(latestStateRef.current.feeReceipts) !== JSON.stringify(db.feeReceipts)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setFeeReceipts(db.feeReceipts);
+              }
+            }
+
+            if (Array.isArray(db.securityLogs)) {
+              const prevLogs = latestStateRef.current.securityLogs;
+              if (prevLogs.length > 0 || db.securityLogs.length > 0) {
+                const mergedMap = new Map<string, SecurityGatepassLog>();
+                for (const item of prevLogs) {
+                  if (item && item.id) mergedMap.set(item.id, item);
+                }
+                for (const item of db.securityLogs as SecurityGatepassLog[]) {
+                  if (item && item.id) {
+                    const existing = mergedMap.get(item.id);
+                    if (existing) {
+                      mergedMap.set(item.id, {
+                        ...existing,
+                        ...item,
+                        guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+                        acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+                        guardianResponse: item.guardianResponse || existing.guardianResponse,
+                        acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+                      });
+                    } else {
+                      mergedMap.set(item.id, item);
+                    }
                   }
                 }
+                const nextLogs = Array.from(mergedMap.values())
+                  .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                  .slice(0, 1000);
+                if (
+                  prevLogs.length !== nextLogs.length ||
+                  prevLogs[0]?.id !== nextLogs[0]?.id ||
+                  prevLogs[0]?.guardianAcknowledged !== nextLogs[0]?.guardianAcknowledged
+                ) {
+                  anySliceChanged = true;
+                  suppressNextAutoPushRef.current = true;
+                  setSecurityLogs(nextLogs);
+                }
               }
-              const nextLogs = Array.from(mergedMap.values())
-                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                .slice(0, 1000);
-              if (
-                prev.length === nextLogs.length &&
-                prev[0]?.id === nextLogs[0]?.id &&
-                prev[0]?.guardianAcknowledged === nextLogs[0]?.guardianAcknowledged
-              ) {
-                return prev;
+            }
+
+            if (Array.isArray(db.smsLogs)) {
+              setSmsLogs((prev) => {
+                if (prev.length === db.smsLogs.length && prev[0]?.id === db.smsLogs[0]?.id) return prev;
+                return db.smsLogs;
+              });
+            }
+            if (db.smsGatewayConfig) setSmsGatewayConfig(db.smsGatewayConfig);
+            if (Array.isArray(db.calendarEvents) && db.calendarEvents.length > 0) {
+              if (JSON.stringify(latestStateRef.current.calendarEvents) !== JSON.stringify(db.calendarEvents)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setCalendarEvents(db.calendarEvents);
               }
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return nextLogs;
-            });
-          }
+            }
+            if (Array.isArray(db.libraryMaterials) && db.libraryMaterials.length > 0) {
+              if (JSON.stringify(latestStateRef.current.libraryMaterials) !== JSON.stringify(db.libraryMaterials)) {
+                anySliceChanged = true;
+                suppressNextAutoPushRef.current = true;
+                setLibraryMaterials(db.libraryMaterials as LibraryMaterial[]);
+              }
+            }
 
-          if (Array.isArray(db.smsLogs)) {
-            setSmsLogs((prev) => {
-              if (prev.length === db.smsLogs.length && prev[0]?.id === db.smsLogs[0]?.id) return prev;
-              return db.smsLogs;
-            });
-          }
-          if (db.smsGatewayConfig) setSmsGatewayConfig(db.smsGatewayConfig);
-          if (Array.isArray(db.calendarEvents) && db.calendarEvents.length > 0) {
-            setCalendarEvents((prev) => {
-              if (JSON.stringify(prev) === JSON.stringify(db.calendarEvents)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return db.calendarEvents;
-            });
-          }
-          if (Array.isArray(db.libraryMaterials) && db.libraryMaterials.length > 0) {
-            setLibraryMaterials((prev) => {
-              const serverList = db.libraryMaterials as LibraryMaterial[];
-              if (JSON.stringify(prev) === JSON.stringify(serverList)) return prev;
-              stateChangedFromServer = true;
-              suppressNextAutoPushRef.current = true;
-              return serverList;
-            });
-          }
+            // Keep anySliceChanged visible cleanly without synchronously clearing suppressNextAutoPushRef when state changed
+            void anySliceChanged;
 
-          if (!stateChangedFromServer) {
-            suppressNextAutoPushRef.current = false;
+            setServerSyncStatus('synced');
+            setSyncErrorMessage(null);
+            setLastSyncedTime(
+              new Date().toLocaleTimeString('bn-BD', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              })
+            );
+            lastSyncTimestampRef.current = Date.now();
+          } else {
+            // If server was fresh/empty, push current data to initialize server
+            pushToServer();
           }
-
-          setServerSyncStatus('synced');
-          setSyncErrorMessage(null);
-          setLastSyncedTime(
-            new Date().toLocaleTimeString('bn-BD', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            })
-          );
-          lastSyncTimestampRef.current = Date.now();
         } else {
-          // If server was fresh/empty, push current data to initialize server
-          pushToServer();
+          setServerSyncStatus('offline');
         }
-      } else {
+      } catch (err) {
+        console.warn('Could not fetch from server database:', err);
         setServerSyncStatus('offline');
+      } finally {
+        setIsServerSyncing(false);
+        isInitialServerLoadDone.current = true;
       }
-    } catch (err) {
-      console.warn('Could not fetch from server database:', err);
-      setServerSyncStatus('offline');
-    } finally {
-      setIsServerSyncing(false);
-      isInitialServerLoadDone.current = true;
-    }
-  }, [pushToServer, pushPhotosInChunks]);
+    },
+    [pushToServer, pushPhotosInChunks, persistStudentPhotoMapToIdb]
+  );
 
   // Initial load: IndexedDB local cache + Server Sync (Runs ONCE on mount)
   useEffect(() => {
     let isMounted = true;
-    idbGet<Student[]>(`${STORAGE_KEY}_students`)
-      .then((idbStudents) => {
-        if (isMounted) {
-          if (idbStudents && Array.isArray(idbStudents) && idbStudents.length > 0) {
-            const validStudents = idbStudents.filter(
-              (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
-            );
-            if (validStudents.length > 0) {
-              setStudents((current) => {
-                if (current.length === 0 || validStudents.length >= current.length) {
-                  return validStudents;
-                }
-                return current;
-              });
-            } else if (INITIAL_STUDENTS.length > 0) {
-              setStudents(INITIAL_STUDENTS);
-            }
-          } else if (INITIAL_STUDENTS.length > 0) {
-            setStudents(INITIAL_STUDENTS);
+    Promise.all([
+      idbGet<Student[]>(`${STORAGE_KEY}_students`).catch(() => null),
+      idbGet<
+        Record<string, { avatarUrl?: string; fatherAvatarUrl?: string; motherAvatarUrl?: string; photoUpdatedAt?: string }>
+      >(`${STORAGE_KEY}_student_photos_map`).catch(() => null),
+    ])
+      .then(([idbStudents, idbPhotoMap]) => {
+        if (!isMounted) return;
+        const validStudents =
+          idbStudents && Array.isArray(idbStudents)
+            ? idbStudents.filter(
+                (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+              )
+            : [];
+        const hasPhotoMap = Boolean(idbPhotoMap && typeof idbPhotoMap === 'object' && Object.keys(idbPhotoMap).length > 0);
+
+        if (validStudents.length > 0 || hasPhotoMap) {
+          const cachedById = new Map<string, Student>();
+          for (const vs of validStudents) {
+            if (vs && vs.id) cachedById.set(vs.id, vs);
           }
-          setIsIdbInitialized(true);
+          const restoredForServer: Student[] = [];
+
+          setStudents((current) => {
+            // If current is empty (or had fewer students), seed from IDB first, then merge photoMap
+            const baseList = current.length === 0 || (!isInitialServerLoadDone.current && validStudents.length >= current.length)
+              ? validStudents
+              : current;
+
+            if (baseList.length === 0 && INITIAL_STUDENTS.length > 0) {
+              return INITIAL_STUDENTS;
+            }
+
+            let anyUpdated = baseList !== current;
+            const merged = baseList.map((curStd) => {
+              const cachedStd = cachedById.get(curStd.id);
+              const mappedPhoto = idbPhotoMap?.[curStd.id];
+              const curTime = new Date(curStd.photoUpdatedAt || 0).getTime();
+              const cachedTime = new Date(cachedStd?.photoUpdatedAt || mappedPhoto?.photoUpdatedAt || 0).getTime();
+
+              const pickBest = (curVal?: string, cachedVal?: string, mapVal?: string) => {
+                if (curVal) {
+                  const bestAlt = (cachedVal && cachedTime > curTime) ? cachedVal : (mapVal && cachedTime > curTime) ? mapVal : '';
+                  return bestAlt || curVal;
+                }
+                return cachedVal || mapVal || '';
+              };
+
+              const nextAvatar = pickBest(curStd.avatarUrl, cachedStd?.avatarUrl, mappedPhoto?.avatarUrl);
+              const nextFather = pickBest(curStd.fatherAvatarUrl, cachedStd?.fatherAvatarUrl, mappedPhoto?.fatherAvatarUrl);
+              const nextMother = pickBest(curStd.motherAvatarUrl, cachedStd?.motherAvatarUrl, mappedPhoto?.motherAvatarUrl);
+              const nextPhotoTime = cachedTime > curTime
+                ? (cachedStd?.photoUpdatedAt || mappedPhoto?.photoUpdatedAt)
+                : (curStd.photoUpdatedAt || cachedStd?.photoUpdatedAt || mappedPhoto?.photoUpdatedAt);
+
+              if (
+                nextAvatar !== (curStd.avatarUrl || '') ||
+                nextFather !== (curStd.fatherAvatarUrl || '') ||
+                nextMother !== (curStd.motherAvatarUrl || '')
+              ) {
+                anyUpdated = true;
+                const updatedStd: Student = {
+                  ...curStd,
+                  avatarUrl: nextAvatar,
+                  fatherAvatarUrl: nextFather,
+                  motherAvatarUrl: nextMother,
+                  ...(nextPhotoTime ? { photoUpdatedAt: nextPhotoTime } : {}),
+                };
+                if (isInitialServerLoadDone.current) {
+                  restoredForServer.push(updatedStd);
+                }
+                return updatedStd;
+              }
+              return curStd;
+            });
+
+            if (!anyUpdated) return current;
+            if (isInitialServerLoadDone.current && restoredForServer.length > 0) {
+              suppressNextAutoPushRef.current = true;
+            }
+            return merged;
+          });
+
+          if (restoredForServer.length > 0) {
+            setTimeout(() => {
+              pushPhotosInChunks(restoredForServer).catch(() => {});
+            }, 350);
+          }
+        } else if (INITIAL_STUDENTS.length > 0) {
+          setStudents((current) => (current.length === 0 ? INITIAL_STUDENTS : current));
         }
+        setIsIdbInitialized(true);
       })
       .catch((err) => {
         console.warn('Could not read students from IndexedDB:', err);
@@ -1329,11 +1510,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
 
     // Immediately sync with central server once on mount
-    fetchFromServer();
+    fetchFromServer({ force: true });
 
-    // Auto-poll server every 15s or on window focus
+    // Auto-poll server every 15s or on window focus (skip when photo upload is active)
     const handleFocus = () => {
-      if (Date.now() - lastSyncTimestampRef.current > 6000) {
+      if (
+        inFlightPhotoSyncCountRef.current === 0 &&
+        Date.now() - lastLocalPhotoMutationTimeRef.current > 6000 &&
+        Date.now() - lastSyncTimestampRef.current > 6000
+      ) {
         fetchFromServer();
       }
     };
@@ -1375,31 +1560,32 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     pushToServer,
   ]);
 
-  // Save students to IndexedDB (unlimited) + localStorage (safe fallback)
+  // Save students to IndexedDB (unlimited + dedicated photo map) & keep localStorage compact to avoid QuotaExceededError wipes
   useEffect(() => {
     if (!isIdbInitialized) return; // Prevent overwriting IndexedDB on initial mount!
 
-    // 1. IndexedDB handles full data (including photos) without quota errors
+    // 1. IndexedDB handles full data (including all photos across Play..Class 8) without quota errors
     idbSet(`${STORAGE_KEY}_students`, students);
+    persistStudentPhotoMapToIdb(students);
 
-    // 2. Safe localStorage save with QuotaExceededError protection
+    // 2. Keep localStorage safely under Chrome 5MB UTF-16 quota
     try {
-      localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(students));
-    } catch (e) {
-      console.warn('localStorage full (QuotaExceededError). Saving lightweight copy without large photos to localStorage; IndexedDB holds full data:', e);
-      try {
+      const jsonStr = JSON.stringify(students);
+      if (jsonStr.length <= 950_000) {
+        localStorage.setItem(`${STORAGE_KEY}_students`, jsonStr);
+      } else {
         const lightweight = students.map((s) => ({
           ...s,
-          avatarUrl: '', // only in localStorage fallback, never in-memory or IndexedDB!
+          avatarUrl: '',
           fatherAvatarUrl: '',
           motherAvatarUrl: '',
         }));
         localStorage.setItem(`${STORAGE_KEY}_students`, JSON.stringify(lightweight));
-      } catch (innerErr) {
-        console.warn('Could not write lightweight students to localStorage. IndexedDB remains source of truth.', innerErr);
       }
+    } catch (e) {
+      console.warn('localStorage quota guard triggered; IndexedDB + server remain source of truth:', e);
     }
-  }, [students, isIdbInitialized]);
+  }, [students, isIdbInitialized, persistStudentPhotoMapToIdb]);
 
   // Security gatepass logs persistence
   useEffect(() => {
@@ -1579,30 +1765,68 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const newId = `std_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const qrCode = studentData.securityQrCode || `DLIKON-SEC-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
     const hasAnyPhoto = Boolean(studentData.avatarUrl || studentData.fatherAvatarUrl || studentData.motherAvatarUrl);
+    const stampedTime = hasAnyPhoto ? (studentData.photoUpdatedAt || new Date().toISOString()) : undefined;
     const newStudent: Student = {
       ...studentData,
       id: newId,
       securityQrCode: qrCode,
-      ...(hasAnyPhoto ? { photoUpdatedAt: studentData.photoUpdatedAt || new Date().toISOString() } : {}),
+      ...(stampedTime ? { photoUpdatedAt: stampedTime } : {}),
     };
 
+    if (hasAnyPhoto && stampedTime) {
+      lastLocalPhotoMutationTimeRef.current = Date.now();
+      recentLocalPhotoUploadsRef.current.set(newId, {
+        avatarUrl: newStudent.avatarUrl || '',
+        fatherAvatarUrl: newStudent.fatherAvatarUrl || '',
+        motherAvatarUrl: newStudent.motherAvatarUrl || '',
+        photoUpdatedAt: stampedTime,
+        updatedAtMs: Date.now(),
+      });
+    }
+
     const compressAndSyncNewStudent = async () => {
-      const updates: Partial<Student> = {};
-      if (studentData.avatarUrl && studentData.avatarUrl.length > 18000) {
-        updates.avatarUrl = await compressImageBase64(studentData.avatarUrl);
-      }
-      if (studentData.fatherAvatarUrl && studentData.fatherAvatarUrl.length > 18000) {
-        updates.fatherAvatarUrl = await compressImageBase64(studentData.fatherAvatarUrl);
-      }
-      if (studentData.motherAvatarUrl && studentData.motherAvatarUrl.length > 18000) {
-        updates.motherAvatarUrl = await compressImageBase64(studentData.motherAvatarUrl);
-      }
-      const finalized = { ...newStudent, ...updates };
-      if (Object.keys(updates).length > 0) {
-        setStudents((prev) => prev.map((s) => (s.id === newId ? finalized : s)));
-      }
-      if (cloudUser && cloudUser.emailVerified) {
-        syncStudentRecordToFirestore(finalized, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      inFlightPhotoSyncCountRef.current++;
+      try {
+        const updates: Partial<Student> = {};
+        if (studentData.avatarUrl && studentData.avatarUrl.length > 18000) {
+          updates.avatarUrl = await compressImageBase64(studentData.avatarUrl);
+        }
+        if (studentData.fatherAvatarUrl && studentData.fatherAvatarUrl.length > 18000) {
+          updates.fatherAvatarUrl = await compressImageBase64(studentData.fatherAvatarUrl);
+        }
+        if (studentData.motherAvatarUrl && studentData.motherAvatarUrl.length > 18000) {
+          updates.motherAvatarUrl = await compressImageBase64(studentData.motherAvatarUrl);
+        }
+        const finalized = { ...newStudent, ...updates };
+        if (Object.keys(updates).length > 0) {
+          setStudents((prev) => prev.map((s) => (s.id === newId ? finalized : s)));
+        }
+        if (hasAnyPhoto) {
+          recentLocalPhotoUploadsRef.current.set(newId, {
+            avatarUrl: finalized.avatarUrl || '',
+            fatherAvatarUrl: finalized.fatherAvatarUrl || '',
+            motherAvatarUrl: finalized.motherAvatarUrl || '',
+            photoUpdatedAt: finalized.photoUpdatedAt || new Date().toISOString(),
+            updatedAtMs: Date.now(),
+          });
+        }
+        try {
+          const res = await fetch('/api/student/profile-update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ studentId: finalized.id, updates: finalized }),
+          });
+          if (res.ok && hasAnyPhoto) {
+            syncedServerPhotoSigRef.current.set(finalized.id, getStudentPhotoSig(finalized));
+          }
+        } catch {
+          // Auto-sync handles retry
+        }
+        if (cloudUser && cloudUser.emailVerified) {
+          syncStudentRecordToFirestore(finalized, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+        }
+      } finally {
+        inFlightPhotoSyncCountRef.current = Math.max(0, inFlightPhotoSyncCountRef.current - 1);
       }
     };
     compressAndSyncNewStudent();
@@ -1611,79 +1835,300 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return newStudent;
   };
 
-  const updateStudent = (student: Student) => {
-    const qrCode = student.securityQrCode || `DLIKON-SEC-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
-    const existing = students.find((s) => s.id === student.id);
+  const pushSingleStudentWithRetry = useCallback(
+    async (payload: Student): Promise<boolean> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch('/api/student/profile-update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ studentId: payload.id, updates: payload }),
+          });
+          if (res.ok) {
+            syncedServerPhotoSigRef.current.set(payload.id, getStudentPhotoSig(payload));
+            setServerSyncStatus('synced');
+            setSyncErrorMessage(null);
+            setLastSyncedTime(
+              new Date().toLocaleTimeString('bn-BD', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              })
+            );
+            lastSyncTimestampRef.current = Date.now();
+            return true;
+          }
+        } catch {
+          // Retry or fallback
+        }
+      }
+
+      // Fallback via batch-photos endpoint (also supports upsert)
+      try {
+        const resBatch = await fetch('/api/students/batch-photos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: [
+              {
+                id: payload.id,
+                avatarUrl: payload.avatarUrl || '',
+                fatherAvatarUrl: payload.fatherAvatarUrl || '',
+                motherAvatarUrl: payload.motherAvatarUrl || '',
+                photoUpdatedAt: payload.photoUpdatedAt || new Date().toISOString(),
+                explicitClear: !payload.avatarUrl && !payload.fatherAvatarUrl && !payload.motherAvatarUrl,
+                studentRecord: payload,
+              },
+            ],
+          }),
+        });
+        if (resBatch.ok) {
+          syncedServerPhotoSigRef.current.set(payload.id, getStudentPhotoSig(payload));
+          setServerSyncStatus('synced');
+          setSyncErrorMessage(null);
+          return true;
+        }
+      } catch {
+        // Fall through to error status
+      }
+
+      setServerSyncStatus('error');
+      setSyncErrorMessage(`"${payload.nameBn}"-এর ছবি সার্ভারে সংরক্ষণ ব্যর্থ হয়েছে — অনুগ্রহ করে পুনরায় চেষ্টা করুন।`);
+      return false;
+    },
+    []
+  );
+
+  const updateStudent = async (student: Student): Promise<boolean> => {
+    const existing = latestStateRef.current.students.find((s) => s.id === student.id);
+    const qrCode =
+      student.securityQrCode ||
+      existing?.securityQrCode ||
+      `DLIKON-SEC-${(student.classId || 'CLS').toUpperCase()}-${student.roll}-${student.id.slice(-4).toUpperCase()}`;
+
     const photosModified =
       (student.avatarUrl || '') !== (existing?.avatarUrl || '') ||
       (student.fatherAvatarUrl || '') !== (existing?.fatherAvatarUrl || '') ||
       (student.motherAvatarUrl || '') !== (existing?.motherAvatarUrl || '');
 
-    const studentWithQr: Student = {
-      ...student,
-      securityQrCode: qrCode,
-      photoUpdatedAt: photosModified
-        ? new Date().toISOString()
-        : student.photoUpdatedAt || existing?.photoUpdatedAt,
-    };
-
-    const pushProfileToServer = async (payload: Student) => {
-      try {
-        const res = await fetch('/api/student/profile-update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ studentId: payload.id, updates: payload }),
-        });
-        if (res.ok) {
-          setServerSyncStatus('synced');
-          setSyncErrorMessage(null);
-          setLastSyncedTime(
-            new Date().toLocaleTimeString('bn-BD', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            })
-          );
-          lastSyncTimestampRef.current = Date.now();
-        } else {
-          // Fallback to chunked photo endpoint
-          await pushPhotosInChunks([payload]);
-        }
-      } catch {
-        // Non-fatal fallback to debounced sync
-      }
-      if (cloudUser && cloudUser.emailVerified) {
-        syncStudentRecordToFirestore(payload, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
-      }
-    };
-
-    const needsCompression =
-      (studentWithQr.avatarUrl && studentWithQr.avatarUrl.length > 18000) ||
-      (studentWithQr.fatherAvatarUrl && studentWithQr.fatherAvatarUrl.length > 18000) ||
-      (studentWithQr.motherAvatarUrl && studentWithQr.motherAvatarUrl.length > 18000);
-
-    if (needsCompression) {
-      (async () => {
-        const finalStudent: Student = {
-          ...studentWithQr,
-          avatarUrl: studentWithQr.avatarUrl
-            ? await compressImageBase64(studentWithQr.avatarUrl)
-            : studentWithQr.avatarUrl,
-          fatherAvatarUrl: studentWithQr.fatherAvatarUrl
-            ? await compressImageBase64(studentWithQr.fatherAvatarUrl)
-            : studentWithQr.fatherAvatarUrl,
-          motherAvatarUrl: studentWithQr.motherAvatarUrl
-            ? await compressImageBase64(studentWithQr.motherAvatarUrl)
-            : studentWithQr.motherAvatarUrl,
-        };
-        setStudents((prev) => prev.map((s) => (s.id === student.id ? finalStudent : s)));
-        pushProfileToServer(finalStudent);
-      })();
-    } else {
-      pushProfileToServer(studentWithQr);
+    const nowIso = new Date().toISOString();
+    if (photosModified) {
+      lastLocalPhotoMutationTimeRef.current = Date.now();
     }
 
-    setStudents((prev) => prev.map((s) => (s.id === student.id ? studentWithQr : s)));
+    inFlightPhotoSyncCountRef.current++;
+    try {
+      const compAvatar =
+        student.avatarUrl && student.avatarUrl.length > 18000
+          ? await compressImageBase64(student.avatarUrl)
+          : student.avatarUrl;
+      const compFather =
+        student.fatherAvatarUrl && student.fatherAvatarUrl.length > 18000
+          ? await compressImageBase64(student.fatherAvatarUrl)
+          : student.fatherAvatarUrl;
+      const compMother =
+        student.motherAvatarUrl && student.motherAvatarUrl.length > 18000
+          ? await compressImageBase64(student.motherAvatarUrl)
+          : student.motherAvatarUrl;
+
+      const latestExisting = latestStateRef.current.students.find((s) => s.id === student.id) || existing;
+      const finalStudent: Student = {
+        ...(latestExisting || {}),
+        ...student,
+        avatarUrl: compAvatar,
+        fatherAvatarUrl: compFather,
+        motherAvatarUrl: compMother,
+        securityQrCode: qrCode,
+        photoUpdatedAt: photosModified ? nowIso : student.photoUpdatedAt || latestExisting?.photoUpdatedAt,
+      };
+
+      if (photosModified) {
+        recentLocalPhotoUploadsRef.current.set(finalStudent.id, {
+          avatarUrl: finalStudent.avatarUrl || '',
+          fatherAvatarUrl: finalStudent.fatherAvatarUrl || '',
+          motherAvatarUrl: finalStudent.motherAvatarUrl || '',
+          photoUpdatedAt: finalStudent.photoUpdatedAt || nowIso,
+          updatedAtMs: Date.now(),
+          explicitlyCleared: {
+            avatarUrl: Boolean(latestExisting?.avatarUrl && !finalStudent.avatarUrl),
+            fatherAvatarUrl: Boolean(latestExisting?.fatherAvatarUrl && !finalStudent.fatherAvatarUrl),
+            motherAvatarUrl: Boolean(latestExisting?.motherAvatarUrl && !finalStudent.motherAvatarUrl),
+          },
+        });
+      }
+
+      setStudents((prev) => {
+        const next = prev.map((s) => (s.id === finalStudent.id ? finalStudent : s));
+        idbSet(`${STORAGE_KEY}_students`, next);
+        persistStudentPhotoMapToIdb(next);
+        return next;
+      });
+
+      const savedOk = await pushSingleStudentWithRetry(finalStudent);
+      if (cloudUser && cloudUser.emailVerified) {
+        syncStudentRecordToFirestore(finalStudent, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      }
+      return savedOk;
+    } finally {
+      inFlightPhotoSyncCountRef.current = Math.max(0, inFlightPhotoSyncCountRef.current - 1);
+    }
+  };
+
+  const updateStudentPhoto = async (
+    studentId: string,
+    role: 'student' | 'father' | 'mother',
+    base64: string
+  ): Promise<{ ok: boolean; avatarUrl: string; message: string }> => {
+    lastLocalPhotoMutationTimeRef.current = Date.now();
+    inFlightPhotoSyncCountRef.current++;
+    try {
+      const compressed = base64 ? await compressImageBase64(base64, 220, 280, 0.72) : '';
+      const photoUpdatedAt = new Date().toISOString();
+      const fieldKey =
+        role === 'student' ? 'avatarUrl' : role === 'father' ? 'fatherAvatarUrl' : 'motherAvatarUrl';
+
+      const currentLatest = latestStateRef.current.students.find((s) => s.id === studentId);
+      if (!currentLatest) {
+        return { ok: false, avatarUrl: compressed, message: 'শিক্ষার্থী পাওয়া যায়নি।' };
+      }
+
+      const prevGuard = recentLocalPhotoUploadsRef.current.get(studentId);
+      recentLocalPhotoUploadsRef.current.set(studentId, {
+        avatarUrl: role === 'student' ? compressed : prevGuard?.avatarUrl ?? currentLatest.avatarUrl ?? '',
+        fatherAvatarUrl: role === 'father' ? compressed : prevGuard?.fatherAvatarUrl ?? currentLatest.fatherAvatarUrl ?? '',
+        motherAvatarUrl: role === 'mother' ? compressed : prevGuard?.motherAvatarUrl ?? currentLatest.motherAvatarUrl ?? '',
+        photoUpdatedAt,
+        updatedAtMs: Date.now(),
+        explicitlyCleared: {
+          ...(prevGuard?.explicitlyCleared || {}),
+          [fieldKey]: !compressed,
+        },
+      });
+
+      const updatedStudent: Student = {
+        ...currentLatest,
+        [fieldKey]: compressed,
+        photoUpdatedAt,
+      };
+
+      setStudents((prev) => {
+        const next = prev.map((s) =>
+          s.id === studentId
+            ? {
+                ...s,
+                [fieldKey]: compressed,
+                photoUpdatedAt,
+              }
+            : s
+        );
+        idbSet(`${STORAGE_KEY}_students`, next);
+        persistStudentPhotoMapToIdb(next);
+        return next;
+      });
+
+      const savedOk = await pushSingleStudentWithRetry(updatedStudent);
+      if (cloudUser && cloudUser.emailVerified) {
+        syncStudentRecordToFirestore(updatedStudent, cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+      }
+
+      return {
+        ok: savedOk,
+        avatarUrl: compressed,
+        message: savedOk
+          ? `✓ "${updatedStudent.nameBn}"-এর ছবি সার্ভারে স্থায়ীভাবে সংরক্ষিত হয়েছে`
+          : `⚠ "${updatedStudent.nameBn}"-এর ছবি সার্ভারে সেভ হয়নি — ইন্টারনেট বা সার্ভার চেক করুন`,
+      };
+    } finally {
+      inFlightPhotoSyncCountRef.current = Math.max(0, inFlightPhotoSyncCountRef.current - 1);
+    }
+  };
+
+  const batchUpdateStudentPhotos = async (
+    items: {
+      id: string;
+      avatarUrl?: string;
+      fatherAvatarUrl?: string;
+      motherAvatarUrl?: string;
+      photoUpdatedAt?: string;
+    }[]
+  ): Promise<{ ok: boolean; updatedCount: number; message: string }> => {
+    if (!items || items.length === 0) {
+      return { ok: true, updatedCount: 0, message: 'কোনো ছবি নির্বাচন করা হয়নি।' };
+    }
+    lastLocalPhotoMutationTimeRef.current = Date.now();
+    inFlightPhotoSyncCountRef.current++;
+    try {
+      const nowIso = new Date().toISOString();
+      const itemMap = new Map<string, (typeof items)[0]>();
+      for (const it of items) {
+        if (it && it.id) {
+          const ts = it.photoUpdatedAt || nowIso;
+          itemMap.set(it.id, { ...it, photoUpdatedAt: ts });
+          recentLocalPhotoUploadsRef.current.set(it.id, {
+            avatarUrl: it.avatarUrl,
+            fatherAvatarUrl: it.fatherAvatarUrl,
+            motherAvatarUrl: it.motherAvatarUrl,
+            photoUpdatedAt: ts,
+            updatedAtMs: Date.now(),
+          });
+        }
+      }
+
+      let changedStudents: Student[] = [];
+      setStudents((prev) => {
+        const next = prev.map((s) => {
+          const inc = itemMap.get(s.id);
+          if (!inc) return s;
+          const upd: Student = {
+            ...s,
+            ...(inc.avatarUrl !== undefined ? { avatarUrl: inc.avatarUrl } : {}),
+            ...(inc.fatherAvatarUrl !== undefined ? { fatherAvatarUrl: inc.fatherAvatarUrl } : {}),
+            ...(inc.motherAvatarUrl !== undefined ? { motherAvatarUrl: inc.motherAvatarUrl } : {}),
+            photoUpdatedAt: inc.photoUpdatedAt || nowIso,
+          };
+          changedStudents.push(upd);
+          return upd;
+        });
+        idbSet(`${STORAGE_KEY}_students`, next);
+        persistStudentPhotoMapToIdb(next);
+        return next;
+      });
+
+      // Fallback compute if state updater is batched
+      if (changedStudents.length === 0) {
+        changedStudents = latestStateRef.current.students
+          .filter((s) => itemMap.has(s.id))
+          .map((s) => {
+            const inc = itemMap.get(s.id)!;
+            return {
+              ...s,
+              ...(inc.avatarUrl !== undefined ? { avatarUrl: inc.avatarUrl } : {}),
+              ...(inc.fatherAvatarUrl !== undefined ? { fatherAvatarUrl: inc.fatherAvatarUrl } : {}),
+              ...(inc.motherAvatarUrl !== undefined ? { motherAvatarUrl: inc.motherAvatarUrl } : {}),
+              photoUpdatedAt: inc.photoUpdatedAt || nowIso,
+            };
+          });
+      }
+
+      const ok = await pushPhotosInChunks(changedStudents);
+      if (ok) {
+        setServerSyncStatus('synced');
+        setSyncErrorMessage(null);
+      } else {
+        setServerSyncStatus('error');
+        setSyncErrorMessage('সার্ভারে সব ছবি সেভ হতে পারেনি। পুনরায় চেষ্টা করুন।');
+      }
+
+      return {
+        ok,
+        updatedCount: changedStudents.length,
+        message: ok
+          ? `✓ ${toBengaliNumber(changedStudents.length)} জন শিক্ষার্থীর ছবি সার্ভারে স্থায়ীভাবে সংরক্ষিত হয়েছে`
+          : '⚠ সার্ভারে সব ছবি সংরক্ষিত হতে সমস্যা হয়েছে',
+      };
+    } finally {
+      inFlightPhotoSyncCountRef.current = Math.max(0, inFlightPhotoSyncCountRef.current - 1);
+    }
   };
 
   const deleteStudent = (studentId: string) => {
@@ -3174,7 +3619,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const forceServerSync = async (): Promise<void> => {
     await pushToServer();
-    await fetchFromServer();
+    await fetchFromServer({ force: true });
     if (cloudUser && cloudUser.emailVerified) {
       await syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
     }
@@ -3432,6 +3877,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         students,
         addStudent,
         updateStudent,
+        updateStudentPhoto,
+        batchUpdateStudentPhotos,
         deleteStudent,
         bulkImportStudents,
         moveStudentsToClass,

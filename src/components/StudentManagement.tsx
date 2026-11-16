@@ -81,6 +81,9 @@ export const StudentManagement: React.FC = () => {
   } = useSchool();
 
   const [photoSyncBanner, setPhotoSyncBanner] = useState<string | null>(null);
+  const [photoSyncBannerOk, setPhotoSyncBannerOk] = useState<boolean>(true);
+  const [isSavingStudent, setIsSavingStudent] = useState<boolean>(false);
+  const [modalSaveError, setModalSaveError] = useState<string | null>(null);
 
   const [activeView, setActiveView] = useState<'list' | 'bulk_upload'>('list');
   const [searchTerm, setSearchTerm] = useState('');
@@ -258,6 +261,7 @@ export const StudentManagement: React.FC = () => {
     });
     setStudentModalTab('student');
     setEditingStudent(null);
+    setModalSaveError(null);
     setIsAddModalOpen(true);
   };
 
@@ -321,6 +325,7 @@ export const StudentManagement: React.FC = () => {
     setDreamDraftTitle('');
     setDreamDraftCaption('');
     setStudentModalTab('student');
+    setModalSaveError(null);
     setIsAddModalOpen(true);
   };
 
@@ -331,67 +336,83 @@ export const StudentManagement: React.FC = () => {
       return;
     }
 
-    // Auto-compress student & parent photos if > 18KB so batch & cloud sync stays fast
-    let finalAvatar = formData.avatarUrl;
-    if (finalAvatar && finalAvatar.length > 18000) {
-      finalAvatar = await compressImageBase64(finalAvatar);
+    setIsSavingStudent(true);
+    setModalSaveError(null);
+
+    try {
+      // Auto-compress student & parent photos if > 18KB so batch & cloud sync stays fast
+      let finalAvatar = formData.avatarUrl;
+      if (finalAvatar && finalAvatar.length > 18000) {
+        finalAvatar = await compressImageBase64(finalAvatar);
+      }
+
+      let finalFatherAvatar = formData.fatherAvatarUrl;
+      if (finalFatherAvatar && finalFatherAvatar.length > 18000) {
+        finalFatherAvatar = await compressImageBase64(finalFatherAvatar);
+      }
+
+      let finalMotherAvatar = formData.motherAvatarUrl;
+      if (finalMotherAvatar && finalMotherAvatar.length > 18000) {
+        finalMotherAvatar = await compressImageBase64(finalMotherAvatar);
+      }
+
+      // Keep legacy fatherName and motherName synchronized
+      const syncFather = formData.fatherNameBn || formData.fatherName || '';
+      const syncMother = formData.motherNameBn || formData.motherName || '';
+      const syncGuardianPhone = formData.guardianPhone || formData.fatherPhone || formData.motherPhone || '';
+
+      const photosChanged = editingStudent
+        ? (finalAvatar || '') !== (editingStudent.avatarUrl || '') ||
+          (finalFatherAvatar || '') !== (editingStudent.fatherAvatarUrl || '') ||
+          (finalMotherAvatar || '') !== (editingStudent.motherAvatarUrl || '')
+        : Boolean(finalAvatar || finalFatherAvatar || finalMotherAvatar);
+
+      const payload = {
+        ...formData,
+        avatarUrl: finalAvatar,
+        fatherAvatarUrl: finalFatherAvatar,
+        motherAvatarUrl: finalMotherAvatar,
+        photoUpdatedAt: photosChanged
+          ? new Date().toISOString()
+          : editingStudent?.photoUpdatedAt,
+        fatherName: syncFather,
+        fatherNameBn: syncFather,
+        motherName: syncMother,
+        motherNameBn: syncMother,
+        guardianPhone: syncGuardianPhone,
+      };
+
+      if (editingStudent) {
+        const savedOk = await updateStudent({
+          ...editingStudent,
+          ...payload,
+        });
+
+        if (!savedOk) {
+          const errMsg = `⚠ "${formData.nameBn}"-এর ছবি বা তথ্য সার্ভারে সংরক্ষণ ব্যর্থ হয়েছে! অনুগ্রহ করে পুনরায় চেষ্টা করুন।`;
+          setPhotoSyncBannerOk(false);
+          setPhotoSyncBanner(errMsg);
+          setModalSaveError(errMsg);
+          return;
+        }
+      } else {
+        addStudent(payload);
+      }
+
+      if (photosChanged) {
+        setPhotoSyncBannerOk(true);
+        setPhotoSyncBanner(
+          cloudUser
+            ? `✓ "${formData.nameBn}"-এর ছবি কেন্দ্রীয় সার্ভার ও ফায়ারবেজ ক্লাউডে স্থায়ীভাবে সংরক্ষিত হয়েছে।`
+            : `✓ "${formData.nameBn}"-এর ছবি সার্ভারে স্থায়ীভাবে সংরক্ষিত হয়েছে।`
+        );
+        setTimeout(() => setPhotoSyncBanner(null), 5000);
+      }
+
+      setIsAddModalOpen(false);
+    } finally {
+      setIsSavingStudent(false);
     }
-
-    let finalFatherAvatar = formData.fatherAvatarUrl;
-    if (finalFatherAvatar && finalFatherAvatar.length > 18000) {
-      finalFatherAvatar = await compressImageBase64(finalFatherAvatar);
-    }
-
-    let finalMotherAvatar = formData.motherAvatarUrl;
-    if (finalMotherAvatar && finalMotherAvatar.length > 18000) {
-      finalMotherAvatar = await compressImageBase64(finalMotherAvatar);
-    }
-
-    // Keep legacy fatherName and motherName synchronized
-    const syncFather = formData.fatherNameBn || formData.fatherName || '';
-    const syncMother = formData.motherNameBn || formData.motherName || '';
-    const syncGuardianPhone = formData.guardianPhone || formData.fatherPhone || formData.motherPhone || '';
-
-    const photosChanged = editingStudent
-      ? (finalAvatar || '') !== (editingStudent.avatarUrl || '') ||
-        (finalFatherAvatar || '') !== (editingStudent.fatherAvatarUrl || '') ||
-        (finalMotherAvatar || '') !== (editingStudent.motherAvatarUrl || '')
-      : Boolean(finalAvatar || finalFatherAvatar || finalMotherAvatar);
-
-    const payload = {
-      ...formData,
-      avatarUrl: finalAvatar,
-      fatherAvatarUrl: finalFatherAvatar,
-      motherAvatarUrl: finalMotherAvatar,
-      photoUpdatedAt: photosChanged
-        ? new Date().toISOString()
-        : editingStudent?.photoUpdatedAt,
-      fatherName: syncFather,
-      fatherNameBn: syncFather,
-      motherName: syncMother,
-      motherNameBn: syncMother,
-      guardianPhone: syncGuardianPhone,
-    };
-
-    if (editingStudent) {
-      updateStudent({
-        ...editingStudent,
-        ...payload,
-      });
-    } else {
-      addStudent(payload);
-    }
-
-    if (photosChanged) {
-      setPhotoSyncBanner(
-        cloudUser
-          ? `✓ "${formData.nameBn}"-এর ছবি কেন্দ্রীয় সার্ভার ও ফায়ারবেজ ক্লাউডে স্থায়ীভাবে সংরক্ষিত হয়েছে।`
-          : `✓ "${formData.nameBn}"-এর ছবি সার্ভারে সংরক্ষিত হয়েছে। স্থায়ী ব্যাকআপের জন্য "ক্লাউড সেভ" বাটনে ক্লিক করে গুগলে সেভ রাখুন।`
-      );
-      setTimeout(() => setPhotoSyncBanner(null), 5000);
-    }
-
-    setIsAddModalOpen(false);
   };
 
   // Parse bulk text (CSV / TSV)
@@ -601,7 +622,7 @@ export const StudentManagement: React.FC = () => {
       {/* Photo Persistence & Cloud Backup Strip */}
       <div
         className={`rounded-xl border p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 ${
-          syncErrorMessage || serverSyncStatus === 'error'
+          syncErrorMessage || serverSyncStatus === 'error' || (photoSyncBanner && !photoSyncBannerOk)
             ? 'bg-rose-50 border-rose-300 text-rose-900'
             : cloudUser
             ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
@@ -1392,13 +1413,14 @@ export const StudentManagement: React.FC = () => {
                           className="hidden"
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) {
                               const reader = new FileReader();
                               reader.onload = async (ev) => {
                                 const base64 = ev.target?.result as string;
                                 if (base64) {
                                   const compressed = await compressImageBase64(base64);
-                                  setFormData({ ...formData, avatarUrl: compressed });
+                                  setFormData((prev) => ({ ...prev, avatarUrl: compressed }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1409,7 +1431,7 @@ export const StudentManagement: React.FC = () => {
                       {formData.avatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, avatarUrl: '' })}
+                          onClick={() => setFormData((prev) => ({ ...prev, avatarUrl: '' }))}
                           className="text-[10px] text-rose-600 hover:underline block text-center mt-1"
                         >
                           ছবি মুছুন
@@ -1619,13 +1641,14 @@ export const StudentManagement: React.FC = () => {
                           className="hidden"
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) {
                               const reader = new FileReader();
                               reader.onload = async (ev) => {
                                 const base64 = ev.target?.result as string;
                                 if (base64) {
                                   const comp = await compressImageBase64(base64);
-                                  setFormData({ ...formData, fatherAvatarUrl: comp });
+                                  setFormData((prev) => ({ ...prev, fatherAvatarUrl: comp }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1636,7 +1659,7 @@ export const StudentManagement: React.FC = () => {
                       {formData.fatherAvatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, fatherAvatarUrl: '' })}
+                          onClick={() => setFormData((prev) => ({ ...prev, fatherAvatarUrl: '' }))}
                           className="text-[9px] text-rose-600 hover:underline mt-0.5"
                         >
                           ছবি মুছুন
@@ -1775,13 +1798,14 @@ export const StudentManagement: React.FC = () => {
                           className="hidden"
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) {
                               const reader = new FileReader();
                               reader.onload = async (ev) => {
                                 const base64 = ev.target?.result as string;
                                 if (base64) {
                                   const comp = await compressImageBase64(base64);
-                                  setFormData({ ...formData, motherAvatarUrl: comp });
+                                  setFormData((prev) => ({ ...prev, motherAvatarUrl: comp }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1792,7 +1816,7 @@ export const StudentManagement: React.FC = () => {
                       {formData.motherAvatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, motherAvatarUrl: '' })}
+                          onClick={() => setFormData((prev) => ({ ...prev, motherAvatarUrl: '' }))}
                           className="text-[9px] text-rose-600 hover:underline mt-0.5"
                         >
                           ছবি মুছুন
@@ -2207,6 +2231,13 @@ export const StudentManagement: React.FC = () => {
                 </div>
               )}
 
+              {modalSaveError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{modalSaveError}</span>
+                </div>
+              )}
+
               {/* Bottom Actions */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
                 <div className="flex items-center gap-1">
@@ -2241,16 +2272,18 @@ export const StudentManagement: React.FC = () => {
                 <div className="flex items-center space-x-2">
                   <button
                     type="button"
+                    disabled={isSavingStudent}
                     onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 hover:bg-slate-50 font-medium text-xs cursor-pointer"
+                    className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 hover:bg-slate-50 font-medium text-xs cursor-pointer disabled:opacity-50"
                   >
                     বাতিল
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-md transition cursor-pointer"
+                    disabled={isSavingStudent}
+                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-md transition cursor-pointer disabled:opacity-60"
                   >
-                    ✓ সম্পূর্ণ তথ্য সংরক্ষণ করুন
+                    {isSavingStudent ? 'সার্ভারে সংরক্ষণ হচ্ছে...' : '✓ সম্পূর্ণ তথ্য সংরক্ষণ করুন'}
                   </button>
                 </div>
               </div>

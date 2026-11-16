@@ -9,8 +9,33 @@ import {
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 
-// Shared module-level dedup set so WS + SSE + HTTP polling + Firestore never double-play the same scan ID
-export const seenGatepassLogIds = new Set<string>();
+// Shared module-level dedup set (synced with sessionStorage) so WS + SSE + HTTP polling + Firestore never double-play the same scan ID
+const SEEN_LOGS_STORAGE_KEY = 'dlikon_seen_gatepass_log_ids_v1';
+export const seenGatepassLogIds = new Set<string>(
+  (() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = sessionStorage.getItem(SEEN_LOGS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  })()
+);
+
+export function markGatepassLogSeen(id: string): void {
+  if (!id) return;
+  seenGatepassLogIds.add(id);
+  if (typeof window === 'undefined') return;
+  try {
+    const recent = Array.from(seenGatepassLogIds).slice(-200);
+    sessionStorage.setItem(SEEN_LOGS_STORAGE_KEY, JSON.stringify(recent));
+  } catch {
+    // Ignore storage limit errors
+  }
+}
+
 export const GUARDIAN_AUDIO_PREF_KEY = 'dlikon_guardian_audio_enabled';
 export const GATEPASS_BROADCAST_CHANNEL = 'dlikon_gatepass_live';
 
@@ -71,7 +96,7 @@ export function useGatepassRealtime({
     if (!enabled || role !== 'student' || typeof window === 'undefined') return;
 
     const handleFirstUserGesture = () => {
-      unlockMobileAudioAndSpeech(false);
+      unlockMobileAudioAndSpeech(true);
     };
 
     window.addEventListener('pointerdown', handleFirstUserGesture, { capture: true, passive: true });
@@ -147,7 +172,7 @@ export function useGatepassRealtime({
       }
 
       speakBengaliSpeech(message, {
-        delayMs: 320,
+        delayMs: 420,
         onBlocked: () => {
           setPendingBlockedSpeech({
             message,
@@ -178,13 +203,13 @@ export function useGatepassRealtime({
           if (!item || !item.id) continue;
           addSecurityLog(item);
           const alreadySeen = seenGatepassLogIds.has(item.id);
-          seenGatepassLogIds.add(item.id);
+          markGatepassLogSeen(item.id);
           if (isFirstInit && !alreadySeen && role === 'student' && item.studentId === studentId) {
             const logMs =
               typeof item.serverTimestamp === 'number'
                 ? item.serverTimestamp
                 : new Date(item.timestamp).getTime() || 0;
-            if (!newestRecentUnseen && logMs >= serverTime - 10000 && !item.guardianAcknowledged) {
+            if (!newestRecentUnseen && logMs >= serverTime - 25000 && !item.guardianAcknowledged) {
               newestRecentUnseen = item;
             }
           }
@@ -199,7 +224,7 @@ export function useGatepassRealtime({
         const incomingLog: SecurityGatepassLog = rawPayload.log;
         addSecurityLog(incomingLog);
         if (seenGatepassLogIds.has(incomingLog.id)) return;
-        seenGatepassLogIds.add(incomingLog.id);
+        markGatepassLogSeen(incomingLog.id);
         hasBaselineRef.current = true;
         triggerAlertForStudent(incomingLog);
         return;

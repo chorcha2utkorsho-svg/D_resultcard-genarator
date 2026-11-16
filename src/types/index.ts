@@ -247,6 +247,41 @@ export interface SecurityGatepassLog {
   acknowledgedBy?: string;
 }
 
+export type ScannerAuditSource =
+  | 'camera_qr'
+  | 'manual_input'
+  | 'quick_button'
+  | 'disambiguation_pick';
+
+export type ScannerAuditOutcome = 'matched' | 'ambiguous' | 'rejected';
+
+export interface ScannerAuditCandidateSummary {
+  id: string;
+  nameBn: string;
+  classNameBn: string;
+  roll: number;
+  portalId: string;
+}
+
+export interface ScannerAuditEvent {
+  id: string;
+  timestamp: string; // ISO string
+  serverTimestamp?: number;
+  source: ScannerAuditSource;
+  gateAction: 'entry' | 'exit';
+  rawPayload: string;
+  extractedToken: string;
+  outcome: ScannerAuditOutcome;
+  matchRuleOrReason: string;
+  diagnosticNote: string;
+  resolvedStudentId?: string;
+  resolvedStudentNameBn?: string;
+  resolvedPortalId?: string;
+  resolvedClassNameBn?: string;
+  resolvedRoll?: number;
+  ambiguousCandidates?: ScannerAuditCandidateSummary[];
+}
+
 export interface Subject {
   id: string;
   nameBn: string;

@@ -45,12 +45,21 @@ import {
   CheckCheck,
   Calendar,
   Globe,
+  ClipboardList,
+  ShieldAlert,
+  XCircle,
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
-import { Student, SecurityGatepassLog } from '../types';
+import {
+  Student,
+  SecurityGatepassLog,
+  ScannerAuditEvent,
+  ScannerAuditSource,
+  ScannerAuditOutcome,
+} from '../types';
 import { toBengaliNumber, toBengaliRoll, formatBengaliDate, getStudentPortalId } from '../utils/bengali';
-import { matchStudentByQrOrQuery } from '../utils/gatepassQrMatcher';
+import { matchStudentByQrOrQuery, describeMatchRuleBn } from '../utils/gatepassQrMatcher';
 import { SchoolLogo } from './SchoolLogo';
 import { StudentIDCardSlip } from './StudentIDCardSlip';
 import { compressImageBase64 } from '../utils/imageCompressor';
@@ -70,12 +79,18 @@ import {
 import {
   broadcastLocalGatepassScan,
   isGuardianAudioEnabledPref,
+  markGatepassLogSeen,
   seenGatepassLogIds,
   setGuardianAudioEnabledPref,
 } from '../hooks/useGatepassRealtime';
 
 interface DigitalSecurityGatepassViewProps {
-  initialTab?: 'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs';
+  initialTab?:
+    | 'guardian_portal'
+    | 'barcode_scanner'
+    | 'idcard_generator'
+    | 'audit_logs'
+    | 'scanner_audit';
   restrictedMode?: 'full' | 'student_only' | 'employee_scanner';
   forcedStudentId?: string;
   onRoleLogout?: () => void;
@@ -101,6 +116,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     classes,
     students,
     updateStudent,
+    updateStudentPhoto,
+    batchUpdateStudentPhotos,
     securityLogs,
     addSecurityLog,
     acknowledgeSecurityLog,
@@ -109,6 +126,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     selectedYear,
     isServerSyncing,
     serverSyncStatus,
+    syncErrorMessage,
     lastSyncedTime,
     forceServerSync,
     seedParentDetailsForClass,
@@ -129,7 +147,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   // Part 2: barcode_scanner (স্মার্ট ফোনের মাধ্যমে বারকোড স্ক্যানার)
   // Part 3: idcard_generator (কিউআর কোড যুক্ত এপিঠ ওপিঠ আইডিকার্ড জেনারেটর)
   // Part 4: audit_logs (গেটপাস অডিট ও অ্যাক্সেস লগ)
-  const [activeTab, setActiveTab] = useState<'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs'>(
+  // Part 5: scanner_audit (স্ক্যানার লগ অডিট - প্রতিটি QR স্ক্যান ও রেজাল্ট ম্যাপিং রেকর্ড)
+  const [activeTab, setActiveTab] = useState<
+    'guardian_portal' | 'barcode_scanner' | 'idcard_generator' | 'audit_logs' | 'scanner_audit'
+  >(
     restrictedMode === 'student_only'
       ? 'guardian_portal'
       : restrictedMode === 'employee_scanner'
@@ -162,6 +183,38 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>('');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+  const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
+  const lastAmbiguousQueryRef = useRef<string>('');
+  const [pendingScanConfirmation, setPendingScanConfirmation] = useState<{
+    student: Student;
+    classNameBn: string;
+    matchedBy: string;
+    source: ScannerAuditSource;
+    rawPayload: string;
+  } | null>(null);
+  const pendingScanConfirmationRef = useRef<{
+    student: Student;
+    classNameBn: string;
+    matchedBy: string;
+    source: ScannerAuditSource;
+    rawPayload: string;
+  } | null>(null);
+
+  useEffect(() => {
+    pendingScanConfirmationRef.current = pendingScanConfirmation;
+  }, [pendingScanConfirmation]);
+
+  // QR Scanner Event Audit State
+  const [scannerAuditLogs, setScannerAuditLogs] = useState<ScannerAuditEvent[]>([]);
+  const [scannerAuditLoading, setScannerAuditLoading] = useState<boolean>(false);
+  const [scannerAuditOutcomeFilter, setScannerAuditOutcomeFilter] = useState<
+    'all' | ScannerAuditOutcome
+  >('all');
+  const [scannerAuditSourceFilter, setScannerAuditSourceFilter] = useState<
+    'all' | ScannerAuditSource
+  >('all');
+  const [scannerAuditSearchQuery, setScannerAuditSearchQuery] = useState<string>('');
+  const [copiedAuditTokenId, setCopiedAuditTokenId] = useState<string | null>(null);
 
   // Live Camera stream for smartphone simulation
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
@@ -214,6 +267,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   // Handle camera start/stop
   const startCamera = async () => {
     setCameraError(null);
+    unlockMobileAudioAndSpeech(true);
     try {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -330,19 +384,24 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   };
 
   // Perform Gate Verification and Broadcast
-  const handleVerifyStudent = (student: Student) => {
+  const handleVerifyStudent = (
+    student: Student,
+    options: { skipBeep?: boolean; forceVoice?: boolean } = {}
+  ) => {
+    unlockMobileAudioAndSpeech(true);
     const studentClass = classes.find((c) => c.id === student.classId);
     const classNameBn = studentClass?.nameBn || 'শ্রেণি';
     const actionLabel = gateAction === 'entry' ? 'বিদ্যালয়ে প্রবেশ' : 'বিদ্যালয় থেকে প্রস্থান';
-    const actionVerb =
-      gateAction === 'entry' ? 'নিরাপদে বিদ্যালয়ে প্রবেশ করেছে' : 'বিদ্যালয় থেকে সফলভাবে প্রস্থান করেছে';
 
-    const voiceMsg = `শিক্ষার্থী ${student.nameBn}, ${classNameBn}, রোল নম্বর ${toBengaliNumber(student.roll)}, ${actionVerb}।`;
+    const voiceMsg =
+      gateAction === 'entry'
+        ? `স্বাগতম ${student.nameBn}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি ${student.nameBn}।`
+        : `বিদায় ${student.nameBn}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি ${student.nameBn}।`;
     const guardianPhone =
       student.guardianPhone || student.fatherPhone || student.motherPhone || '০১৭০০-০০০০০০';
 
-    // 1. Play barcode scanner beep tone
-    if (soundBeepEnabled) {
+    // 1. Play barcode scanner beep tone unless already played on scan detection
+    if (soundBeepEnabled && !options.skipBeep) {
       playScannerBeep();
     }
 
@@ -355,7 +414,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       action: gateAction,
       timestamp: new Date().toISOString(),
       guardianPhone,
-      voiceDispatched: voiceEnabled,
+      voiceDispatched: Boolean(voiceEnabled || options.forceVoice),
       smsDispatched: smsSimulationEnabled,
       status: 'verified',
       operatorNote: `${actionLabel} সফলভাবে সম্পন্ন হয়েছে`,
@@ -384,6 +443,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       // Non-fatal
     }
 
+    setAmbiguousCandidates([]);
     setRecentScannedStudent(student);
     setLiveAnnouncement(voiceMsg);
     setScannerFeedback(
@@ -391,8 +451,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     );
 
     // 3. Play Bengali Voice Announcement on scanner device
-    if (voiceEnabled) {
-      speakBengali(voiceMsg, false, { delayMs: soundBeepEnabled ? 140 : 0 });
+    if (options.forceVoice || voiceEnabled) {
+      speakBengali(voiceMsg, Boolean(options.forceVoice), {
+        delayMs: soundBeepEnabled && !options.skipBeep ? 140 : 0,
+      });
     }
 
     // Clear input
@@ -403,20 +465,190 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     }, 4500);
   };
 
-  // Filter and match students strictly by unique QR token, student ID, portal ID, birth reg, phone, or unambiguous roll
-  const handleBarcodeSearchSubmit = (inputQuery: string) => {
+  // Open confirmation modal after a scan/match so operator verifies photo, name & class before playing 'স্বাগতম' audio
+  const openScanConfirmationModal = (
+    student: Student,
+    matchedBy: string,
+    source: ScannerAuditSource,
+    rawPayload: string
+  ) => {
+    const classNameBn = classes.find((c) => c.id === student.classId)?.nameBn || 'শ্রেণি';
+    if (soundBeepEnabled) {
+      playScannerBeep();
+    }
+    const nextPending = {
+      student,
+      classNameBn,
+      matchedBy,
+      source,
+      rawPayload,
+    };
+    pendingScanConfirmationRef.current = nextPending;
+    setPendingScanConfirmation(nextPending);
+    setAmbiguousCandidates([]);
+    setBarcodeInput('');
+  };
+
+  const handleConfirmPendingScan = () => {
+    const pending = pendingScanConfirmationRef.current || pendingScanConfirmation;
+    if (!pending) return;
+    lastScannedPayloadRef.current = pending.rawPayload;
+    lastScannedTimeRef.current = Date.now();
+    pendingScanConfirmationRef.current = null;
+    setPendingScanConfirmation(null);
+    handleVerifyStudent(pending.student, { skipBeep: true, forceVoice: true });
+  };
+
+  const handleCancelPendingScan = () => {
+    const pending = pendingScanConfirmationRef.current || pendingScanConfirmation;
+    if (pending) {
+      lastScannedPayloadRef.current = pending.rawPayload;
+      lastScannedTimeRef.current = Date.now();
+    }
+    pendingScanConfirmationRef.current = null;
+    setPendingScanConfirmation(null);
+    setScannerFeedback('স্ক্যান নিশ্চিতকরণ বাতিল করা হয়েছে — পুনরায় সঠিক কিউআর কোড স্ক্যান করুন।');
+    setTimeout(() => setScannerFeedback(null), 3500);
+  };
+
+  useEffect(() => {
+    if (!pendingScanConfirmation) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCancelPendingScan();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pendingScanConfirmation]);
+
+  // Record every scan / search attempt for administrative root-cause diagnostics
+  const recordScannerAuditEvent = (
+    params: Omit<ScannerAuditEvent, 'id' | 'timestamp'>
+  ) => {
+    const newEvent: ScannerAuditEvent = {
+      ...params,
+      id: `scanaudit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
+    };
+    setScannerAuditLogs((prev) => [newEvent, ...prev.filter((e) => e.id !== newEvent.id)].slice(0, 500));
+    try {
+      fetch('/api/security/scanner-audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: newEvent }),
+      }).catch(() => {});
+    } catch {
+      // Non-fatal
+    }
+  };
+
+  const handleAmbiguousCandidatePick = (cand: Student) => {
+    const clsName = classes.find((c) => c.id === cand.classId)?.nameBn || cand.classId;
+    const prevQuery = lastAmbiguousQueryRef.current || getStudentPortalId(cand);
+    recordScannerAuditEvent({
+      source: 'disambiguation_pick',
+      gateAction,
+      rawPayload: prevQuery,
+      extractedToken: getStudentPortalId(cand),
+      outcome: 'matched',
+      matchRuleOrReason: 'manual_candidate_selected',
+      diagnosticNote: `${describeMatchRuleBn('manual_candidate_selected')} (${cand.nameBn}, ${clsName})`,
+      resolvedStudentId: cand.id,
+      resolvedStudentNameBn: cand.nameBn,
+      resolvedPortalId: getStudentPortalId(cand),
+      resolvedClassNameBn: clsName,
+      resolvedRoll: cand.roll,
+    });
+    lastAmbiguousQueryRef.current = '';
+    openScanConfirmationModal(cand, 'manual_candidate_selected', 'disambiguation_pick', prevQuery);
+  };
+
+  const handleQuickSimulationVerify = (std: Student) => {
+    const clsName = classes.find((c) => c.id === std.classId)?.nameBn || std.classId;
+    const token = std.securityQrCode || getStudentPortalId(std);
+    recordScannerAuditEvent({
+      source: 'quick_button',
+      gateAction,
+      rawPayload: token,
+      extractedToken: token,
+      outcome: 'matched',
+      matchRuleOrReason: 'quick_simulation',
+      diagnosticNote: describeMatchRuleBn('quick_simulation'),
+      resolvedStudentId: std.id,
+      resolvedStudentNameBn: std.nameBn,
+      resolvedPortalId: getStudentPortalId(std),
+      resolvedClassNameBn: clsName,
+      resolvedRoll: std.roll,
+    });
+    openScanConfirmationModal(std, 'quick_simulation', 'quick_button', token);
+  };
+
+  // Filter and match students strictly by unique QR token, student ID, portal ID, birth reg, phone, or unambiguous roll/name
+  const handleBarcodeSearchSubmit = (
+    inputQuery: string,
+    source: 'camera_qr' | 'manual_input' = 'manual_input'
+  ) => {
     const trimmedQuery = (inputQuery || '').trim();
     if (!trimmedQuery) return;
 
     const result = matchStudentByQrOrQuery(trimmedQuery, students, classes);
+    const extracted = result.extractedToken || trimmedQuery;
 
     if (result.student) {
-      handleVerifyStudent(result.student);
+      const clsName =
+        classes.find((c) => c.id === result.student!.classId)?.nameBn || result.student.classId;
+      const ruleCode = result.matchedBy || 'security_qr';
+      recordScannerAuditEvent({
+        source,
+        gateAction,
+        rawPayload: trimmedQuery,
+        extractedToken: extracted,
+        outcome: 'matched',
+        matchRuleOrReason: ruleCode,
+        diagnosticNote: describeMatchRuleBn(ruleCode),
+        resolvedStudentId: result.student.id,
+        resolvedStudentNameBn: result.student.nameBn,
+        resolvedPortalId: getStudentPortalId(result.student),
+        resolvedClassNameBn: clsName,
+        resolvedRoll: result.student.roll,
+      });
+      lastAmbiguousQueryRef.current = '';
+      openScanConfirmationModal(result.student, ruleCode, source, trimmedQuery);
     } else {
+      const candidates = result.ambiguousMatches ? result.ambiguousMatches.slice(0, 8) : [];
+      const isAmbiguous = candidates.length > 0;
+      const reasonCode = result.reason || 'not_found';
+      if (isAmbiguous) {
+        lastAmbiguousQueryRef.current = trimmedQuery;
+      }
+      recordScannerAuditEvent({
+        source,
+        gateAction,
+        rawPayload: trimmedQuery,
+        extractedToken: extracted,
+        outcome: isAmbiguous ? 'ambiguous' : 'rejected',
+        matchRuleOrReason: reasonCode,
+        diagnosticNote: result.errorMessage || describeMatchRuleBn(reasonCode),
+        ambiguousCandidates: isAmbiguous
+          ? candidates.slice(0, 6).map((c) => ({
+              id: c.id,
+              nameBn: c.nameBn,
+              classNameBn: classes.find((cls) => cls.id === c.classId)?.nameBn || c.classId,
+              roll: c.roll,
+              portalId: getStudentPortalId(c),
+            }))
+          : undefined,
+      });
+
+      // Clear stale previous profile so operator never mistakes old profile for failed/ambiguous scan
+      setRecentScannedStudent(null);
+      setLiveAnnouncement('');
+      setAmbiguousCandidates(candidates);
       setScannerFeedback(
         result.errorMessage || `❌ "${trimmedQuery}" কিউআর কোড বা নম্বরে কোনো শিক্ষার্থীর তথ্য পাওয়া যায়নি।`
       );
-      setTimeout(() => setScannerFeedback(null), 5000);
+      setTimeout(() => setScannerFeedback(null), 6500);
     }
   };
 
@@ -459,12 +691,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         return fmt === 'qr_code' && val.length >= 4;
       });
       if (qrOnly.length === 0) return null;
-      if (qrOnly.length === 1) return qrOnly[0].rawValue.trim();
+      // Prefer school-formatted tokens (DLIKON-*, std_*, guardian=*) if non-school QR codes are in frame
+      const schoolQrs = qrOnly.filter((b) => /(DLIKON-|std_|guardian=)/i.test(b.rawValue || ''));
+      const pool = schoolQrs.length > 0 ? schoolQrs : qrOnly;
+      if (pool.length === 1) return pool[0].rawValue.trim();
       const cx = targetW / 2;
       const cy = targetH / 2;
-      let best = qrOnly[0];
+      let best = pool[0];
       let bestDist = Infinity;
-      for (const b of qrOnly) {
+      for (const b of pool) {
         const box = b.boundingBox;
         if (!box) continue;
         const bx = box.x + box.width / 2;
@@ -487,6 +722,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       const now = Date.now();
 
       if (
+        !pendingScanConfirmationRef.current &&
         video &&
         video.readyState >= 2 &&
         video.videoWidth > 0 &&
@@ -583,7 +819,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               setScanSuccessPulse(true);
               setTimeout(() => setScanSuccessPulse(false), 900);
 
-              handleBarcodeSearchSubmitRef.current(trimmed);
+              handleBarcodeSearchSubmitRef.current(trimmed, 'camera_qr');
             }
           }
         } catch (err) {
@@ -635,12 +871,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setScheduleDraft(activeDailySchedule);
   }, [activeDailySchedule]);
 
-  // Auto-restore paired guardian session from forcedStudentId, URL (?guardian=...), or saved smartphone session
+  // Auto-restore paired guardian session ONLY when operating as guardian portal or explicit forcedStudentId
   useEffect(() => {
     if (students.length === 0) return;
+    if (restrictedMode === 'employee_scanner') return;
 
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
     const urlGuardian = !isDeviceExplicitlyUnlockedSync() ? params?.get('guardian') : null;
+    const isGuardianView =
+      restrictedMode === 'student_only' || activeTab === 'guardian_portal' || Boolean(forcedStudentId || urlGuardian);
+    if (!isGuardianView) return;
+
     const savedPairedId =
       typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
     const targetId = forcedStudentId || urlGuardian || savedPairedId;
@@ -852,24 +1093,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setIsGuardianAlarmRinging(true);
     playAlarmChime();
 
-    if (
-      typeof window !== 'undefined' &&
-      'Notification' in window &&
-      Notification.permission === 'default' &&
-      localStorage.getItem('dlikon_notif_asked') !== '1'
-    ) {
-      localStorage.setItem('dlikon_notif_asked', '1');
-      Notification.requestPermission().catch(() => {});
-    }
-
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
     const msg = playDemo && targetStudent
       ? buildGuardianVoiceMessage(targetStudent, 'entry')
       : targetStudent
-      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় রয়েছে। গেটে আইডি কার্ড স্ক্যান হলেই স্বয়ংক্রিয়ভাবে মেসেজ বেজে উঠবে।`
-      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় করা হয়েছে। গেটে কার্ড স্ক্যান হলেই স্বয়ংক্রিয়ভাবে ভয়েস মেসেজ বেজে উঠবে।`;
+      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে।`
+      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় হয়েছে।`;
 
-    speakBengali(msg, true, { delayMs: 280 });
+    speakBengali(msg, true, { delayMs: 380 });
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
@@ -888,10 +1119,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     lastServerTimeRef.current = 0;
   }, [loggedInGuardianStudent?.id]);
 
-  // Fallback poll only when used inside Official preview mode (when top-level student App session isn't already running useGatepassRealtime)
+  // Fallback poll only when used inside Official guardian preview mode (NEVER on scanner tabs or when useGatepassRealtime is running for forcedStudentId)
   useEffect(() => {
     const signedStudentId = loggedInGuardianStudent?.id;
-    if (!signedStudentId || forcedStudentId) return;
+    if (
+      !signedStudentId ||
+      forcedStudentId ||
+      restrictedMode === 'employee_scanner' ||
+      activeTab !== 'guardian_portal'
+    ) {
+      return;
+    }
 
     let isSubscribed = true;
 
@@ -901,7 +1139,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         playAlarmChime();
         const announcement = buildGuardianVoiceMessage(studentObj, log.action);
         speakBengali(announcement, true, {
-          delayMs: 320,
+          delayMs: 420,
           logId: log.id,
           studentNameBn: studentObj.nameBn,
           action: log.action,
@@ -955,12 +1193,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             if (log.studentId === signedStudent.id) {
               addSecurityLog(log);
               const alreadySeen = seenGatepassLogIds.has(log.id);
-              seenGatepassLogIds.add(log.id);
+              markGatepassLogSeen(log.id);
               const sTime =
                 typeof log.serverTimestamp === 'number'
                   ? log.serverTimestamp
                   : new Date(log.timestamp).getTime() || 0;
-              if (!alreadySeen && !newestLogToAlert && sTime >= serverNow - 8000 && !log.guardianAcknowledged) {
+              if (!alreadySeen && !newestLogToAlert && sTime >= serverNow - 25000 && !log.guardianAcknowledged) {
                 newestLogToAlert = log;
               }
             }
@@ -985,7 +1223,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               maxSeenTime = sTime;
             }
             if (!seenGatepassLogIds.has(log.id)) {
-              seenGatepassLogIds.add(log.id);
+              markGatepassLogSeen(log.id);
               if (!freshLogToAlert) {
                 freshLogToAlert = log;
               }
@@ -1011,6 +1249,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     };
   }, [
     forcedStudentId,
+    restrictedMode,
+    activeTab,
     loggedInGuardianStudent?.id,
     guardianAudioEnabled,
     addSecurityLog,
@@ -1026,7 +1266,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
   useEffect(() => {
     const signedStudent = activeSignedInStudentRef.current;
-    if (!signedStudent || !cloudUser) return;
+    if (
+      !signedStudent ||
+      !cloudUser ||
+      restrictedMode === 'employee_scanner' ||
+      activeTab !== 'guardian_portal'
+    ) {
+      return;
+    }
 
     const childLogs = securityLogs.filter((l) => l.studentId === signedStudent.id);
     if (!hasSeededCloudLogsRef.current) {
@@ -1036,8 +1283,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       for (const l of childLogs) {
         const logTimeMs = l.serverTimestamp || new Date(l.timestamp).getTime() || 0;
         if (!seenGatepassLogIds.has(l.id)) {
-          seenGatepassLogIds.add(l.id);
-          if (!recentLog && nowMs - logTimeMs <= 12000 && nowMs - logTimeMs >= -5000 && !l.guardianAcknowledged) {
+          markGatepassLogSeen(l.id);
+          if (!recentLog && nowMs - logTimeMs <= 25000 && nowMs - logTimeMs >= -5000 && !l.guardianAcknowledged) {
             recentLog = l;
           }
         }
@@ -1046,7 +1293,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
         speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true, {
-          delayMs: 320,
+          delayMs: 420,
           logId: recentLog.id,
           studentNameBn: signedStudent.nameBn,
           action: recentLog.action,
@@ -1059,7 +1306,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     let freshCloudLog: SecurityGatepassLog | null = null;
     for (const l of childLogs) {
       if (!seenGatepassLogIds.has(l.id)) {
-        seenGatepassLogIds.add(l.id);
+        markGatepassLogSeen(l.id);
         if (!freshCloudLog) {
           freshCloudLog = l;
         }
@@ -1070,7 +1317,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       playAlarmChime();
       const announcement = buildGuardianVoiceMessage(signedStudent, freshCloudLog.action);
       speakBengali(announcement, true, {
-        delayMs: 320,
+        delayMs: 420,
         logId: freshCloudLog.id,
         studentNameBn: signedStudent.nameBn,
         action: freshCloudLog.action,
@@ -1090,7 +1337,37 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       }
       setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
     }
-  }, [securityLogs, cloudUser, loggedInGuardianStudent?.id, guardianAudioEnabled, schoolInfo.name]);
+  }, [securityLogs, cloudUser, restrictedMode, activeTab, loggedInGuardianStudent?.id, guardianAudioEnabled, schoolInfo.name]);
+
+  // Fetch & poll persistent QR scanner audit events when viewing Scanner or Scanner Audit tab
+  const fetchScannerAuditLogsFromServer = async (showSpinner = false) => {
+    if (restrictedMode !== 'full') return;
+    if (showSpinner) setScannerAuditLoading(true);
+    try {
+      const res = await fetch('/api/security/scanner-audit?limit=300');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.logs)) {
+        setScannerAuditLogs(data.logs);
+      }
+    } catch {
+      // Non-fatal
+    } finally {
+      if (showSpinner) setScannerAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (restrictedMode !== 'full') return;
+    if (activeTab !== 'barcode_scanner' && activeTab !== 'scanner_audit') return;
+
+    fetchScannerAuditLogsFromServer(activeTab === 'scanner_audit');
+    const timer = setInterval(() => {
+      fetchScannerAuditLogsFromServer(false);
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [activeTab, restrictedMode]);
 
   // Also poll server every 3.5 seconds when school staff is viewing Scanner or Audit Logs
   // so guardian responses from Saudi Arabia / mobile phones appear and count live!
@@ -1129,6 +1406,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [idCardOrientation, setIdCardOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [selectedStudentForIdCard, setSelectedStudentForIdCard] = useState<Student | null>(null);
   const [photoTargetStudentId, setPhotoTargetStudentId] = useState<string>('');
+  const [photoUploadStatus, setPhotoUploadStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [isLoadingSamplePhotos, setIsLoadingSamplePhotos] = useState<boolean>(false);
 
   // Print & Quick Edit States
   const printSheetsContainerRef = useRef<HTMLDivElement>(null);
@@ -1239,7 +1518,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     downloadIdCardsHtml(schoolInfo.name, classNameBn, container.innerHTML, modeDesc);
   };
 
-  const handleSaveQuickEdit = (e: React.FormEvent) => {
+  const handleSaveQuickEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickEditStudent) return;
     const father = (quickEditStudent.fatherNameBn || quickEditStudent.fatherName || '').trim();
@@ -1255,29 +1534,31 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       fatherPhone: phone,
       guardianPhone: phone,
     };
-    updateStudent(updated);
+    const ok = await updateStudent(updated);
     setQuickEditStudent(null);
+    setPhotoUploadStatus({
+      ok,
+      message: ok
+        ? `✓ "${updated.nameBn}"-এর তথ্য সার্ভারে সংরক্ষিত হয়েছে`
+        : `⚠ "${updated.nameBn}"-এর তথ্য সার্ভারে সংরক্ষণ ব্যর্থ হয়েছে`,
+    });
+    setTimeout(() => {
+      setPhotoUploadStatus((prev) => (prev?.message.includes(updated.nameBn) ? null : prev));
+    }, 4500);
   };
 
-  // Handle uploading photos directly from ID card component
+  // Handle uploading photos directly from ID card component (atomic photo update)
   const handleIdCardPhotoUpload = async (
     studentId: string,
     role: 'student' | 'father' | 'mother',
     base64: string
   ) => {
-    const target = students.find((s) => s.id === studentId);
-    if (!target) return;
-
-    const compressed = await compressImageBase64(base64, 220, 280, 0.72);
-    const photoUpdatedAt = new Date().toISOString();
-
-    if (role === 'student') {
-      updateStudent({ ...target, avatarUrl: compressed, photoUpdatedAt });
-    } else if (role === 'father') {
-      updateStudent({ ...target, fatherAvatarUrl: compressed, photoUpdatedAt });
-    } else if (role === 'mother') {
-      updateStudent({ ...target, motherAvatarUrl: compressed, photoUpdatedAt });
-    }
+    setPhotoUploadStatus({ ok: true, message: 'ছবি প্রক্রিয়াকরণ ও সার্ভারে সংরক্ষণ করা হচ্ছে...' });
+    const res = await updateStudentPhoto(studentId, role, base64);
+    setPhotoUploadStatus({ ok: res.ok, message: res.message });
+    setTimeout(() => {
+      setPhotoUploadStatus((prev) => (prev?.message === res.message ? null : prev));
+    }, 5000);
   };
 
   // Generate realistic student passport illustration for quick demo loading
@@ -1319,16 +1600,39 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   };
 
-  // Populate sample student photos for selected class
-  const handleLoadSamplePhotosForPlayClass = () => {
+  // Populate sample student photos for selected class (atomic batch upload)
+  const handleLoadSamplePhotosForPlayClass = async () => {
     const targetClassId = idCardClassFilter !== 'all' ? idCardClassFilter : 'class_play';
     const classStds = students.filter((s) => s.classId === targetClassId);
+    if (classStds.length === 0) return;
 
-    classStds.forEach((std, idx) => {
-      const isGirl = std.gender === 'ছাত্রী' || std.nameBn.includes('আক্তার') || std.nameBn.includes('বেগম') || std.nameBn.includes('খাতুন');
-      const demoPhoto = createDemoStudentPhoto(idx + 1, isGirl);
-      updateStudent({ ...std, avatarUrl: demoPhoto });
+    setIsLoadingSamplePhotos(true);
+    setPhotoUploadStatus({
+      ok: true,
+      message: `${toBengaliNumber(classStds.length)} জন শিক্ষার্থীর ছবি সার্ভারে সংরক্ষণ করা হচ্ছে...`,
     });
+    try {
+      const nowIso = new Date().toISOString();
+      const items = classStds.map((std, idx) => {
+        const isGirl =
+          std.gender === 'ছাত্রী' ||
+          std.nameBn.includes('আক্তার') ||
+          std.nameBn.includes('বেগম') ||
+          std.nameBn.includes('খাতুন');
+        return {
+          id: std.id,
+          avatarUrl: createDemoStudentPhoto(idx + 1, isGirl),
+          photoUpdatedAt: nowIso,
+        };
+      });
+      const res = await batchUpdateStudentPhotos(items);
+      setPhotoUploadStatus({ ok: res.ok, message: res.message });
+      setTimeout(() => {
+        setPhotoUploadStatus((prev) => (prev?.message === res.message ? null : prev));
+      }, 5000);
+    } finally {
+      setIsLoadingSamplePhotos(false);
+    }
   };
 
   return (
@@ -1430,14 +1734,28 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           <button
             type="button"
             onClick={() => setActiveTab('audit_logs')}
-            className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
               activeTab === 'audit_logs'
                 ? 'bg-slate-100 text-slate-900 font-bold'
-                : 'bg-slate-900/60 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                : 'bg-slate-900/60 hover:bg-slate-800 text-slate-300 border border-slate-800'
             }`}
           >
             <History className="w-3.5 h-3.5" />
             <span>গেটপাস লগ ({toBengaliNumber(securityLogs.length)})</span>
+          </button>
+
+          {/* Scanner Event Audit Logs */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('scanner_audit')}
+            className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'scanner_audit'
+                ? 'bg-cyan-400 text-slate-950 font-black shadow-md'
+                : 'bg-slate-900/60 hover:bg-slate-800 text-cyan-200 border border-slate-700'
+            }`}
+          >
+            <ClipboardList className="w-3.5 h-3.5" />
+            <span>স্ক্যানার লগ অডিট ({toBengaliNumber(scannerAuditLogs.length)})</span>
           </button>
         </div>
       </div>
@@ -1686,7 +2004,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         onChange={(e) => setBarcodeInput(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            handleBarcodeSearchSubmit(barcodeInput);
+                            handleBarcodeSearchSubmit(barcodeInput, 'manual_input');
                           }
                         }}
                         placeholder="ইউনিক আইডি (যেমন: DL-C1-01), QR কোড, বাংলা নাম বা জন্ম নিবন্ধন লিখুন..."
@@ -1697,7 +2015,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
                     <button
                       type="button"
-                      onClick={() => handleBarcodeSearchSubmit(barcodeInput)}
+                      onClick={() => handleBarcodeSearchSubmit(barcodeInput, 'manual_input')}
                       className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0"
                     >
                       <Check className="w-4 h-4" />
@@ -1736,6 +2054,54 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   </div>
                 )}
 
+                {/* Disambiguation Candidate Selector (prevents loading wrong student on duplicate name/roll/phone) */}
+                {ambiguousCandidates.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-amber-950">
+                        সঠিক শিক্ষার্থী নির্বাচন করুন ({toBengaliNumber(ambiguousCandidates.length)} জন মিলেছে):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setAmbiguousCandidates([])}
+                        className="text-xs text-amber-800 hover:text-amber-950 font-bold cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ambiguousCandidates.map((cand) => {
+                        const clsName = classes.find((c) => c.id === cand.classId)?.nameBn || cand.classId;
+                        return (
+                          <button
+                            key={cand.id}
+                            type="button"
+                            onClick={() => handleAmbiguousCandidatePick(cand)}
+                            className="flex items-center gap-2.5 p-2 bg-white hover:bg-amber-100 border border-amber-200 rounded-lg text-left transition cursor-pointer"
+                          >
+                            <div className="w-9 h-10 rounded border border-slate-300 bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center">
+                              {cand.avatarUrl ? (
+                                <img src={cand.avatarUrl} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <User className="w-4 h-4 text-slate-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-slate-900 truncate">{cand.nameBn}</div>
+                              <div className="text-[11px] text-slate-600">
+                                {clsName} • রোল {toBengaliRoll(cand.roll)}
+                              </div>
+                              <div className="text-[10px] font-mono font-bold text-indigo-800">
+                                {getStudentPortalId(cand)}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Quick Simulation Barcode Buttons */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1768,7 +2134,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         <button
                           key={std.id}
                           type="button"
-                          onClick={() => handleVerifyStudent(std)}
+                          onClick={() => handleQuickSimulationVerify(std)}
                           className="px-2.5 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-lg text-xs text-slate-800 transition flex items-center gap-1.5 cursor-pointer shadow-2xs font-medium"
                         >
                           <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded text-[11px]">
@@ -1911,7 +2277,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       <div className="font-bold text-slate-900 text-sm">{recentScannedStudent.nameBn}</div>
                       <div className="text-xs text-slate-500 font-sans">{recentScannedStudent.nameEn || 'Student'}</div>
                       <div className="mt-2 text-[11px] font-mono font-bold text-indigo-800 bg-indigo-100/70 px-2 py-0.5 rounded border border-indigo-200">
-                        ID: {recentScannedStudent.id.slice(-6).toUpperCase()}
+                        {getStudentPortalId(recentScannedStudent)} • #{recentScannedStudent.id.slice(-4).toUpperCase()}
                       </div>
                     </div>
 
@@ -2401,12 +2767,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
                   <button
                     type="button"
+                    disabled={isLoadingSamplePhotos}
                     onClick={handleLoadSamplePhotosForPlayClass}
-                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-lg transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                    title="প্লে শ্রেণির সকল শিক্ষার্থীর জন্য পাসপোর্ট সাইজ ডেমো ছবি সেট করুন"
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-lg transition flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+                    title="নির্বাচিত শ্রেণির সকল শিক্ষার্থীর জন্য পাসপোর্ট সাইজ ডেমো ছবি সেট করুন"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>প্লে শ্রেণির ডেমো পাসপোর্ট ছবি লোড করুন</span>
+                    <span>{isLoadingSamplePhotos ? 'সংরক্ষণ হচ্ছে...' : 'প্লে শ্রেণির ডেমো পাসপোর্ট ছবি লোড করুন'}</span>
                   </button>
                 </div>
               </div>
@@ -2438,6 +2805,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     className="hidden"
                     onChange={async (e) => {
                       const file = e.target.files?.[0];
+                      e.target.value = '';
                       if (!file) return;
                       const targetId = photoTargetStudentId || idCardFilteredStudents[0]?.id;
                       if (!targetId) {
@@ -2448,11 +2816,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       reader.onload = async (ev) => {
                         const base64 = ev.target?.result as string;
                         if (base64) {
-                          handleIdCardPhotoUpload(targetId, 'student', base64);
+                          await handleIdCardPhotoUpload(targetId, 'student', base64);
                         }
                       };
                       reader.readAsDataURL(file);
-                      e.target.value = '';
                     }}
                   />
                 </label>
@@ -2461,6 +2828,23 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   (অথবা নিচের প্রতিটি কার্ডের ছবির উপরে সরাসরি ক্লিক করেও ছবি বদলানো যাবে)
                 </span>
               </div>
+
+              {(photoUploadStatus || syncErrorMessage) && (
+                <div
+                  className={`px-3 py-2 rounded-lg text-xs font-bold border flex items-center gap-2 ${
+                    (photoUploadStatus && !photoUploadStatus.ok) || syncErrorMessage
+                      ? 'bg-rose-50 border-rose-300 text-rose-800'
+                      : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                  }`}
+                >
+                  {(photoUploadStatus && !photoUploadStatus.ok) || syncErrorMessage ? (
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  )}
+                  <span>{photoUploadStatus?.message || syncErrorMessage}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2980,6 +3364,521 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       )}
 
       {/* ========================================================================= */}
+      {/* PART 5: QR SCANNER DIAGNOSTIC AUDIT LOGS VIEW (স্ক্যানার লগ অডিট)        */}
+      {/* ========================================================================= */}
+      {activeTab === 'scanner_audit' && (() => {
+        const totalEvents = scannerAuditLogs.length;
+        const matchedCount = scannerAuditLogs.filter((e) => e.outcome === 'matched').length;
+        const ambiguousCount = scannerAuditLogs.filter((e) => e.outcome === 'ambiguous').length;
+        const rejectedCount = scannerAuditLogs.filter((e) => e.outcome === 'rejected').length;
+
+        const searchLower = scannerAuditSearchQuery.trim().toLowerCase();
+        const filteredAuditLogs = scannerAuditLogs.filter((entry) => {
+          if (scannerAuditOutcomeFilter !== 'all' && entry.outcome !== scannerAuditOutcomeFilter) {
+            return false;
+          }
+          if (scannerAuditSourceFilter !== 'all' && entry.source !== scannerAuditSourceFilter) {
+            return false;
+          }
+          if (searchLower) {
+            const haystack = [
+              entry.rawPayload,
+              entry.extractedToken,
+              entry.matchRuleOrReason,
+              entry.diagnosticNote,
+              entry.resolvedStudentNameBn,
+              entry.resolvedPortalId,
+              entry.resolvedStudentId,
+              entry.resolvedClassNameBn,
+              ...(entry.ambiguousCandidates || []).map(
+                (c) => `${c.nameBn} ${c.portalId} ${c.classNameBn}`
+              ),
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+            if (!haystack.includes(searchLower)) return false;
+          }
+          return true;
+        });
+
+        const sourceLabelBn = (src: ScannerAuditSource) => {
+          switch (src) {
+            case 'camera_qr':
+              return 'ক্যামেরা QR';
+            case 'manual_input':
+              return 'ম্যানুয়াল ইনপুট';
+            case 'disambiguation_pick':
+              return 'তালিকা নির্বাচন';
+            case 'quick_button':
+              return '১-ক্লিক টেস্ট';
+          }
+        };
+
+        const exportAuditCsv = () => {
+          const escapeCsv = (val: string) =>
+            `"${String(val || '').replace(/"/g, '""')}"`;
+          const headers = [
+            'Timestamp',
+            'Source',
+            'GateAction',
+            'Outcome',
+            'MatchRuleOrReason',
+            'RawPayload',
+            'ExtractedToken',
+            'ResolvedStudentName',
+            'ResolvedClass',
+            'ResolvedRoll',
+            'ResolvedPortalID',
+            'ResolvedStudentID',
+            'DiagnosticNote',
+          ];
+          const rows = filteredAuditLogs.map((e) => [
+            e.timestamp,
+            e.source,
+            e.gateAction,
+            e.outcome,
+            e.matchRuleOrReason,
+            e.rawPayload,
+            e.extractedToken,
+            e.resolvedStudentNameBn || '',
+            e.resolvedClassNameBn || '',
+            e.resolvedRoll !== undefined ? String(e.resolvedRoll) : '',
+            e.resolvedPortalId || '',
+            e.resolvedStudentId || '',
+            e.diagnosticNote,
+          ]);
+          const csv =
+            '\uFEFF' +
+            [headers.map(escapeCsv).join(','), ...rows.map((r) => r.map(escapeCsv).join(','))].join(
+              '\n'
+            );
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `scanner-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        };
+
+        return (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            {/* Header Strip */}
+            <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/80 flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-slate-900 text-cyan-300 shrink-0">
+                  <ClipboardList className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base sm:text-lg text-slate-900 font-serif">
+                    স্ক্যানার লগ অডিট ও প্রোফাইল ম্যাপিং ডায়াগনস্টিকস
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5 max-w-2xl leading-relaxed">
+                    গেট স্ক্যানারের প্রতিটি ক্যামেরা QR স্ক্যান, ম্যানুয়াল সার্চ, মূল পেলোড, এক্সট্র্যাক্টকৃত টোকেন, ম্যাপিং রুল এবং ভুল/দ্বিধাগ্রস্ত স্ক্যান আটকানোর পূর্ণাঙ্গ অডিট রেকর্ড।
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => fetchScannerAuditLogsFromServer(true)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${scannerAuditLoading ? 'animate-spin' : ''}`} />
+                  <span>রিফ্রেশ</span>
+                </button>
+
+                {filteredAuditLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={exportAuditCsv}
+                    className="px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>CSV ডাউনলোড</span>
+                  </button>
+                )}
+
+                {scannerAuditLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!confirm('আপনি কি সকল স্ক্যানার অডিট লগ মুছে ফেলতে চান?')) return;
+                      try {
+                        await fetch('/api/security/scanner-audit', { method: 'DELETE' });
+                      } catch {}
+                      setScannerAuditLogs([]);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>লগ পরিষ্কার</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 4-Column Interactive Summary Strip */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 sm:px-5 border-b border-slate-200 bg-white">
+              <button
+                type="button"
+                onClick={() => setScannerAuditOutcomeFilter('all')}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                  scannerAuditOutcomeFilter === 'all'
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-900'
+                }`}
+              >
+                <div
+                  className={`text-[11px] font-bold ${
+                    scannerAuditOutcomeFilter === 'all' ? 'text-slate-300' : 'text-slate-500'
+                  }`}
+                >
+                  মোট স্ক্যান ইভেন্ট
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
+                  {toBengaliNumber(totalEvents)}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScannerAuditOutcomeFilter('matched')}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                  scannerAuditOutcomeFilter === 'matched'
+                    ? 'border-emerald-700 bg-emerald-700 text-white'
+                    : 'border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 text-emerald-950'
+                }`}
+              >
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    scannerAuditOutcomeFilter === 'matched' ? 'text-emerald-100' : 'text-emerald-700'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>সঠিক প্রোফাইল ম্যাপিং</span>
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
+                  {toBengaliNumber(matchedCount)}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScannerAuditOutcomeFilter('ambiguous')}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                  scannerAuditOutcomeFilter === 'ambiguous'
+                    ? 'border-amber-600 bg-amber-600 text-white'
+                    : 'border-amber-200 bg-amber-50/70 hover:bg-amber-100/70 text-amber-950'
+                }`}
+              >
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    scannerAuditOutcomeFilter === 'ambiguous' ? 'text-amber-100' : 'text-amber-700'
+                  }`}
+                >
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span>দ্বিধা / একাধিক মিল (আটকানো)</span>
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
+                  {toBengaliNumber(ambiguousCount)}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScannerAuditOutcomeFilter('rejected')}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                  scannerAuditOutcomeFilter === 'rejected'
+                    ? 'border-rose-700 bg-rose-700 text-white'
+                    : 'border-rose-200 bg-rose-50/70 hover:bg-rose-100/70 text-rose-950'
+                }`}
+              >
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    scannerAuditOutcomeFilter === 'rejected' ? 'text-rose-100' : 'text-rose-700'
+                  }`}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>প্রত্যাখ্যাত / অকার্যকর টোকেন</span>
+                </div>
+                <div className="text-xl font-bold font-mono tabular-nums mt-0.5">
+                  {toBengaliNumber(rejectedCount)}
+                </div>
+              </button>
+            </div>
+
+            {/* Filter & Search Toolbar */}
+            <div className="p-4 sm:px-5 border-b border-slate-200 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-lg p-1 bg-slate-100 border border-slate-200">
+                  {(
+                    [
+                      { id: 'all', label: 'সকল' },
+                      { id: 'matched', label: 'সফল' },
+                      { id: 'ambiguous', label: 'দ্বিধা' },
+                      { id: 'rejected', label: 'ত্রুটি' },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setScannerAuditOutcomeFilter(item.id)}
+                      className={`px-3 py-1 rounded-md text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                        scannerAuditOutcomeFilter === item.id
+                          ? 'bg-slate-900 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                <select
+                  value={scannerAuditSourceFilter}
+                  onChange={(e) => setScannerAuditSourceFilter(e.target.value as 'all' | ScannerAuditSource)}
+                  className="text-xs font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-800"
+                >
+                  <option value="all">সকল স্ক্যান উৎস</option>
+                  <option value="camera_qr">ক্যামেরা QR স্ক্যান</option>
+                  <option value="manual_input">ম্যানুয়াল ইনপুট / স্ক্যানার গান</option>
+                  <option value="disambiguation_pick">তালিকা থেকে নির্বাচন</option>
+                  <option value="quick_button">১-ক্লিক টেস্ট বাটন</option>
+                </select>
+              </div>
+
+              <div className="relative flex-1 min-w-[220px] max-w-sm">
+                <Search className="w-4 h-4 absolute left-3 top-2 text-slate-400" />
+                <input
+                  type="text"
+                  value={scannerAuditSearchQuery}
+                  onChange={(e) => setScannerAuditSearchQuery(e.target.value)}
+                  placeholder="QR টোকেন, শিক্ষার্থীর নাম বা পোর্টাল আইডি..."
+                  className="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Diagnostic Audit Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3 text-center w-12">ক্র.</th>
+                    <th className="py-2.5 px-3 w-36">সময় ও তারিখ</th>
+                    <th className="py-2.5 px-3 w-36">স্ক্যান উৎস / গেট</th>
+                    <th className="py-2.5 px-3 min-w-[210px]">স্ক্যানকৃত ডেটা ও এক্সট্র্যাক্ট টোকেন</th>
+                    <th className="py-2.5 px-3 min-w-[230px]">ম্যাপিং রেজাল্ট ও কারণ</th>
+                    <th className="py-2.5 px-3 min-w-[220px]">লোডকৃত প্রোফাইল / সম্ভাব্য তালিকা</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredAuditLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-slate-500">
+                        <QrCode className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                        <div className="font-bold text-slate-700">
+                          {scannerAuditLogs.length === 0
+                            ? 'এখনও কোনো কিউআর স্ক্যান ইভেন্ট রেকর্ড হয়নি।'
+                            : 'নির্বাচিত ফিল্টারে কোনো স্ক্যান ইভেন্ট পাওয়া যায়নি।'}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          পার্ট ২ স্ক্যানারে ক্যামেরা বা ইনপুট দিয়ে স্ক্যান করলেই প্রতিটি রেজাল্ট ম্যাপিং এখানে স্বয়ংক্রিয়ভাবে অডিট হবে।
+                        </p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredAuditLogs.map((entry, idx) => {
+                      const dt = new Date(entry.timestamp);
+                      const timeStr = Number.isNaN(dt.getTime())
+                        ? entry.timestamp
+                        : dt.toLocaleTimeString('bn-BD', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: true,
+                          });
+                      const dateStr = Number.isNaN(dt.getTime())
+                        ? ''
+                        : dt.toLocaleDateString('bn-BD', {
+                            day: '2-digit',
+                            month: 'short',
+                          });
+                      const resolvedStudentObj = entry.resolvedStudentId
+                        ? students.find((s) => s.id === entry.resolvedStudentId)
+                        : undefined;
+                      const showDistinctExtracted =
+                        Boolean(entry.extractedToken) &&
+                        entry.extractedToken.trim() !== entry.rawPayload.trim();
+
+                      return (
+                        <tr key={entry.id} className="hover:bg-slate-50/90 align-top transition">
+                          <td className="py-3 px-3 text-center font-mono tabular-nums font-bold text-slate-500">
+                            {toBengaliNumber(idx + 1)}
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <div className="font-mono tabular-nums font-bold text-slate-900">
+                              {timeStr}
+                            </div>
+                            {dateStr && (
+                              <div className="text-[11px] font-mono tabular-nums text-slate-500 mt-0.5">
+                                {dateStr}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <div className="font-bold text-slate-900 flex items-center gap-1">
+                              {entry.source === 'camera_qr' ? (
+                                <Camera className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              ) : entry.source === 'manual_input' ? (
+                                <Search className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                              ) : (
+                                <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              )}
+                              <span>{sourceLabelBn(entry.source)}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              গেট: {entry.gateAction === 'entry' ? 'প্রবেশ (Entry)' : 'প্রস্থান (Exit)'}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <div className="flex items-start gap-1.5 max-w-[280px]">
+                              <code className="font-mono text-[11px] bg-slate-100 border border-slate-200 text-slate-900 px-2 py-1 rounded break-all flex-1">
+                                {entry.rawPayload}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (navigator.clipboard) {
+                                    navigator.clipboard.writeText(entry.rawPayload).catch(() => {});
+                                  }
+                                  setCopiedAuditTokenId(entry.id);
+                                  setTimeout(() => setCopiedAuditTokenId(null), 1500);
+                                }}
+                                className="p-1 rounded border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-slate-900 shrink-0 cursor-pointer"
+                                title="স্ক্যানকৃত ডেটা কপি করুন"
+                              >
+                                {copiedAuditTokenId === entry.id ? (
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-3 h-3" />
+                                )}
+                              </button>
+                            </div>
+                            {showDistinctExtracted && (
+                              <div className="mt-1 text-[10.5px] text-indigo-800 font-mono break-all">
+                                টোকেন: <span className="font-bold">{entry.extractedToken}</span>
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {entry.outcome === 'matched' ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  সফল ম্যাপিং
+                                </span>
+                              ) : entry.outcome === 'ambiguous' ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                  <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                  দ্বিধা / আটকানো
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-800 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
+                                  <XCircle className="w-3 h-3 text-rose-600" />
+                                  প্রত্যাখ্যাত
+                                </span>
+                              )}
+
+                              <code className="text-[10px] font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                                {entry.matchRuleOrReason}
+                              </code>
+                            </div>
+
+                            <div className="text-[11px] text-slate-700 mt-1 leading-snug">
+                              {entry.diagnosticNote}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3">
+                            {entry.resolvedStudentNameBn ? (
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-9 rounded border border-slate-300 bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center">
+                                  {resolvedStudentObj?.avatarUrl ? (
+                                    <img
+                                      src={resolvedStudentObj.avatarUrl}
+                                      alt={entry.resolvedStudentNameBn}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <User className="w-4 h-4 text-slate-400" />
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="font-bold text-slate-900 truncate">
+                                    {entry.resolvedStudentNameBn}
+                                  </div>
+                                  <div className="text-[11px] text-slate-600">
+                                    {entry.resolvedClassNameBn || '-'} • রোল{' '}
+                                    {entry.resolvedRoll !== undefined
+                                      ? toBengaliRoll(entry.resolvedRoll)
+                                      : '-'}
+                                  </div>
+                                  <div className="text-[10px] font-mono tabular-nums font-bold text-indigo-700">
+                                    {entry.resolvedPortalId || '-'}
+                                    {entry.resolvedStudentId
+                                      ? ` • #${entry.resolvedStudentId.slice(-4).toUpperCase()}`
+                                      : ''}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : entry.ambiguousCandidates && entry.ambiguousCandidates.length > 0 ? (
+                              <div className="space-y-1">
+                                <div className="text-[10.5px] font-bold text-amber-900">
+                                  মিল পাওয়া {toBengaliNumber(entry.ambiguousCandidates.length)} জন শিক্ষার্থী:
+                                </div>
+                                <div className="space-y-0.5">
+                                  {entry.ambiguousCandidates.map((cand) => (
+                                    <div
+                                      key={cand.id}
+                                      className="text-[11px] text-slate-700 bg-amber-50/70 border border-amber-200/80 rounded px-2 py-0.5"
+                                    >
+                                      <span className="font-bold">{cand.nameBn}</span> •{' '}
+                                      {cand.classNameBn} (রোল {toBengaliRoll(cand.roll)}){' '}
+                                      <span className="font-mono text-[10px] text-indigo-800">
+                                        {cand.portalId}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] font-semibold text-rose-700">
+                                কোনো প্রোফাইল লোড হয়নি (নিরাপদভাবে ব্লকড)
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
       {/* QUICK EDIT STUDENT & PARENT DETAILS MODAL                                 */}
       {/* ========================================================================= */}
       {quickEditStudent && (
@@ -3301,6 +4200,142 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* QR SCAN CONFIRMATION MODAL (PHOTO, NAME, CLASS + WELCOME AUDIO TRIGGER)  */}
+      {/* ========================================================================= */}
+      {pendingScanConfirmation && (() => {
+        const pendingStd = pendingScanConfirmation.student;
+        const previewAudioText =
+          gateAction === 'entry'
+            ? `স্বাগতম ${pendingStd.nameBn}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি ${pendingStd.nameBn}।`
+            : `বিদায় ${pendingStd.nameBn}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি ${pendingStd.nameBn}।`;
+        const guardianPhoneDisplay =
+          pendingStd.guardianPhone || pendingStd.fatherPhone || pendingStd.motherPhone || '-';
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scan-confirm-modal-title"
+          >
+            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              {/* Top Bar */}
+              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-emerald-500 text-slate-950 shrink-0">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 id="scan-confirm-modal-title" className="text-base font-bold text-white font-serif">
+                      কিউআর স্ক্যান সফল — শিক্ষার্থী নিশ্চিত করুন
+                    </h3>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      {gateAction === 'entry' ? 'প্রবেশ যাচাই (Entry Gate)' : 'প্রস্থান যাচাই (Exit Gate)'} ·{' '}
+                      {describeMatchRuleBn(pendingScanConfirmation.matchedBy)}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCancelPendingScan}
+                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                  aria-label="মোডাল বন্ধ করুন"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Student Identity Body */}
+              <div className="p-5 space-y-4">
+                <div className="flex items-center gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <div className="w-24 h-28 rounded-xl border-2 border-indigo-900 bg-white overflow-hidden shadow-xs flex items-center justify-center shrink-0">
+                    {pendingStd.avatarUrl ? (
+                      <img
+                        src={pendingStd.avatarUrl}
+                        alt={pendingStd.nameBn}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="text-center text-slate-400 px-1">
+                        <User className="w-9 h-9 mx-auto" />
+                        <span className="text-[10px] font-bold block mt-1">ছবি নেই</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="text-lg font-bold text-slate-900 leading-snug">
+                      {pendingStd.nameBn}
+                    </div>
+                    {pendingStd.nameEn && (
+                      <div className="text-xs text-slate-500 font-sans truncate">
+                        {pendingStd.nameEn}
+                      </div>
+                    )}
+
+                    <div className="pt-1 space-y-1 text-xs">
+                      <div className="font-bold text-indigo-900">
+                        শ্রেণি: {pendingScanConfirmation.classNameBn}
+                        {pendingStd.section ? ` (${pendingStd.section})` : ''}
+                      </div>
+                      <div className="text-slate-700 font-medium font-mono tabular-nums">
+                        রোল: {toBengaliRoll(pendingStd.roll)} · {getStudentPortalId(pendingStd)}
+                      </div>
+                      <div className="text-[11px] text-slate-600 truncate">
+                        অভিভাবক: {pendingStd.fatherNameBn || pendingStd.guardianName || '-'} · {guardianPhoneDisplay}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audio Announcement Preview */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
+                    <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>
+                      {gateAction === 'entry'
+                        ? "'স্বাগতম' অডিও বার্তা (নিশ্চিত করলে বাজবে):"
+                        : "'বিদায়' অডিও বার্তা (নিশ্চিত করলে বাজবে):"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-emerald-950 leading-relaxed font-medium">
+                    "{previewAudioText}"
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleCancelPendingScan}
+                    className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    বাতিল / পুনরায় স্ক্যান
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmPendingScan}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm transition flex items-center justify-center gap-2 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+                    autoFocus
+                  >
+                    <Volume2 className="w-4 h-4 shrink-0" />
+                    <span>
+                      {gateAction === 'entry'
+                        ? "নিশ্চিত করুন ও 'স্বাগতম' অডিও বাজান"
+                        : "নিশ্চিত করুন ও 'বিদায়' অডিও বাজান"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

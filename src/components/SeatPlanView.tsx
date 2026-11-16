@@ -23,7 +23,8 @@ import { downloadSeatPlanHtml, openSeatPlanInNewTab } from '../utils/seatPlanExp
 import { toBengaliNumber } from '../utils/bengali';
 
 export const SeatPlanView: React.FC = () => {
-  const { schoolInfo, classes, students, updateStudent } = useSchool();
+  const { schoolInfo, classes, students, updateStudentPhoto } = useSchool();
+  const [photoSaveStatus, setPhotoSaveStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
   // 1. Manual Exam Name State (User can freely type or click presets)
   const [examName, setExamName] = useState<string>('বার্ষিক পরীক্ষা - ২০২৬');
@@ -74,15 +75,14 @@ export const SeatPlanView: React.FC = () => {
     return chunks;
   }, [classStudents]);
 
-  // Handle Photo Upload for a specific student
-  const handleStudentPhotoUpload = (studentId: string, base64: string) => {
-    const student = students.find((s) => s.id === studentId);
-    if (student) {
-      updateStudent({
-        ...student,
-        avatarUrl: base64,
-      });
-    }
+  // Handle Photo Upload for a specific student (atomic save)
+  const handleStudentPhotoUpload = async (studentId: string, base64: string) => {
+    setPhotoSaveStatus({ ok: true, message: 'ছবি সার্ভারে সংরক্ষণ হচ্ছে...' });
+    const res = await updateStudentPhoto(studentId, 'student', base64);
+    setPhotoSaveStatus({ ok: res.ok, message: res.message });
+    setTimeout(() => {
+      setPhotoSaveStatus((prev) => (prev?.message === res.message ? null : prev));
+    }, 4000);
   };
 
   // Handle Logo Upload
@@ -301,6 +301,20 @@ export const SeatPlanView: React.FC = () => {
           }
         }
       `}</style>
+
+      {/* Photo Sync Toast */}
+      {photoSaveStatus && (
+        <div
+          className={`no-print px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+            photoSaveStatus.ok
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+              : 'bg-rose-50 border-rose-300 text-rose-900'
+          }`}
+        >
+          <CheckCircle2 className={`w-4 h-4 shrink-0 ${photoSaveStatus.ok ? 'text-emerald-600' : 'text-rose-600'}`} />
+          <span>{photoSaveStatus.message}</span>
+        </div>
+      )}
 
       {/* Main Top Control Center */}
       <div className="control-bar-section bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">

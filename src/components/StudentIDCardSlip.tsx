@@ -761,6 +761,9 @@ export const StudentIDCardSlip: React.FC<StudentIDCardSlipProps> = ({
               <div className="text-[6px]">QR</div>
             )}
           </div>
+          <div className="text-[6.5px] font-bold font-mono text-slate-900 mt-0.5 leading-none">
+            {getStudentPortalId(student)}
+          </div>
         </div>
       </div>
 

@@ -57,9 +57,13 @@ export async function compressImageBase64(
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Export as JPEG
+      // Export as JPEG (step down quality slightly if still large so 176+ photos stay compact)
       try {
-        const compressed = canvas.toDataURL('image/jpeg', quality);
+        let compressed = canvas.toDataURL('image/jpeg', quality);
+        if (compressed.length > 35000 && quality > 0.56) {
+          const smaller = canvas.toDataURL('image/jpeg', 0.56);
+          if (smaller.length < compressed.length) compressed = smaller;
+        }
         resolve(compressed.length < base64Str.length ? compressed : base64Str);
       } catch {
         resolve(base64Str);

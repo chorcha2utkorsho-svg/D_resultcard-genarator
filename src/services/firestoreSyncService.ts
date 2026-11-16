@@ -134,7 +134,8 @@ export async function acknowledgeSecurityLogInFirestore(
 function buildStudentFirestorePayload(
   student: Student,
   user: User,
-  existingData?: Record<string, any>
+  existingData?: Record<string, any>,
+  explicitClear?: boolean | { avatarUrl?: boolean; fatherAvatarUrl?: boolean; motherAvatarUrl?: boolean }
 ): Record<string, any> {
   const cleanStudentId = safeId(student.id);
   const payload: Record<string, any> = {
@@ -154,20 +155,31 @@ function buildStudentFirestorePayload(
   if (student.guardianPin) payload.guardianPin = clampStr(student.guardianPin, 32);
   if (existingData?.guardianUid) payload.guardianUid = safeId(existingData.guardianUid);
 
+  const isCleared = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') =>
+    explicitClear === true || Boolean(explicitClear && typeof explicitClear === 'object' && explicitClear[field]);
+
   const avatar = safePhotoStr(student.avatarUrl);
   const fatherAvatar = safePhotoStr(student.fatherAvatarUrl);
   const motherAvatar = safePhotoStr(student.motherAvatarUrl);
 
+  const existingAvatar = safePhotoStr(existingData?.avatarUrl);
+  const existingFather = safePhotoStr(existingData?.fatherAvatarUrl);
+  const existingMother = safePhotoStr(existingData?.motherAvatarUrl);
+
   if (avatar) payload.avatarUrl = avatar;
-  else if (student.avatarUrl === '' && existingData?.avatarUrl) payload.avatarUrl = '';
+  else if (isCleared('avatarUrl') && existingAvatar) payload.avatarUrl = '';
+  else if (existingAvatar) payload.avatarUrl = existingAvatar;
 
   if (fatherAvatar) payload.fatherAvatarUrl = fatherAvatar;
-  else if (student.fatherAvatarUrl === '' && existingData?.fatherAvatarUrl) payload.fatherAvatarUrl = '';
+  else if (isCleared('fatherAvatarUrl') && existingFather) payload.fatherAvatarUrl = '';
+  else if (existingFather) payload.fatherAvatarUrl = existingFather;
 
   if (motherAvatar) payload.motherAvatarUrl = motherAvatar;
-  else if (student.motherAvatarUrl === '' && existingData?.motherAvatarUrl) payload.motherAvatarUrl = '';
+  else if (isCleared('motherAvatarUrl') && existingMother) payload.motherAvatarUrl = '';
+  else if (existingMother) payload.motherAvatarUrl = existingMother;
 
-  if (student.photoUpdatedAt) payload.photoUpdatedAt = clampStr(student.photoUpdatedAt, 64);
+  const photoTimestamp = student.photoUpdatedAt || existingData?.photoUpdatedAt;
+  if (photoTimestamp) payload.photoUpdatedAt = clampStr(photoTimestamp, 64);
 
   return payload;
 }
@@ -175,7 +187,8 @@ function buildStudentFirestorePayload(
 export async function syncStudentRecordToFirestore(
   student: Student,
   user: User,
-  schoolInfo: SchoolInfo
+  schoolInfo: SchoolInfo,
+  explicitClear?: boolean | { avatarUrl?: boolean; fatherAvatarUrl?: boolean; motherAvatarUrl?: boolean }
 ): Promise<void> {
   if (!user.emailVerified) return;
   await ensureSchoolDocument(user, schoolInfo);
@@ -187,7 +200,7 @@ export async function syncStudentRecordToFirestore(
   try {
     const existingSnap = await getDoc(ref);
     const existingData = existingSnap.exists() ? existingSnap.data() : undefined;
-    const payload = buildStudentFirestorePayload(student, user, existingData);
+    const payload = buildStudentFirestorePayload(student, user, existingData, explicitClear);
 
     if (existingSnap.exists()) {
       await updateDoc(ref, payload);

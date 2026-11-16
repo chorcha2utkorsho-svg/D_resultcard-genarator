@@ -687,3 +687,48 @@ export interface LibraryMaterial {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface ExplicitPhotoClearFlags {
+  avatarUrl?: boolean;
+  fatherAvatarUrl?: boolean;
+  motherAvatarUrl?: boolean;
+}
+
+export interface StudentPhotoRegistryEntry {
+  studentId: string;
+  classId: string;
+  roll: number;
+  section?: string;
+  nameBn?: string;
+  avatarUrl?: string;
+  fatherAvatarUrl?: string;
+  motherAvatarUrl?: string;
+  photoUpdatedAt?: string;
+  updatedAt?: string;
+}
+
+export interface ClassPhotoIntegritySummary {
+  classId: string;
+  classNameBn: string;
+  totalStudents: number;
+  withStudentPhoto: number;
+  withFatherPhoto: number;
+  withMotherPhoto: number;
+  repairedCount: number;
+  invalidCount: number;
+}
+
+export interface PhotoIntegrityReport {
+  checkedAt: string;
+  totalStudents: number;
+  totalWithStudentPhoto: number;
+  totalRegistryEntries: number;
+  repairedCount: number;
+  protectedCount: number;
+  class1To8TotalStudents: number;
+  class1To8WithStudentPhoto: number;
+  perClass: ClassPhotoIntegritySummary[];
+  serverVerified: boolean;
+  message: string;
+}
+

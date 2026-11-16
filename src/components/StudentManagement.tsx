@@ -38,7 +38,7 @@ import {
   Cloud,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
-import { DreamGalleryPhoto, Student } from '../types';
+import { DreamGalleryPhoto, ExplicitPhotoClearFlags, PhotoIntegrityReport, Student } from '../types';
 import { DREAM_CAREER_PRESETS } from '../data/dreamCareerGallery';
 import { toBengaliNumber, toBengaliRoll, formatBengaliDate } from '../utils/bengali';
 import { SchoolLogo } from './SchoolLogo';
@@ -65,6 +65,7 @@ export const StudentManagement: React.FC = () => {
     deleteMultipleStudents,
     clearAllStudents,
     scanAndRecoverBrowserData,
+    verifyAndRepairPhotoIntegrity,
     exportDatabaseBackup,
     serverSyncStatus,
     syncErrorMessage,
@@ -84,6 +85,9 @@ export const StudentManagement: React.FC = () => {
   const [photoSyncBannerOk, setPhotoSyncBannerOk] = useState<boolean>(true);
   const [isSavingStudent, setIsSavingStudent] = useState<boolean>(false);
   const [modalSaveError, setModalSaveError] = useState<string | null>(null);
+  const [explicitPhotoClears, setExplicitPhotoClears] = useState<ExplicitPhotoClearFlags>({});
+  const [isVerifyingIntegrity, setIsVerifyingIntegrity] = useState<boolean>(false);
+  const [integrityReport, setIntegrityReport] = useState<PhotoIntegrityReport | null>(null);
 
   const [activeView, setActiveView] = useState<'list' | 'bulk_upload'>('list');
   const [searchTerm, setSearchTerm] = useState('');
@@ -261,6 +265,7 @@ export const StudentManagement: React.FC = () => {
     });
     setStudentModalTab('student');
     setEditingStudent(null);
+    setExplicitPhotoClears({});
     setModalSaveError(null);
     setIsAddModalOpen(true);
   };
@@ -325,6 +330,7 @@ export const StudentManagement: React.FC = () => {
     setDreamDraftTitle('');
     setDreamDraftCaption('');
     setStudentModalTab('student');
+    setExplicitPhotoClears({});
     setModalSaveError(null);
     setIsAddModalOpen(true);
   };
@@ -382,11 +388,20 @@ export const StudentManagement: React.FC = () => {
         guardianPhone: syncGuardianPhone,
       };
 
+      const hasExplicitClear = Boolean(
+        explicitPhotoClears.avatarUrl ||
+          explicitPhotoClears.fatherAvatarUrl ||
+          explicitPhotoClears.motherAvatarUrl
+      );
+
       if (editingStudent) {
-        const savedOk = await updateStudent({
-          ...editingStudent,
-          ...payload,
-        });
+        const savedOk = await updateStudent(
+          {
+            ...editingStudent,
+            ...payload,
+          },
+          hasExplicitClear ? { explicitPhotoClear: explicitPhotoClears } : undefined
+        );
 
         if (!savedOk) {
           const errMsg = `⚠ "${formData.nameBn}"-এর ছবি বা তথ্য সার্ভারে সংরক্ষণ ব্যর্থ হয়েছে! অনুগ্রহ করে পুনরায় চেষ্টা করুন।`;
@@ -409,6 +424,7 @@ export const StudentManagement: React.FC = () => {
         setTimeout(() => setPhotoSyncBanner(null), 5000);
       }
 
+      setExplicitPhotoClears({});
       setIsAddModalOpen(false);
     } finally {
       setIsSavingStudent(false);
@@ -686,6 +702,27 @@ export const StudentManagement: React.FC = () => {
 
           <button
             type="button"
+            disabled={isVerifyingIntegrity}
+            onClick={async () => {
+              setIsVerifyingIntegrity(true);
+              try {
+                const rep = await verifyAndRepairPhotoIntegrity();
+                setIntegrityReport(rep);
+                setPhotoSyncBannerOk(true);
+                setPhotoSyncBanner(rep.message);
+              } finally {
+                setIsVerifyingIntegrity(false);
+              }
+            }}
+            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-indigo-50 text-indigo-900 border border-indigo-300 shadow-2xs transition cursor-pointer disabled:opacity-60"
+            title="প্লে থেকে অষ্টম শ্রেণি পর্যন্ত সকল শিক্ষার্থীর প্রোফাইল ছবির ডাটাবেস ও রিলেশনশিপ যাচাই করুন"
+          >
+            <ShieldCheck className={`w-3.5 h-3.5 mr-1 text-indigo-600 ${isVerifyingIntegrity ? 'animate-pulse' : ''}`} />
+            {isVerifyingIntegrity ? 'যাচাই হচ্ছে...' : 'ছবি সম্পর্ক যাচাই (১ম–৮ম)'}
+          </button>
+
+          <button
+            type="button"
             onClick={exportDatabaseBackup}
             className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-2xs transition cursor-pointer"
           >
@@ -694,6 +731,63 @@ export const StudentManagement: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Inline Relational Photo Integrity Report (Play..Class 8) */}
+      {integrityReport && (
+        <div className="rounded-xl border border-indigo-200 bg-white p-3.5 shadow-xs space-y-3 animate-in fade-in-50">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-indigo-950">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{integrityReport.message}</span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-900 font-bold">
+                রিলেশনাল রেজিস্ট্রি: {toBengaliNumber(integrityReport.totalRegistryEntries)} জন
+              </span>
+              {integrityReport.repairedCount > 0 && (
+                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold">
+                  পুনরুদ্ধার: {toBengaliNumber(integrityReport.repairedCount)}টি
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setIntegrityReport(null)}
+                className="p-1 rounded-md hover:bg-slate-100 text-slate-500 cursor-pointer"
+                title="রিপোর্ট বন্ধ করুন"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+            {integrityReport.perClass.map((clsStat) => {
+              const allHavePhotos =
+                clsStat.totalStudents > 0 && clsStat.withStudentPhoto === clsStat.totalStudents;
+              return (
+                <div
+                  key={clsStat.classId}
+                  className={`rounded-lg border p-2 text-center text-[11px] ${
+                    allHavePhotos
+                      ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                      : clsStat.withStudentPhoto > 0
+                      ? 'bg-indigo-50/60 border-indigo-200 text-indigo-950'
+                      : 'bg-slate-50 border-slate-200 text-slate-700'
+                  }`}
+                >
+                  <div className="font-bold truncate">{clsStat.classNameBn}</div>
+                  <div className="font-mono font-extrabold text-xs mt-0.5">
+                    {toBengaliNumber(clsStat.withStudentPhoto)}/{toBengaliNumber(clsStat.totalStudents)}
+                  </div>
+                  <div className="text-[10px] opacity-75">
+                    পিতা {toBengaliNumber(clsStat.withFatherPhoto)} · মাতা {toBengaliNumber(clsStat.withMotherPhoto)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Control bar */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5">
@@ -1421,6 +1515,7 @@ export const StudentManagement: React.FC = () => {
                                 if (base64) {
                                   const compressed = await compressImageBase64(base64);
                                   setFormData((prev) => ({ ...prev, avatarUrl: compressed }));
+                                  setExplicitPhotoClears((prev) => ({ ...prev, avatarUrl: false }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1431,7 +1526,10 @@ export const StudentManagement: React.FC = () => {
                       {formData.avatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData((prev) => ({ ...prev, avatarUrl: '' }))}
+                          onClick={() => {
+                            setFormData((prev) => ({ ...prev, avatarUrl: '' }));
+                            setExplicitPhotoClears((prev) => ({ ...prev, avatarUrl: true }));
+                          }}
                           className="text-[10px] text-rose-600 hover:underline block text-center mt-1"
                         >
                           ছবি মুছুন
@@ -1649,6 +1747,7 @@ export const StudentManagement: React.FC = () => {
                                 if (base64) {
                                   const comp = await compressImageBase64(base64);
                                   setFormData((prev) => ({ ...prev, fatherAvatarUrl: comp }));
+                                  setExplicitPhotoClears((prev) => ({ ...prev, fatherAvatarUrl: false }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1659,7 +1758,10 @@ export const StudentManagement: React.FC = () => {
                       {formData.fatherAvatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData((prev) => ({ ...prev, fatherAvatarUrl: '' }))}
+                          onClick={() => {
+                            setFormData((prev) => ({ ...prev, fatherAvatarUrl: '' }));
+                            setExplicitPhotoClears((prev) => ({ ...prev, fatherAvatarUrl: true }));
+                          }}
                           className="text-[9px] text-rose-600 hover:underline mt-0.5"
                         >
                           ছবি মুছুন
@@ -1806,6 +1908,7 @@ export const StudentManagement: React.FC = () => {
                                 if (base64) {
                                   const comp = await compressImageBase64(base64);
                                   setFormData((prev) => ({ ...prev, motherAvatarUrl: comp }));
+                                  setExplicitPhotoClears((prev) => ({ ...prev, motherAvatarUrl: false }));
                                 }
                               };
                               reader.readAsDataURL(file);
@@ -1816,7 +1919,10 @@ export const StudentManagement: React.FC = () => {
                       {formData.motherAvatarUrl && (
                         <button
                           type="button"
-                          onClick={() => setFormData((prev) => ({ ...prev, motherAvatarUrl: '' }))}
+                          onClick={() => {
+                            setFormData((prev) => ({ ...prev, motherAvatarUrl: '' }));
+                            setExplicitPhotoClears((prev) => ({ ...prev, motherAvatarUrl: true }));
+                          }}
                           className="text-[9px] text-rose-600 hover:underline mt-0.5"
                         >
                           ছবি মুছুন

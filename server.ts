@@ -60,11 +60,170 @@ function countStudentsWithPhotos(students: any[]): number {
   if (!Array.isArray(students)) return 0;
   let count = 0;
   for (const s of students) {
-    if (s && ((s.avatarUrl && s.avatarUrl.length > 20) || (s.fatherAvatarUrl && s.fatherAvatarUrl.length > 20) || (s.motherAvatarUrl && s.motherAvatarUrl.length > 20))) {
+    if (s && (isValidImageRef(s.avatarUrl) || isValidImageRef(s.fatherAvatarUrl) || isValidImageRef(s.motherAvatarUrl))) {
       count++;
     }
   }
   return count;
+}
+
+function isValidImageRef(val: unknown): val is string {
+  if (typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('data:image/')) {
+    if (trimmed.startsWith('data:image/svg+xml')) return trimmed.length >= 30;
+    const commaIdx = trimmed.indexOf(',');
+    if (commaIdx === -1) return false;
+    return trimmed.slice(commaIdx + 1).length >= 24;
+  }
+  return (
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('blob:')
+  ) && trimmed.length >= 5;
+}
+
+function buildRelationKey(student: any): string {
+  if (!student) return '';
+  const cls = String(student.classId || '').trim().toLowerCase();
+  const roll = Number(student.roll ?? 0);
+  if (!cls || !Number.isFinite(roll) || roll <= 0) return '';
+  return `${cls}::${roll}`;
+}
+
+function syncStudentPhotoRegistry(
+  students: any[],
+  existingRegistry?: Record<string, any>
+): Record<string, any> {
+  const registry: Record<string, any> =
+    existingRegistry && typeof existingRegistry === 'object' ? { ...existingRegistry } : {};
+  const nowIso = new Date().toISOString();
+
+  if (!Array.isArray(students)) return registry;
+  for (const s of students) {
+    if (!s || !s.id) continue;
+    const hasAvatar = isValidImageRef(s.avatarUrl);
+    const hasFather = isValidImageRef(s.fatherAvatarUrl);
+    const hasMother = isValidImageRef(s.motherAvatarUrl);
+    if (hasAvatar || hasFather || hasMother) {
+      const prevEntry = registry[s.id] || {};
+      registry[s.id] = {
+        studentId: s.id,
+        classId: s.classId || prevEntry.classId || '',
+        roll: Number(s.roll ?? prevEntry.roll ?? 0),
+        section: s.section || prevEntry.section || '',
+        nameBn: s.nameBn || prevEntry.nameBn || '',
+        avatarUrl: hasAvatar ? s.avatarUrl : '',
+        fatherAvatarUrl: hasFather ? s.fatherAvatarUrl : '',
+        motherAvatarUrl: hasMother ? s.motherAvatarUrl : '',
+        photoUpdatedAt: s.photoUpdatedAt || prevEntry.photoUpdatedAt || nowIso,
+        updatedAt: nowIso,
+      };
+    } else if (registry[s.id] && s._explicitPhotoClear === true) {
+      delete registry[s.id];
+    }
+  }
+  return registry;
+}
+
+function reconcileStudentWithRegistry(
+  incStd: any,
+  srvStd: any | undefined,
+  registry: Record<string, any>,
+  relationMap?: Map<string, any>,
+  explicitClearOverride?: any
+): { student: any; protectedCount: number } {
+  if (!incStd || !incStd.id) return { student: incStd, protectedCount: 0 };
+  const relKey = buildRelationKey(incStd);
+  const regEntry = registry[incStd.id] || (relKey && relationMap ? relationMap.get(relKey) : undefined);
+  const explicitClear = explicitClearOverride ?? incStd._explicitPhotoClear;
+  const isStripped = Boolean(incStd._photosStripped);
+
+  const incTime = new Date(incStd.photoUpdatedAt || 0).getTime() || 0;
+  const srvTime =
+    Math.max(
+      new Date(srvStd?.photoUpdatedAt || 0).getTime() || 0,
+      new Date(regEntry?.photoUpdatedAt || 0).getTime() || 0
+    ) || 0;
+
+  let protectedCount = 0;
+
+  const isFieldCleared = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl'): boolean => {
+    if (explicitClear === true) return true;
+    if (explicitClear && typeof explicitClear === 'object') {
+      return Boolean(explicitClear[field]);
+    }
+    return false;
+  };
+
+  const resolveField = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl'): string => {
+    const incVal = isValidImageRef(incStd[field]) ? String(incStd[field]).trim() : '';
+    const srvVal = isValidImageRef(srvStd?.[field]) ? String(srvStd[field]).trim() : '';
+    const regVal = isValidImageRef(regEntry?.[field]) ? String(regEntry[field]).trim() : '';
+    const existingBest = srvVal || regVal;
+
+    if (isFieldCleared(field)) {
+      if (regEntry && registry[incStd.id]) {
+        registry[incStd.id] = { ...registry[incStd.id], [field]: '' };
+      }
+      return '';
+    }
+
+    if (isStripped && !incVal && existingBest) {
+      protectedCount++;
+      return existingBest;
+    }
+
+    if (!incVal && existingBest) {
+      protectedCount++;
+      return existingBest;
+    }
+
+    if (incVal && existingBest && srvTime > incTime && incTime > 0) {
+      protectedCount++;
+      return existingBest;
+    }
+
+    return incVal || existingBest || '';
+  };
+
+  const mergedAvatar = resolveField('avatarUrl');
+  const mergedFather = resolveField('fatherAvatarUrl');
+  const mergedMother = resolveField('motherAvatarUrl');
+  const mergedPhotoUpdatedAt =
+    incTime > srvTime
+      ? incStd.photoUpdatedAt
+      : srvStd?.photoUpdatedAt || regEntry?.photoUpdatedAt || incStd.photoUpdatedAt;
+
+  const mergedDreamGallery =
+    Array.isArray(incStd.dreamGallery) && incStd.dreamGallery.length > 0
+      ? incStd.dreamGallery
+      : Array.isArray(srvStd?.dreamGallery) && srvStd.dreamGallery.length > 0
+      ? srvStd.dreamGallery
+      : incStd.dreamGallery || srvStd?.dreamGallery;
+
+  const clean = { ...(srvStd || {}), ...incStd };
+  delete clean._photosStripped;
+  delete clean._explicitPhotoClear;
+
+  const finalStd = {
+    ...clean,
+    avatarUrl: mergedAvatar,
+    fatherAvatarUrl: mergedFather,
+    motherAvatarUrl: mergedMother,
+    ...(mergedDreamGallery !== undefined ? { dreamGallery: mergedDreamGallery } : {}),
+    ...(mergedPhotoUpdatedAt ? { photoUpdatedAt: mergedPhotoUpdatedAt } : {}),
+    portalUserId: incStd.portalUserId || srvStd?.portalUserId,
+    guardianPin: incStd.guardianPin || srvStd?.guardianPin,
+    securityQrCode:
+      incStd.securityQrCode ||
+      srvStd?.securityQrCode ||
+      `DLIKON-SEC-${String(clean.classId || 'CLS').toUpperCase()}-${clean.roll ?? 0}-${String(clean.id).slice(-4).toUpperCase()}`,
+  };
+
+  return { student: finalStd, protectedCount };
 }
 
 let backupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -297,6 +456,18 @@ async function startServer() {
         return res.status(400).json({ success: false, message: 'Invalid payload' });
       }
 
+      const existingRegistry: Record<string, any> =
+        memoryDb?.studentPhotoRegistry && typeof memoryDb.studentPhotoRegistry === 'object'
+          ? { ...memoryDb.studentPhotoRegistry }
+          : {};
+      const registryRelationMap = new Map<string, any>();
+      for (const entry of Object.values(existingRegistry)) {
+        const rk = buildRelationKey(entry);
+        if (rk && (isValidImageRef(entry?.avatarUrl) || isValidImageRef(entry?.fatherAvatarUrl) || isValidImageRef(entry?.motherAvatarUrl))) {
+          registryRelationMap.set(rk, entry);
+        }
+      }
+
       // Protection: If incoming students is empty, but server already has students,
       // DO NOT erase server students unless explicitly requested via clear-all endpoint!
       let studentsToSave = incoming.students;
@@ -309,105 +480,68 @@ async function startServer() {
         console.warn('[Server DB Safeguard] Preserved existing students against accidental empty sync');
         studentsToSave = memoryDb.students;
       } else if (Array.isArray(studentsToSave) && Array.isArray(memoryDb?.students) && !incoming.isExplicitClear) {
-        // Smart merge per-student personal dashboard fields so mobile edits aren't overwritten by stale clients
+        // Smart merge per-student personal dashboard fields + relational photo registry protection
         const serverStdMap = new Map<string, any>();
+        const serverRelMap = new Map<string, any>();
         for (const s of memoryDb.students) {
-          if (s && s.id) serverStdMap.set(s.id, s);
+          if (s && s.id) {
+            serverStdMap.set(s.id, s);
+            const rk = buildRelationKey(s);
+            if (rk && (isValidImageRef(s.avatarUrl) || isValidImageRef(s.fatherAvatarUrl) || isValidImageRef(s.motherAvatarUrl))) {
+              serverRelMap.set(rk, s);
+            }
+          }
         }
         studentsToSave = studentsToSave.map((incStd: any) => {
           if (!incStd || !incStd.id) return incStd;
-          const srvStd = serverStdMap.get(incStd.id);
-          if (!srvStd) return incStd;
+          const rk = buildRelationKey(incStd);
+          const srvStd = serverStdMap.get(incStd.id) || (rk ? serverRelMap.get(rk) : undefined);
+
           const mergedFuturePlan =
-            incStd.futurePlan && srvStd.futurePlan
+            incStd.futurePlan && srvStd?.futurePlan
               ? new Date(srvStd.futurePlan.updatedAt || 0).getTime() > new Date(incStd.futurePlan.updatedAt || 0).getTime()
                 ? srvStd.futurePlan
                 : incStd.futurePlan
-              : incStd.futurePlan || srvStd.futurePlan;
+              : incStd.futurePlan || srvStd?.futurePlan;
           const mergedAchievements =
             Array.isArray(incStd.achievements) && incStd.achievements.length > 0
               ? incStd.achievements
-              : Array.isArray(srvStd.achievements)
+              : Array.isArray(srvStd?.achievements)
               ? srvStd.achievements
               : undefined;
-          const mergedDreamGallery =
-            Array.isArray(incStd.dreamGallery)
-              ? incStd.dreamGallery
-              : Array.isArray(srvStd.dreamGallery)
-              ? srvStd.dreamGallery
-              : undefined;
           const mergedMonerBari =
-            incStd.monerBari && srvStd.monerBari
+            incStd.monerBari && srvStd?.monerBari
               ? new Date(srvStd.monerBari.updatedAt || 0).getTime() > new Date(incStd.monerBari.updatedAt || 0).getTime()
                 ? srvStd.monerBari
                 : incStd.monerBari
-              : incStd.monerBari || srvStd.monerBari;
+              : incStd.monerBari || srvStd?.monerBari;
           const mergedTimeManagement =
-            incStd.timeManagement && srvStd.timeManagement
+            incStd.timeManagement && srvStd?.timeManagement
               ? new Date(srvStd.timeManagement.updatedAt || 0).getTime() > new Date(incStd.timeManagement.updatedAt || 0).getTime()
                 ? srvStd.timeManagement
                 : incStd.timeManagement
-              : incStd.timeManagement || srvStd.timeManagement;
+              : incStd.timeManagement || srvStd?.timeManagement;
           const mergedAcademicRoadmap =
-            incStd.academicRoadmap && srvStd.academicRoadmap
+            incStd.academicRoadmap && srvStd?.academicRoadmap
               ? new Date(srvStd.academicRoadmap.updatedAt || 0).getTime() > new Date(incStd.academicRoadmap.updatedAt || 0).getTime()
                 ? srvStd.academicRoadmap
                 : incStd.academicRoadmap
-              : incStd.academicRoadmap || srvStd.academicRoadmap;
-          const incPhotoTime = new Date(incStd.photoUpdatedAt || 0).getTime();
-          const srvPhotoTime = new Date(srvStd.photoUpdatedAt || 0).getTime();
-          const isStrippedSync = Boolean(incStd._photosStripped);
+              : incStd.academicRoadmap || srvStd?.academicRoadmap;
 
-          const resolvePhotoField = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') => {
-            const incVal = typeof incStd[field] === 'string' ? incStd[field] : '';
-            const srvVal = typeof srvStd[field] === 'string' ? srvStd[field] : '';
-            // If payload stripped photos for size, NEVER overwrite existing server photos
-            if (isStrippedSync && !incVal && srvVal) {
-              return srvVal;
-            }
-            // Never let general sync wipe an existing server photo unless explicit removal was stamped newer
-            if (!incVal && srvVal && !incStd._explicitPhotoClear) {
-              return srvVal;
-            }
-            if (!incVal && srvVal && incPhotoTime <= srvPhotoTime) {
-              return srvVal;
-            }
-            if (srvVal && incVal && srvPhotoTime > incPhotoTime) {
-              return srvVal;
-            }
-            return incVal || srvVal || '';
-          };
-
-          const mergedAvatarUrl = resolvePhotoField('avatarUrl');
-          const mergedFatherAvatarUrl = resolvePhotoField('fatherAvatarUrl');
-          const mergedMotherAvatarUrl = resolvePhotoField('motherAvatarUrl');
-          const mergedPhotoUpdatedAt =
-            incPhotoTime > srvPhotoTime
-              ? incStd.photoUpdatedAt
-              : srvStd.photoUpdatedAt || incStd.photoUpdatedAt;
-
-          const cleanIncStd = { ...incStd };
-          delete cleanIncStd._photosStripped;
-          delete cleanIncStd._explicitPhotoClear;
+          const { student: reconciled } = reconcileStudentWithRegistry(
+            incStd,
+            srvStd,
+            existingRegistry,
+            registryRelationMap
+          );
 
           return {
-            ...cleanIncStd,
-            avatarUrl: mergedAvatarUrl,
-            fatherAvatarUrl: mergedFatherAvatarUrl,
-            motherAvatarUrl: mergedMotherAvatarUrl,
-            ...(mergedPhotoUpdatedAt ? { photoUpdatedAt: mergedPhotoUpdatedAt } : {}),
+            ...reconciled,
             futurePlan: mergedFuturePlan,
             achievements: mergedAchievements,
-            dreamGallery: mergedDreamGallery,
             monerBari: mergedMonerBari,
             timeManagement: mergedTimeManagement,
             academicRoadmap: mergedAcademicRoadmap,
-            portalUserId: incStd.portalUserId || srvStd.portalUserId,
-            guardianPin: incStd.guardianPin || srvStd.guardianPin,
-            securityQrCode:
-              incStd.securityQrCode ||
-              srvStd.securityQrCode ||
-              `DLIKON-SEC-${String(incStd.classId || srvStd.classId || 'CLS').toUpperCase()}-${incStd.roll ?? srvStd.roll ?? 0}-${String(incStd.id).slice(-4).toUpperCase()}`,
           };
         });
       }
@@ -484,9 +618,12 @@ async function startServer() {
         ? memoryDb.scannerAuditLogs
         : [];
 
+      const updatedPhotoRegistry = syncStudentPhotoRegistry(studentsToSave, existingRegistry);
+
       const payload = {
         ...incoming,
         students: studentsToSave,
+        studentPhotoRegistry: updatedPhotoRegistry,
         securityLogs: mergedSecurityLogs,
         scannerAuditLogs: incoming.isExplicitClearScannerAudit
           ? []
@@ -527,7 +664,7 @@ async function startServer() {
     }
   });
 
-  // Quick endpoint to update students specifically
+  // Quick endpoint to update students specifically (relational image preservation across upsert/replace)
   app.post('/api/students/bulk', (req, res) => {
     try {
       const { students, mode, classId } = req.body;
@@ -540,6 +677,34 @@ async function startServer() {
       }
 
       let currentStudents = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+      const existingRegistry: Record<string, any> =
+        memoryDb?.studentPhotoRegistry && typeof memoryDb.studentPhotoRegistry === 'object'
+          ? { ...memoryDb.studentPhotoRegistry }
+          : syncStudentPhotoRegistry(currentStudents);
+
+      const relMap = new Map<string, any>();
+      const idMap = new Map<string, any>();
+      for (const cs of currentStudents) {
+        if (!cs) continue;
+        if (cs.id) idMap.set(cs.id, cs);
+        const rk = buildRelationKey(cs);
+        if (rk && (isValidImageRef(cs.avatarUrl) || isValidImageRef(cs.fatherAvatarUrl) || isValidImageRef(cs.motherAvatarUrl))) {
+          relMap.set(rk, cs);
+        }
+      }
+      for (const entry of Object.values(existingRegistry)) {
+        const rk = buildRelationKey(entry);
+        if (rk && !relMap.has(rk) && (isValidImageRef(entry?.avatarUrl) || isValidImageRef(entry?.fatherAvatarUrl) || isValidImageRef(entry?.motherAvatarUrl))) {
+          relMap.set(rk, entry);
+        }
+      }
+
+      const reconciledIncoming = students.map((inc: any) => {
+        if (!inc) return inc;
+        const rk = buildRelationKey(inc);
+        const srvMatch = (inc.id && idMap.get(inc.id)) || (rk ? relMap.get(rk) : undefined);
+        return reconcileStudentWithRegistry(inc, srvMatch, existingRegistry, relMap).student;
+      });
 
       if (mode === 'replace') {
         if (classId) {
@@ -547,20 +712,21 @@ async function startServer() {
         } else {
           currentStudents = [];
         }
-        currentStudents = [...currentStudents, ...students];
+        currentStudents = [...currentStudents, ...reconciledIncoming];
       } else if (mode === 'upsert') {
         const studentMap = new Map();
         currentStudents.forEach((s: any) => studentMap.set(s.id, s));
-        students.forEach((s: any) => studentMap.set(s.id, s));
+        reconciledIncoming.forEach((s: any) => studentMap.set(s.id, s));
         currentStudents = Array.from(studentMap.values());
       } else {
         // Append
-        currentStudents = [...currentStudents, ...students];
+        currentStudents = [...currentStudents, ...reconciledIncoming];
       }
 
       const updatedDb = {
         ...(memoryDb || {}),
         students: currentStudents,
+        studentPhotoRegistry: syncStudentPhotoRegistry(currentStudents, existingRegistry),
         _lastUpdated: new Date().toISOString(),
       };
 
@@ -568,7 +734,8 @@ async function startServer() {
       return res.json({
         success: true,
         count: currentStudents.length,
-        message: 'Students synced to central database',
+        photoCount: countStudentsWithPhotos(currentStudents),
+        message: 'Students synced to central database with image integrity preserved',
       });
     } catch (err: any) {
       console.error('[Server API] Students bulk error:', err);
@@ -579,7 +746,7 @@ async function startServer() {
   // Update individual student profile / photos / futurePlan / achievements / password
   app.post('/api/student/profile-update', (req, res) => {
     try {
-      const { studentId, updates } = req.body;
+      const { studentId, updates, explicitPhotoClear } = req.body;
       if (!studentId || !updates || typeof updates !== 'object') {
         return res.status(400).json({ success: false, message: 'studentId and updates required' });
       }
@@ -593,21 +760,32 @@ async function startServer() {
         Object.prototype.hasOwnProperty.call(updates, 'fatherAvatarUrl') ||
         Object.prototype.hasOwnProperty.call(updates, 'motherAvatarUrl');
 
+      const effectiveExplicitClear = explicitPhotoClear ?? updates._explicitPhotoClear;
       const stampedUpdates: Record<string, any> = hasPhotoUpdate
         ? { ...updates, photoUpdatedAt: updates.photoUpdatedAt || new Date().toISOString() }
         : { ...updates };
       delete stampedUpdates._photosStripped;
       delete stampedUpdates._explicitPhotoClear;
 
+      const existingRegistry: Record<string, any> =
+        memoryDb?.studentPhotoRegistry && typeof memoryDb.studentPhotoRegistry === 'object'
+          ? { ...memoryDb.studentPhotoRegistry }
+          : {};
       const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
       let updatedStudent: any = null;
+      let protectedFieldsCount = 0;
+
       const nextStudents = currentStudents.map((s) => {
         if (s.id === studentId) {
-          updatedStudent = {
-            ...s,
-            ...stampedUpdates,
-            id: s.id,
-          };
+          const { student: mergedStd, protectedCount } = reconcileStudentWithRegistry(
+            { ...s, ...stampedUpdates, id: s.id },
+            s,
+            existingRegistry,
+            undefined,
+            effectiveExplicitClear
+          );
+          protectedFieldsCount += protectedCount;
+          updatedStudent = mergedStd;
           return updatedStudent;
         }
         return s;
@@ -615,10 +793,14 @@ async function startServer() {
 
       // Upsert if student was just added on client before 1s debounced sync arrived
       if (!updatedStudent && stampedUpdates.nameBn && stampedUpdates.classId) {
-        updatedStudent = {
-          ...stampedUpdates,
-          id: studentId,
-        };
+        const { student: mergedNew } = reconcileStudentWithRegistry(
+          { ...stampedUpdates, id: studentId },
+          undefined,
+          existingRegistry,
+          undefined,
+          effectiveExplicitClear
+        );
+        updatedStudent = mergedNew;
         nextStudents.push(updatedStudent);
       }
 
@@ -626,9 +808,12 @@ async function startServer() {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
 
+      const updatedRegistry = syncStudentPhotoRegistry([updatedStudent], existingRegistry);
+
       const updatedDb = {
         ...(memoryDb || {}),
         students: nextStudents,
+        studentPhotoRegistry: updatedRegistry,
         _lastUpdated: new Date().toISOString(),
       };
 
@@ -641,6 +826,7 @@ async function startServer() {
         message: 'শিক্ষার্থীর প্রোফাইল ও ছবি সফলভাবে সংরক্ষিত হয়েছে',
         student: updatedStudent,
         photoCount: countStudentsWithPhotos(nextStudents),
+        protectedFieldsCount,
       });
     } catch (err: any) {
       console.error('[Server API] Student profile update error:', err);
@@ -660,6 +846,11 @@ async function startServer() {
         loadDatabaseFromFile();
       }
 
+      const existingRegistry: Record<string, any> =
+        memoryDb?.studentPhotoRegistry && typeof memoryDb.studentPhotoRegistry === 'object'
+          ? { ...memoryDb.studentPhotoRegistry }
+          : {};
+
       const itemMap = new Map<string, any>();
       for (const it of items) {
         if (it && it.id) {
@@ -675,36 +866,49 @@ async function startServer() {
         const inc = itemMap.get(s.id);
         if (!inc) return s;
 
-        const incTime = new Date(inc.photoUpdatedAt || 0).getTime();
-        const srvTime = new Date(s.photoUpdatedAt || 0).getTime();
-        // Only skip if server already has ALL incoming photos with strictly newer timestamp
-        if (srvTime > incTime && incTime > 0 && (s.avatarUrl || !inc.avatarUrl)) {
-          return s;
-        }
+        const { student: reconciled } = reconcileStudentWithRegistry(
+          {
+            ...s,
+            ...(inc.avatarUrl !== undefined ? { avatarUrl: inc.avatarUrl } : {}),
+            ...(inc.fatherAvatarUrl !== undefined ? { fatherAvatarUrl: inc.fatherAvatarUrl } : {}),
+            ...(inc.motherAvatarUrl !== undefined ? { motherAvatarUrl: inc.motherAvatarUrl } : {}),
+            photoUpdatedAt: inc.photoUpdatedAt || s.photoUpdatedAt || new Date().toISOString(),
+          },
+          s,
+          existingRegistry,
+          undefined,
+          inc.explicitClear ?? inc._explicitPhotoClear
+        );
 
-        updatedCount++;
-        return {
-          ...s,
-          avatarUrl: inc.avatarUrl !== undefined ? (inc.avatarUrl || (inc.explicitClear ? '' : s.avatarUrl)) : s.avatarUrl,
-          fatherAvatarUrl: inc.fatherAvatarUrl !== undefined ? (inc.fatherAvatarUrl || (inc.explicitClear ? '' : s.fatherAvatarUrl)) : s.fatherAvatarUrl,
-          motherAvatarUrl: inc.motherAvatarUrl !== undefined ? (inc.motherAvatarUrl || (inc.explicitClear ? '' : s.motherAvatarUrl)) : s.motherAvatarUrl,
-          photoUpdatedAt: inc.photoUpdatedAt || s.photoUpdatedAt || new Date().toISOString(),
-        };
+        if (
+          reconciled.avatarUrl !== s.avatarUrl ||
+          reconciled.fatherAvatarUrl !== s.fatherAvatarUrl ||
+          reconciled.motherAvatarUrl !== s.motherAvatarUrl
+        ) {
+          updatedCount++;
+        }
+        return reconciled;
       });
 
       // Also upsert any newly created student with photos if missing on server
       for (const inc of items) {
         if (inc && inc.id && !seenIds.has(inc.id) && inc.studentRecord && inc.studentRecord.nameBn && inc.studentRecord.classId) {
-          const cleanRec = { ...inc.studentRecord, id: inc.id };
-          delete cleanRec._photosStripped;
+          const cleanRec = reconcileStudentWithRegistry(
+            { ...inc.studentRecord, id: inc.id },
+            undefined,
+            existingRegistry
+          ).student;
           nextStudents.push(cleanRec);
           updatedCount++;
         }
       }
 
+      const updatedRegistry = syncStudentPhotoRegistry(nextStudents, existingRegistry);
+
       const updatedDb = {
         ...(memoryDb || {}),
         students: nextStudents,
+        studentPhotoRegistry: updatedRegistry,
         _lastUpdated: new Date().toISOString(),
       };
 
@@ -722,6 +926,102 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Server API] Batch photo upload error:', err);
       return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // Audit & Repair Relational Photo Integrity (Play..Class 8 focus)
+  const buildPhotoIntegrityAudit = (repair = false) => {
+    if (!memoryDb) {
+      loadDatabaseFromFile();
+    }
+    const classesList: any[] = Array.isArray(memoryDb?.classes) ? memoryDb.classes : [];
+    const currentStudents: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+    const existingRegistry: Record<string, any> =
+      memoryDb?.studentPhotoRegistry && typeof memoryDb.studentPhotoRegistry === 'object'
+        ? { ...memoryDb.studentPhotoRegistry }
+        : {};
+
+    const relationMap = new Map<string, any>();
+    for (const entry of Object.values(existingRegistry)) {
+      const rk = buildRelationKey(entry);
+      if (rk && (isValidImageRef(entry?.avatarUrl) || isValidImageRef(entry?.fatherAvatarUrl) || isValidImageRef(entry?.motherAvatarUrl))) {
+        relationMap.set(rk, entry);
+      }
+    }
+
+    let repairedCount = 0;
+    let protectedCount = 0;
+    const repairedStudents = currentStudents.map((s) => {
+      const { student: reconciled, protectedCount: pCount } = reconcileStudentWithRegistry(
+        s,
+        s,
+        existingRegistry,
+        relationMap
+      );
+      if (pCount > 0) {
+        repairedCount++;
+        protectedCount += pCount;
+      }
+      return reconciled;
+    });
+
+    const syncedRegistry = syncStudentPhotoRegistry(repairedStudents, existingRegistry);
+
+    if (repair && (repairedCount > 0 || !memoryDb?.studentPhotoRegistry)) {
+      const updatedDb = {
+        ...(memoryDb || {}),
+        students: repairedStudents,
+        studentPhotoRegistry: syncedRegistry,
+        _lastUpdated: new Date().toISOString(),
+      };
+      saveDatabaseToFile(updatedDb, { skipBackup: repairedCount === 0 });
+    }
+
+    const activeList = repair ? repairedStudents : currentStudents;
+    const perClass = classesList.map((cls: any) => {
+      const list = activeList.filter((s: any) => s.classId === cls.id);
+      return {
+        classId: cls.id,
+        classNameBn: cls.nameBn || cls.id,
+        totalStudents: list.length,
+        withStudentPhoto: list.filter((s: any) => isValidImageRef(s.avatarUrl)).length,
+        withFatherPhoto: list.filter((s: any) => isValidImageRef(s.fatherAvatarUrl)).length,
+        withMotherPhoto: list.filter((s: any) => isValidImageRef(s.motherAvatarUrl)).length,
+      };
+    });
+
+    const class1To8Ids = new Set(['class_1', 'class_2', 'class_3', 'class_4', 'class_5', 'class_6', 'class_7', 'class_8']);
+    const class1To8List = activeList.filter((s: any) => class1To8Ids.has(s.classId));
+
+    return {
+      success: true,
+      checkedAt: new Date().toISOString(),
+      totalStudents: activeList.length,
+      totalWithStudentPhoto: activeList.filter((s: any) => isValidImageRef(s.avatarUrl)).length,
+      totalRegistryEntries: Object.keys(syncedRegistry).length,
+      repairedCount,
+      protectedCount,
+      class1To8TotalStudents: class1To8List.length,
+      class1To8WithStudentPhoto: class1To8List.filter((s: any) => isValidImageRef(s.avatarUrl)).length,
+      perClass,
+    };
+  };
+
+  app.get('/api/students/photo-integrity', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      return res.json(buildPhotoIntegrityAudit(false));
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Integrity check failed' });
+    }
+  });
+
+  app.post('/api/students/verify-photo-integrity', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      return res.json(buildPhotoIntegrityAudit(true));
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Integrity repair failed' });
     }
   });
 

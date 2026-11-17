@@ -124,12 +124,15 @@ let currentSpeechRunToken = 0;
 let lastEngineUsed: GuardianAudioHardwareStatus['lastEngineUsed'] = 'none';
 let lastPlaybackError: string | null = null;
 
-let pendingBlockedAlert: {
+export interface PendingBlockedSpeechAlert {
   message: string;
   logId: string;
   studentNameBn?: string;
   action?: 'entry' | 'exit';
-} | null = null;
+  dailySchedule?: Partial<DailyScheduleConfig> | null;
+}
+
+let pendingBlockedAlert: PendingBlockedSpeechAlert | null = null;
 
 // Memory LRU cache of fetched single-sentence MP3 ArrayBuffers so repeat alerts start in <5ms
 const ttsArrayBufferCache = new Map<string, ArrayBuffer>();
@@ -137,9 +140,7 @@ const activeUtterances = new Set<SpeechSynthesisUtterance>();
 const unlockSubscribers = new Set<(unlocked: boolean) => void>();
 const statusSubscribers = new Set<(status: GuardianAudioHardwareStatus) => void>();
 const playbackSubscribers = new Set<(playing: boolean) => void>();
-const pendingAlertSubscribers = new Set<
-  (pending: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null) => void
->();
+const pendingAlertSubscribers = new Set<(pending: PendingBlockedSpeechAlert | null) => void>();
 
 export function getGuardianAudioStatus(): GuardianAudioHardwareStatus {
   return {
@@ -230,15 +231,13 @@ export function getPendingBlockedSpeech() {
   return pendingBlockedAlert;
 }
 
-export function setPendingBlockedSpeech(
-  pending: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null
-) {
+export function setPendingBlockedSpeech(pending: PendingBlockedSpeechAlert | null) {
   pendingBlockedAlert = pending;
   notifyPendingSubscribers();
 }
 
 export function subscribePendingBlockedSpeech(
-  cb: (pending: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null) => void
+  cb: (pending: PendingBlockedSpeechAlert | null) => void
 ): () => void {
   pendingAlertSubscribers.add(cb);
   cb(pendingBlockedAlert);
@@ -570,11 +569,11 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
       speakRepeatedGuardianAlert(
         { nameBn: queued.studentNameBn },
         queued.action,
-        null,
-        { delayMs: 280, repeatCount: 3 }
+        queued.dailySchedule ?? null,
+        { delayMs: 220, repeatCount: 3 }
       );
     } else {
-      speakBengaliSpeech(queued.message, { delayMs: 280 });
+      speakBengaliSpeech(queued.message, { delayMs: 220 });
     }
   }
 
@@ -594,11 +593,11 @@ export function replayPendingBlockedSpeech(): boolean {
     speakRepeatedGuardianAlert(
       { nameBn: queued.studentNameBn },
       queued.action,
-      null,
-      { delayMs: 280, repeatCount: 3 }
+      queued.dailySchedule ?? null,
+      { delayMs: 220, repeatCount: 3 }
     );
   } else {
-    speakBengaliSpeech(queued.message, { delayMs: 280 });
+    speakBengaliSpeech(queued.message, { delayMs: 220 });
   }
   return true;
 }
@@ -802,6 +801,36 @@ async function fetchSingleChunkTtsBuffer(chunk: string): Promise<ArrayBuffer> {
   }
 }
 
+/**
+ * Pre-fetch and cache Bengali MP3 voice chunks for the signed-in student's arrival/exit messages
+ * so incoming gatepass alerts trigger instant 0ms Web Audio playback without network latency.
+ */
+export async function prewarmGuardianVoiceCache(
+  student: Pick<Student, 'nameBn'> | null | undefined,
+  dailySchedule?: Partial<DailyScheduleConfig> | null
+): Promise<void> {
+  if (typeof window === 'undefined' || !student?.nameBn) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+  const entryPhrases = buildGuardianRepeatedAlertPhrases(student, 'entry', dailySchedule, 2);
+  const exitPhrases = buildGuardianRepeatedAlertPhrases(student, 'exit', dailySchedule, 2);
+  const uniqueChunks = Array.from(
+    new Set(
+      [...entryPhrases, ...exitPhrases].flatMap((p) => splitBengaliSentences(p, 145))
+    )
+  ).slice(0, 12);
+
+  for (const chunk of uniqueChunks) {
+    const key = chunk.slice(0, 200);
+    if (ttsArrayBufferCache.has(key)) continue;
+    try {
+      await fetchSingleChunkTtsBuffer(chunk);
+    } catch {
+      // Non-fatal prewarm skip
+    }
+  }
+}
+
 function playSingleDecodedBuffer(
   ctx: AudioContext,
   audioBuffer: AudioBuffer,
@@ -948,7 +977,7 @@ function playSingleHtmlAudioChunk(
       if (!started) {
         finish('failed', 'HTMLAudio timeout');
       }
-    }, 5500);
+    }, 2500);
 
     audioEl.onplaying = () => {
       if (runToken !== currentSpeechRunToken) {
@@ -1070,6 +1099,14 @@ async function playWithWebSpeechFallback(
           return;
         }
         const bnVoice = selectBestBengaliVoice(voices);
+        if (voices.length > 0 && !bnVoice) {
+          // Many Android phones report voices list without a bn-BD voice pack and play silence on speak()
+          lastPlaybackError = 'Bengali voice pack unavailable for Web Speech';
+          notifyUnlockSubscribers();
+          options.onBlocked?.();
+          resolve(false);
+          return;
+        }
 
         try {
           window.speechSynthesis.resume();
@@ -1094,6 +1131,9 @@ async function playWithWebSpeechFallback(
             return;
           }
           if (index >= sentences.length) {
+            if (!anyChunkStarted) {
+              notifyBlocked();
+            }
             resolve(anyChunkStarted);
             return;
           }
@@ -1135,6 +1175,11 @@ async function playWithWebSpeechFallback(
           utterance.onend = () => {
             if (startWatchdog) clearTimeout(startWatchdog);
             activeUtterances.delete(utterance);
+            if (!anyChunkStarted) {
+              notifyBlocked();
+              resolve(false);
+              return;
+            }
             if (runToken === currentSpeechRunToken) {
               speakChunk(index + 1);
             } else {
@@ -1212,12 +1257,21 @@ async function playPhraseList(
   const { pauseBetweenMs = 850, chimeBetweenCycles = false, studentNameBn, onStart, onEnd, onBlocked } = options;
   const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
   let notifiedStart = false;
+  let playedAnyPhrase = false;
+  let blockedReported = false;
 
   const fireStartOnce = () => {
     if (!notifiedStart) {
       notifiedStart = true;
       updateGuardianMediaSession(studentNameBn);
       onStart?.();
+    }
+  };
+
+  const fireBlockedOnce = () => {
+    if (!blockedReported) {
+      blockedReported = true;
+      onBlocked?.();
     }
   };
 
@@ -1263,16 +1317,29 @@ async function playPhraseList(
       }
     }
 
-    if (!playedPhrase && runToken === currentSpeechRunToken) {
+    if (playedPhrase) {
+      playedAnyPhrase = true;
+      continue;
+    }
+
+    if (runToken === currentSpeechRunToken) {
       playedPhrase = await playWithWebSpeechFallback(sentenceChunks, runToken, {
         onFirstStart: fireStartOnce,
-        onBlocked: pIdx === 0 ? onBlocked : undefined,
+        onBlocked: pIdx === 0 ? fireBlockedOnce : undefined,
       });
-      if (!playedPhrase) break;
+      if (playedPhrase) {
+        playedAnyPhrase = true;
+      } else {
+        if (!playedAnyPhrase) fireBlockedOnce();
+        break;
+      }
     }
   }
 
   if (runToken === currentSpeechRunToken) {
+    if (!playedAnyPhrase) {
+      fireBlockedOnce();
+    }
     setVoicePlayingState(false);
     onEnd?.();
   }

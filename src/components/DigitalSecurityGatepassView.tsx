@@ -79,6 +79,7 @@ import {
   DEFAULT_SCANNER_VOICE_SETTINGS,
   playAlarmChime,
   playScannerBeep,
+  prewarmGuardianVoiceCache,
   requestGuardianNotificationPermission,
   setGuardianLiveWatchActive,
   setPendingBlockedSpeech,
@@ -94,6 +95,7 @@ import {
   isGuardianAudioEnabledPref,
   markGatepassLogSeen,
   markGuardianVoiceLogPlayed,
+  RealtimeTransportMode,
   setGuardianAudioEnabledPref,
 } from '../hooks/useGatepassRealtime';
 
@@ -106,6 +108,9 @@ interface DigitalSecurityGatepassViewProps {
     | 'scanner_audit';
   restrictedMode?: 'full' | 'student_only' | 'employee_scanner';
   forcedStudentId?: string;
+  externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
+  onDismissExternalRingingAlert?: () => void;
+  realtimeTransport?: RealtimeTransportMode;
   onRoleLogout?: () => void;
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
@@ -117,6 +122,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   initialTab,
   restrictedMode = 'full',
   forcedStudentId,
+  externalLiveRingingAlert,
+  onDismissExternalRingingAlert,
+  realtimeTransport,
   onRoleLogout,
   isDeviceLocked = false,
   onInstallLockedDashboard,
@@ -1272,6 +1280,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     playAlarmChime();
 
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
+    if (targetStudent) {
+      void prewarmGuardianVoiceCache(targetStudent, activeDailySchedule);
+    }
     if (playDemo && targetStudent) {
       speakRepeatedGuardianAlert(targetStudent, 'entry', activeDailySchedule, {
         repeatCount: 3,
@@ -1494,13 +1505,22 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         markGuardianVoiceLogPlayed(recentLog.id);
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
-        speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true, {
-          delayMs: 280,
-          logId: recentLog.id,
-          studentNameBn: signedStudent.nameBn,
-          action: recentLog.action,
+        const act: 'entry' | 'exit' = recentLog.action === 'exit' ? 'exit' : 'entry';
+        const announcement = buildGuardianVoiceMessage(signedStudent, act);
+        speakRepeatedGuardianAlert(signedStudent, act, activeDailySchedule, {
+          repeatCount: 3,
+          delayMs: 240,
+          onBlocked: () => {
+            setPendingBlockedSpeech({
+              message: announcement,
+              logId: recentLog.id,
+              studentNameBn: signedStudent.nameBn,
+              action: act,
+              dailySchedule: activeDailySchedule,
+            });
+          },
         });
-        setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+        setTimeout(() => setIsGuardianAlarmRinging(false), 26000);
       }
       return;
     }
@@ -1518,25 +1538,33 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (freshCloudLog && guardianAudioEnabled) {
       setIsGuardianAlarmRinging(true);
       playAlarmChime();
-      const announcement = buildGuardianVoiceMessage(signedStudent, freshCloudLog.action);
+      const act: 'entry' | 'exit' = freshCloudLog.action === 'exit' ? 'exit' : 'entry';
+      const announcement = buildGuardianVoiceMessage(signedStudent, act);
       showGuardianSystemNotification(
         `${schoolInfo.name} • লাইভ গেটপাস`,
         announcement
       );
-      speakBengali(announcement, true, {
-        delayMs: 280,
-        logId: freshCloudLog.id,
-        studentNameBn: signedStudent.nameBn,
-        action: freshCloudLog.action,
+      speakRepeatedGuardianAlert(signedStudent, act, activeDailySchedule, {
+        repeatCount: 3,
+        delayMs: 240,
+        onBlocked: () => {
+          setPendingBlockedSpeech({
+            message: announcement,
+            logId: freshCloudLog!.id,
+            studentNameBn: signedStudent.nameBn,
+            action: act,
+            dailySchedule: activeDailySchedule,
+          });
+        },
       });
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
           navigator.vibrate([200, 100, 200, 100, 400]);
         } catch {}
       }
-      setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+      setTimeout(() => setIsGuardianAlarmRinging(false), 26000);
     }
-  }, [securityLogs, cloudUser, restrictedMode, activeTab, loggedInGuardianStudent?.id, guardianAudioEnabled, schoolInfo.name]);
+  }, [securityLogs, cloudUser, restrictedMode, activeTab, loggedInGuardianStudent?.id, guardianAudioEnabled, schoolInfo.name, activeDailySchedule]);
 
   // Fetch & poll persistent QR scanner audit events when viewing Scanner or Scanner Audit tab
   const fetchScannerAuditLogsFromServer = async (showSpinner = false) => {
@@ -3031,13 +3059,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   unlockMobileAudioAndSpeech(false);
                   setGuardianLiveWatchActive(true);
                   void requestGuardianNotificationPermission();
+                  void prewarmGuardianVoiceCache(activeSignedInStudent, activeDailySchedule);
                 } else {
                   setGuardianLiveWatchActive(false);
                 }
                 setGuardianAudioEnabled(val);
               }}
               guardianAudioTested={guardianAudioTested}
-              isGuardianAlarmRinging={isGuardianAlarmRinging}
+              isGuardianAlarmRinging={isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)}
+              externalLiveRingingAlert={externalLiveRingingAlert}
+              onDismissExternalRingingAlert={onDismissExternalRingingAlert}
+              realtimeTransport={realtimeTransport}
               ackSuccessFeedback={ackSuccessFeedback}
               isSubmittingAck={isSubmittingAck}
               guardianReplyText={guardianReplyText}
@@ -3046,6 +3078,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               onStopAudio={() => {
                 stopBengaliSpeech();
                 setIsGuardianAlarmRinging(false);
+                onDismissExternalRingingAlert?.();
               }}
               onReplayAlarm={(log) => {
                 setPendingBlockedSpeech(null);
@@ -4825,8 +4858,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
                     <span>
                       {gateAction === 'entry'
-                        ? "সালাম ও 'স্বাগতম' অডিও বার্তা (নিশ্চিত করলে বাজবে):"
-                        : "সালাম ও 'বিদায়' অডিও বার্তা (নিশ্চিত করলে বাজবে):"}
+                        ? "নিশ্চিত করলে সালাম বাজবে, হাজিরা সেভ হবে এবং অভিভাবক ফোনে লাইভ ভয়েস এলার্ম যাবে:"
+                        : "নিশ্চিত করলে বিদায় সালাম বাজবে এবং অভিভাবক ফোনে লাইভ ভয়েস এলার্ম যাবে:"}
                     </span>
                   </div>
                   <p className="text-xs text-emerald-950 leading-relaxed font-medium">

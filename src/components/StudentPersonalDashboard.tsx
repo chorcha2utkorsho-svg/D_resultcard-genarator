@@ -86,6 +86,7 @@ import {
   getGuardianAudioStatus,
   GuardianAudioHardwareStatus,
   isMobileAudioUnlocked,
+  PendingBlockedSpeechAlert,
   replayPendingBlockedSpeech,
   stopBengaliSpeech,
   subscribeGuardianAudioStatus,
@@ -93,6 +94,7 @@ import {
   subscribePendingBlockedSpeech,
   subscribeSpeechPlayback,
 } from '../utils/gatepassAudio';
+import { RealtimeTransportMode } from '../hooks/useGatepassRealtime';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -103,6 +105,9 @@ interface StudentPersonalDashboardProps {
   setGuardianAudioEnabled: (val: boolean) => void;
   guardianAudioTested: boolean;
   isGuardianAlarmRinging: boolean;
+  externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
+  onDismissExternalRingingAlert?: () => void;
+  realtimeTransport?: RealtimeTransportMode;
   ackSuccessFeedback: string | null;
   isSubmittingAck: boolean;
   guardianReplyText: string;
@@ -155,6 +160,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   setGuardianAudioEnabled,
   guardianAudioTested,
   isGuardianAlarmRinging,
+  externalLiveRingingAlert,
+  onDismissExternalRingingAlert,
+  realtimeTransport,
   ackSuccessFeedback,
   isSubmittingAck,
   guardianReplyText,
@@ -182,6 +190,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     syllabi,
     calendarEvents,
     libraryMaterials,
+    cloudUser,
   } = useSchool();
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
@@ -191,12 +200,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     getGuardianAudioStatus()
   );
   const [isVoiceCurrentlyPlaying, setIsVoiceCurrentlyPlaying] = useState<boolean>(false);
-  const [pendingBlockedAlert, setPendingBlockedAlert] = useState<{
-    message: string;
-    logId: string;
-    studentNameBn?: string;
-    action?: 'entry' | 'exit';
-  } | null>(null);
+  const [pendingBlockedAlert, setPendingBlockedAlert] = useState<PendingBlockedSpeechAlert | null>(null);
 
   useEffect(() => {
     const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
@@ -680,22 +684,34 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
 
           {/* Right: Voice Alarm & Permanent Dashboard Install Actions */}
           <div className="flex flex-wrap lg:flex-col items-stretch lg:items-end justify-between gap-2.5 shrink-0 border-t lg:border-t-0 lg:border-l border-slate-800 pt-4 lg:pt-0 lg:pl-6">
-            <button
-              type="button"
-              onClick={() => onTestAudio(false)}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
-                isGuardianAlarmRinging
-                  ? 'bg-rose-600 text-white'
-                  : isHardwareAudioTrulyActive
-                  ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
-                  : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
-              }`}
-            >
-              <BellRing className="w-4 h-4" />
-              <span>
-                {isHardwareAudioTrulyActive ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onTestAudio(false)}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
+                  isGuardianAlarmRinging
+                    ? 'bg-rose-600 text-white'
+                    : isHardwareAudioTrulyActive
+                    ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
+                    : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                }`}
+              >
+                <BellRing className="w-4 h-4" />
+                <span>
+                  {isHardwareAudioTrulyActive ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onTestAudio(true)}
+                className="px-3 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                title="আপনার সন্তানের নাম ধরে বাংলা ভয়েস এলার্ম টেস্ট শুনুন"
+              >
+                <Volume2 className="w-3.5 h-3.5 text-amber-300" />
+                <span>টেস্ট (নাম ধরে)</span>
+              </button>
+            </div>
 
             <div className="flex items-center gap-2">
               <button
@@ -798,35 +814,51 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       </section>
 
       {/* Active Voice Playing Banner OR Pending Autoplay-Blocked Voice Alert */}
-      {(isVoiceCurrentlyPlaying || isGuardianAlarmRinging) && latestChildAlarm && !pendingBlockedAlert && (
-        <div className="bg-emerald-950 text-white rounded-2xl p-4 sm:p-5 shadow-lg border-2 border-emerald-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-sm sm:text-base font-bold text-emerald-300 flex items-center gap-2">
-              <Volume2 className="w-5 h-5 text-amber-300 shrink-0 animate-pulse" />
-              <span>লাইভ ভয়েস এলার্ম বাজছে — {student.nameBn}</span>
+      {(isVoiceCurrentlyPlaying || isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)) &&
+        (externalLiveRingingAlert?.log || latestChildAlarm) &&
+        !pendingBlockedAlert && (() => {
+          const activeLog = externalLiveRingingAlert?.log || latestChildAlarm!;
+          const activeMsg =
+            externalLiveRingingAlert?.message || buildGuardianVoiceMessage(student, activeLog.action);
+          return (
+            <div className="bg-emerald-950 text-white rounded-2xl p-4 sm:p-5 shadow-lg border-2 border-emerald-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-sm sm:text-base font-bold text-emerald-300 flex items-center gap-2">
+                  <Volume2 className="w-5 h-5 text-amber-300 shrink-0 animate-pulse" />
+                  <span>লাইভ ভয়েস এলার্ম বাজছে — {student.nameBn}</span>
+                </div>
+                <p className="text-xs sm:text-sm text-emerald-50 leading-relaxed">
+                  {activeMsg}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onReplayAlarm(activeLog)}
+                  className="px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Volume2 className="w-4 h-4 text-amber-300" />
+                  <span>পুনরায় শুনুন</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopBengaliSpeech();
+                    onStopAudio?.();
+                    onDismissExternalRingingAlert?.();
+                    if (!activeLog.guardianAcknowledged) {
+                      onAcknowledgeAlarm(activeLog, 'মেসেজ শুনেছি ও নিশ্চিত করলাম');
+                    }
+                  }}
+                  className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  <span>শুনেছি ও এলার্ম থামান ✓</span>
+                </button>
+              </div>
             </div>
-            <p className="text-xs sm:text-sm text-emerald-50 leading-relaxed">
-              {buildGuardianVoiceMessage(student, latestChildAlarm.action)}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                stopBengaliSpeech();
-                if (onStopAudio) onStopAudio();
-                if (!latestChildAlarm.guardianAcknowledged) {
-                  onAcknowledgeAlarm(latestChildAlarm, 'মেসেজ শুনেছি ও নিশ্চিত করলাম');
-                }
-              }}
-              className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-            >
-              <CheckCheck className="w-4 h-4" />
-              <span>শুনেছি ও এলার্ম থামান ✓</span>
-            </button>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       {pendingBlockedAlert && (
         <div className="bg-rose-600 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -963,19 +995,28 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </button>
                 <span className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
                   <Globe className="w-3.5 h-3.5" />
-                  <span>{isHardwareAudioTrulyActive ? 'অডিও স্পিকার প্রস্তুত' : 'লাইভ সিঙ্ক'}</span>
+                  <span>
+                    {realtimeTransport === 'connecting'
+                      ? 'লাইভ সংযোগ যুক্ত হচ্ছে...'
+                      : 'লাইভ সিঙ্ক সক্রিয়'}
+                  </span>
                 </span>
               </div>
             </div>
 
             <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
               <span>
-                স্পিকার অবস্থা: <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
-                  {isHardwareAudioTrulyActive ? 'সক্রিয় (Web Audio প্রস্তুত)' : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
+                স্পিকার অবস্থা:{' '}
+                <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
+                  {isHardwareAudioTrulyActive
+                    ? 'সক্রিয় (Web Audio প্রস্তুত)'
+                    : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
                 </strong>
               </span>
               <span className="text-slate-400">
-                ভয়েস শুনতে ফোনের মিডিয়া ভলিউম চালু রাখুন ও পেজটি খোলা রাখুন।
+                {cloudUser
+                  ? 'ক্লাউড সিঙ্ক ও লাইভ স্পিকার প্রস্তুত; ফোনের মিডিয়া ভলিউম চালু রাখুন।'
+                  : 'স্কুল স্ক্যানার ও অভিভাবক ফোন অবশ্যই একই ওয়েবসাইট লিংকে খোলা রাখুন এবং মিডিয়া ভলিউম চালু রাখুন।'}
               </span>
             </div>
 

@@ -103,10 +103,25 @@ function MainContent() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
-  const { liveRingingAlert, dismissLiveRingingAlert } = useGatepassRealtime({
+  const signedInStudentObj =
+    authSession?.role === 'student'
+      ? students.find(
+          (s) =>
+            s.id === authSession.accountId ||
+            (authSession.staffCode && getStudentPortalId(s).toUpperCase() === authSession.staffCode.toUpperCase())
+        )
+      : undefined;
+
+  const {
+    liveRingingAlert,
+    dismissLiveRingingAlert,
+    connectionTransport,
+  } = useGatepassRealtime({
     role: authSession?.role,
     studentId: authSession?.role === 'student' ? authSession.accountId : null,
     portalId: authSession?.role === 'student' ? authSession.staffCode : null,
+    classId: signedInStudentObj?.classId || null,
+    roll: signedInStudentObj?.roll || null,
     enabled: Boolean(authSession),
   });
 
@@ -410,6 +425,9 @@ function MainContent() {
                 initialTab="guardian_portal"
                 restrictedMode="student_only"
                 forcedStudentId={authSession.accountId}
+                externalLiveRingingAlert={liveRingingAlert}
+                onDismissExternalRingingAlert={dismissLiveRingingAlert}
+                realtimeTransport={connectionTransport}
                 onRoleLogout={handleLogout}
                 isDeviceLocked={isDeviceLocked}
                 onInstallLockedDashboard={handleInstallLockedDashboard}

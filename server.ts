@@ -348,10 +348,14 @@ async function startServer() {
   // =========================================================================
   // REAL-TIME GATEPASS MULTI-DEVICE PUSH HUB (WebSocket + SSE)
   // =========================================================================
+  const SERVER_INSTANCE_ID = `srv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
   interface GatepassWsClient {
     ws: WebSocket;
     studentId: string;
     portalId: string;
+    classId: string;
+    roll: number | null;
     role: string;
     isAlive: boolean;
   }
@@ -359,6 +363,8 @@ async function startServer() {
     res: express.Response;
     studentId: string;
     portalId: string;
+    classId: string;
+    roll: number | null;
     role: string;
   }
 
@@ -428,29 +434,40 @@ async function startServer() {
   const logMatchesTargetStudent = (
     log: any,
     targetStudentId?: string,
-    targetPortalId?: string
+    targetPortalId?: string,
+    targetClassId?: string,
+    targetRoll?: number | null
   ): boolean => {
     if (!log) return false;
     const cleanStdId = (targetStudentId || '').trim();
     const cleanPortal = (targetPortalId || '').trim().toUpperCase();
-    if (!cleanStdId && !cleanPortal) return true;
+    const cleanClassId = (targetClassId || '').trim();
+    const hasRoll = typeof targetRoll === 'number' && !Number.isNaN(targetRoll) && targetRoll > 0;
+    if (!cleanStdId && !cleanPortal && !(cleanClassId && hasRoll)) return true;
     if (cleanStdId && log.studentId === cleanStdId) return true;
     if (cleanPortal) {
       const logPortal = (log.portalUserId || computePortalIdQuick(log)).trim().toUpperCase();
       if (logPortal && logPortal === cleanPortal) return true;
     }
+    if (cleanClassId && hasRoll && log.classId === cleanClassId && Number(log.studentRoll) === Number(targetRoll)) {
+      return true;
+    }
     return false;
   };
 
   const shouldDeliverToSubscriber = (
-    sub: { studentId: string; portalId?: string; role: string },
+    sub: { studentId: string; portalId?: string; classId?: string; roll?: number | null; role: string },
     log: any
   ): boolean => {
     if (!log || !log.studentId) return false;
-    if (sub.role === 'official' || sub.role === 'employee' || (!sub.studentId && !sub.portalId)) {
+    if (
+      sub.role === 'official' ||
+      sub.role === 'employee' ||
+      (!sub.studentId && !sub.portalId && !(sub.classId && sub.roll))
+    ) {
       return true;
     }
-    return logMatchesTargetStudent(log, sub.studentId, sub.portalId);
+    return logMatchesTargetStudent(log, sub.studentId, sub.portalId, sub.classId, sub.roll);
   };
 
   const broadcastGatepassEvent = (
@@ -498,6 +515,7 @@ async function startServer() {
     res.json({
       status: 'ok',
       time: new Date().toISOString(),
+      serverInstanceId: SERVER_INSTANCE_ID,
       studentCount: studentsList.length,
       photoCount: countStudentsWithPhotos(studentsList),
       hasSavedData: !!memoryDb,
@@ -1377,6 +1395,9 @@ async function startServer() {
   app.get('/api/security/stream', (req, res) => {
     const studentId = String(req.query.studentId || '').trim();
     const portalId = String(req.query.portalId || '').trim().toUpperCase();
+    const classId = String(req.query.classId || '').trim();
+    const rollRaw = Number(req.query.roll);
+    const roll = !Number.isNaN(rollRaw) && rollRaw > 0 ? rollRaw : null;
     const role = String(req.query.role || 'student').trim();
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1387,7 +1408,7 @@ async function startServer() {
       (res as any).flushHeaders();
     }
 
-    const clientEntry: GatepassSseClient = { res, studentId, portalId, role };
+    const clientEntry: GatepassSseClient = { res, studentId, portalId, classId, roll, role };
     gatepassSseClients.add(clientEntry);
 
     if (!memoryDb) {
@@ -1395,8 +1416,8 @@ async function startServer() {
     }
     const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
     const recentLogs =
-      studentId || portalId
-        ? logs.filter((l) => logMatchesTargetStudent(l, studentId, portalId)).slice(0, 10)
+      studentId || portalId || (classId && roll)
+        ? logs.filter((l) => logMatchesTargetStudent(l, studentId, portalId, classId, roll)).slice(0, 10)
         : logs.slice(0, 20);
 
     try {
@@ -1404,6 +1425,7 @@ async function startServer() {
         `event: gatepass\ndata: ${JSON.stringify({
           type: 'gatepass:init',
           serverTime: Date.now(),
+          serverInstanceId: SERVER_INSTANCE_ID,
           logs: recentLogs,
         })}\n\n`
       );
@@ -1437,6 +1459,9 @@ async function startServer() {
       const since = Number(req.query.since) || 0;
       const studentId = String(req.query.studentId || '').trim();
       const portalId = String(req.query.portalId || '').trim().toUpperCase();
+      const classId = String(req.query.classId || '').trim();
+      const rollRaw = Number(req.query.roll);
+      const roll = !Number.isNaN(rollRaw) && rollRaw > 0 ? rollRaw : null;
 
       const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
 
@@ -1449,7 +1474,9 @@ async function startServer() {
             : new Date(l.timestamp).getTime() || 0;
         const matchesTime = since > 0 ? logTime > since : true;
         const matchesStudent =
-          studentId || portalId ? logMatchesTargetStudent(l, studentId, portalId) : true;
+          studentId || portalId || (classId && roll)
+            ? logMatchesTargetStudent(l, studentId, portalId, classId, roll)
+            : true;
         return matchesTime && matchesStudent;
       });
 
@@ -1461,6 +1488,7 @@ async function startServer() {
         allLogsCount: logs.length,
         totalAcknowledgedCount,
         serverTime: Date.now(),
+        serverInstanceId: SERVER_INSTANCE_ID,
         lastEvent: memoryDb?._lastSecurityEvent || null,
       });
     } catch (err: any) {
@@ -2926,10 +2954,13 @@ async function startServer() {
       urlObj = null;
     }
 
+    const rawRoll = Number(urlObj?.searchParams.get('roll'));
     const clientEntry: GatepassWsClient = {
       ws,
       studentId: urlObj?.searchParams.get('studentId')?.trim() || '',
       portalId: urlObj?.searchParams.get('portalId')?.trim().toUpperCase() || '',
+      classId: urlObj?.searchParams.get('classId')?.trim() || '',
+      roll: !Number.isNaN(rawRoll) && rawRoll > 0 ? rawRoll : null,
       role: urlObj?.searchParams.get('role')?.trim() || 'student',
       isAlive: true,
     };
@@ -2940,9 +2971,17 @@ async function startServer() {
     }
     const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
     const recentLogs =
-      clientEntry.studentId || clientEntry.portalId
+      clientEntry.studentId || clientEntry.portalId || (clientEntry.classId && clientEntry.roll)
         ? logs
-            .filter((l) => logMatchesTargetStudent(l, clientEntry.studentId, clientEntry.portalId))
+            .filter((l) =>
+              logMatchesTargetStudent(
+                l,
+                clientEntry.studentId,
+                clientEntry.portalId,
+                clientEntry.classId,
+                clientEntry.roll
+              )
+            )
             .slice(0, 10)
         : logs.slice(0, 20);
 
@@ -2951,6 +2990,7 @@ async function startServer() {
         JSON.stringify({
           type: 'gatepass:init',
           serverTime: Date.now(),
+          serverInstanceId: SERVER_INSTANCE_ID,
           logs: recentLogs,
         })
       );
@@ -2968,18 +3008,30 @@ async function startServer() {
         if (parsed && parsed.type === 'subscribe') {
           clientEntry.studentId = String(parsed.studentId || '').trim();
           clientEntry.portalId = String(parsed.portalId || '').trim().toUpperCase();
+          clientEntry.classId = String(parsed.classId || '').trim();
+          const pRoll = Number(parsed.roll);
+          clientEntry.roll = !Number.isNaN(pRoll) && pRoll > 0 ? pRoll : null;
           clientEntry.role = String(parsed.role || clientEntry.role).trim();
           const currentLogs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
           const subLogs =
-            clientEntry.studentId || clientEntry.portalId
+            clientEntry.studentId || clientEntry.portalId || (clientEntry.classId && clientEntry.roll)
               ? currentLogs
-                  .filter((l) => logMatchesTargetStudent(l, clientEntry.studentId, clientEntry.portalId))
+                  .filter((l) =>
+                    logMatchesTargetStudent(
+                      l,
+                      clientEntry.studentId,
+                      clientEntry.portalId,
+                      clientEntry.classId,
+                      clientEntry.roll
+                    )
+                  )
                   .slice(0, 10)
               : currentLogs.slice(0, 20);
           ws.send(
             JSON.stringify({
               type: 'gatepass:init',
               serverTime: Date.now(),
+              serverInstanceId: SERVER_INSTANCE_ID,
               logs: subLogs,
             })
           );

@@ -77,9 +77,11 @@ import {
   buildScannerVoiceMessage,
   DEFAULT_DAILY_SCHEDULE,
   DEFAULT_SCANNER_VOICE_SETTINGS,
+  getPendingBlockedSpeech,
   playAlarmChime,
   playScannerBeep,
   prewarmGuardianVoiceCache,
+  replayPendingBlockedSpeech,
   requestGuardianNotificationPermission,
   setGuardianLiveWatchActive,
   setPendingBlockedSpeech,
@@ -111,6 +113,7 @@ interface DigitalSecurityGatepassViewProps {
   externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
   onDismissExternalRingingAlert?: () => void;
   realtimeTransport?: RealtimeTransportMode;
+  onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
   onRoleLogout?: () => void;
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
@@ -125,6 +128,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   externalLiveRingingAlert,
   onDismissExternalRingingAlert,
   realtimeTransport,
+  onForceCheckRealtime,
   onRoleLogout,
   isDeviceLocked = false,
   onInstallLockedDashboard,
@@ -207,6 +211,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>('');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+  const [lastScanDispatchInfo, setLastScanDispatchInfo] = useState<{
+    student: Student;
+    deliveredCount: number;
+    serverHost: string;
+    verifiedAt: string;
+  } | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
   const lastAmbiguousQueryRef = useRef<string>('');
   const [autoInstantScanGreeting, setAutoInstantScanGreeting] = useState<boolean>(() => {
@@ -504,6 +514,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
+    const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
     try {
       fetch('/api/security/scan', {
         method: 'POST',
@@ -519,8 +530,24 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           if (data?.attendanceRecord) {
             upsertAttendanceRecordFromServer(data.attendanceRecord);
           }
+          const delivered =
+            typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
+          setLastScanDispatchInfo({
+            student,
+            deliveredCount: delivered,
+            serverHost: currentServerHost,
+            verifiedAt: nowIso,
+          });
         })
-        .catch((err) => console.warn('Gate log sync error:', err));
+        .catch((err) => {
+          console.warn('Gate log sync error:', err);
+          setLastScanDispatchInfo({
+            student,
+            deliveredCount: 0,
+            serverHost: currentServerHost,
+            verifiedAt: nowIso,
+          });
+        });
     } catch {
       // Non-fatal
     }
@@ -1270,6 +1297,29 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const hasBaselinePollRef = useRef<boolean>(false);
 
   const handleTestGuardianAudio = (playDemo: boolean = false) => {
+    const existingPending = getPendingBlockedSpeech();
+    const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
+
+    // Preserve and immediately replay a real pending arrival/exit alert instead of silently discarding it
+    if (!playDemo && existingPending) {
+      setGuardianLiveWatchActive(true);
+      void requestGuardianNotificationPermission();
+      setGuardianAudioTested(true);
+      setGuardianAudioEnabled(true);
+      setIsGuardianAlarmRinging(true);
+      if (targetStudent) {
+        void prewarmGuardianVoiceCache(targetStudent, activeDailySchedule);
+      }
+      replayPendingBlockedSpeech();
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate([150, 60, 150]);
+        } catch {}
+      }
+      setTimeout(() => setIsGuardianAlarmRinging(false), 18000);
+      return;
+    }
+
     setPendingBlockedSpeech(null);
     unlockMobileAudioAndSpeech(false);
     setGuardianLiveWatchActive(true);
@@ -1279,7 +1329,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setIsGuardianAlarmRinging(true);
     playAlarmChime();
 
-    const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
     if (targetStudent) {
       void prewarmGuardianVoiceCache(targetStudent, activeDailySchedule);
     }
@@ -1479,6 +1528,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (
       !signedStudent ||
       !cloudUser ||
+      Boolean(forcedStudentId) ||
       restrictedMode === 'employee_scanner' ||
       activeTab !== 'guardian_portal'
     ) {
@@ -2509,6 +2559,60 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   </div>
                 )}
 
+                {/* Truthful Live Dispatch Confirmation to Guardian Phone */}
+                {lastScanDispatchInfo && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                      lastScanDispatchInfo.deliveredCount > 0
+                        ? 'bg-emerald-900 text-white border-emerald-700'
+                        : 'bg-amber-50 text-amber-950 border-amber-300'
+                    }`}
+                  >
+                    <div className="flex items-start sm:items-center gap-2">
+                      {lastScanDispatchInfo.deliveredCount > 0 ? (
+                        <Radio className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5 sm:mt-0 animate-pulse" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
+                      )}
+                      <div className="space-y-0.5">
+                        {lastScanDispatchInfo.deliveredCount > 0 ? (
+                          <div className="font-bold">
+                            ✓ {toBengaliNumber(lastScanDispatchInfo.deliveredCount)}টি সংযুক্ত অভিভাবক ড্যাশবোর্ডে লাইভ পাঠানো হয়েছে
+                          </div>
+                        ) : (
+                          <>
+                            <div className="font-bold">
+                              স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই লিংকে ({lastScanDispatchInfo.serverHost}) {lastScanDispatchInfo.student.nameBn}-এর অভিভাবক ফোন এখন সংযুক্ত নেই
+                            </div>
+                            <div className="text-[11px] opacity-90">
+                              অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন।
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {lastScanDispatchInfo.deliveredCount === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer transition ${
+                          copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                        }`}
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>
+                          {copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                            ? 'লিংক কপি হয়েছে ✓'
+                            : 'এই ছাত্রের অভিভাবক লিংক কপি করুন'}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* Disambiguation Candidate Selector (prevents loading wrong student on duplicate name/roll/phone) */}
                 {ambiguousCandidates.length > 0 && (
                   <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 space-y-2">
@@ -3070,6 +3174,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               externalLiveRingingAlert={externalLiveRingingAlert}
               onDismissExternalRingingAlert={onDismissExternalRingingAlert}
               realtimeTransport={realtimeTransport}
+              onForceCheckRealtime={onForceCheckRealtime}
               ackSuccessFeedback={ackSuccessFeedback}
               isSubmittingAck={isSubmittingAck}
               guardianReplyText={guardianReplyText}

@@ -370,6 +370,61 @@ async function startServer() {
 
   const gatepassWsClients = new Set<GatepassWsClient>();
   const gatepassSseClients = new Set<GatepassSseClient>();
+  const recentGuardianPolls = new Map<
+    string,
+    { studentId: string; portalId: string; classId: string; roll: number | null; lastSeenMs: number }
+  >();
+
+  const pruneRecentGuardianPolls = () => {
+    const cutoff = Date.now() - 22000;
+    for (const [k, entry] of recentGuardianPolls.entries()) {
+      if (entry.lastSeenMs < cutoff) {
+        recentGuardianPolls.delete(k);
+      }
+    }
+  };
+
+  const countActiveGuardianSubscribers = (log: any): number => {
+    if (!log) return 0;
+    pruneRecentGuardianPolls();
+    let count = 0;
+    const matchedKeys = new Set<string>();
+
+    for (const client of gatepassWsClients) {
+      if (
+        client.ws.readyState === WebSocket.OPEN &&
+        client.role === 'student' &&
+        shouldDeliverToSubscriber(client, log)
+      ) {
+        count++;
+        matchedKeys.add(
+          `${client.studentId}|${client.portalId}|${client.classId}|${client.roll ?? ''}`
+        );
+      }
+    }
+
+    for (const sseClient of gatepassSseClients) {
+      if (sseClient.role === 'student' && shouldDeliverToSubscriber(sseClient, log)) {
+        const key = `${sseClient.studentId}|${sseClient.portalId}|${sseClient.classId}|${sseClient.roll ?? ''}`;
+        if (!matchedKeys.has(key)) {
+          count++;
+          matchedKeys.add(key);
+        }
+      }
+    }
+
+    for (const [pollKey, entry] of recentGuardianPolls.entries()) {
+      if (
+        !matchedKeys.has(pollKey) &&
+        logMatchesTargetStudent(log, entry.studentId, entry.portalId, entry.classId, entry.roll)
+      ) {
+        count++;
+        matchedKeys.add(pollKey);
+      }
+    }
+
+    return count;
+  };
 
   const computePortalIdQuick = (s: any): string => {
     if (s?.portalUserId && String(s.portalUserId).trim()) {
@@ -1283,12 +1338,15 @@ async function startServer() {
       broadcastGatepassEvent('gatepass:scan', savedLog, {
         ...(updatedAttendanceRecord ? { attendanceRecord: updatedAttendanceRecord } : {}),
       });
+      const deliveredLiveSubscribers = countActiveGuardianSubscribers(savedLog);
 
       return res.json({
         success: true,
         message: 'Gatepass scan logged, attendance saved, and synced across all devices',
         log: savedLog,
         attendanceRecord: updatedAttendanceRecord,
+        deliveredLiveSubscribers,
+        serverInstanceId: SERVER_INSTANCE_ID,
       });
     } catch (err: any) {
       console.error('[Server API] Security scan log error:', err);
@@ -1462,6 +1520,18 @@ async function startServer() {
       const classId = String(req.query.classId || '').trim();
       const rollRaw = Number(req.query.roll);
       const roll = !Number.isNaN(rollRaw) && rollRaw > 0 ? rollRaw : null;
+      const role = String(req.query.role || '').trim();
+
+      if (role === 'student' && (studentId || portalId || (classId && roll))) {
+        const pollKey = `${studentId}|${portalId}|${classId}|${roll ?? ''}`;
+        recentGuardianPolls.set(pollKey, {
+          studentId,
+          portalId,
+          classId,
+          roll,
+          lastSeenMs: Date.now(),
+        });
+      }
 
       const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
 
@@ -1666,22 +1736,35 @@ async function startServer() {
       }
 
       const chunks = splitBengaliTtsChunks(cleaned, 155);
-      const audioBuffers = await Promise.all(
-        chunks.map(async (chunk) => {
-          const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=bn&q=${encodeURIComponent(chunk)}`;
-          const upstream = await fetch(ttsUrl, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-            },
-          });
-          if (!upstream.ok) {
-            throw new Error(`TTS upstream HTTP ${upstream.status}`);
+      const fetchChunkWithRetry = async (chunk: string): Promise<Buffer> => {
+        const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=bn&q=${encodeURIComponent(chunk)}`;
+        let lastErr: any = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const upstream = await fetch(ttsUrl, {
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+              },
+            });
+            if (!upstream.ok) {
+              throw new Error(`TTS upstream HTTP ${upstream.status}`);
+            }
+            const arrBuf = await upstream.arrayBuffer();
+            const buf = Buffer.from(arrBuf);
+            if (buf.length > 0) return buf;
+            throw new Error('Empty upstream TTS chunk');
+          } catch (err) {
+            lastErr = err;
+            if (attempt === 0) {
+              await new Promise((r) => setTimeout(r, 250));
+            }
           }
-          const arrBuf = await upstream.arrayBuffer();
-          return Buffer.from(arrBuf);
-        })
-      );
+        }
+        throw lastErr || new Error('TTS chunk fetch failed');
+      };
+
+      const audioBuffers = await Promise.all(chunks.map((chunk) => fetchChunkWithRetry(chunk)));
 
       const stripLeadingId3v2 = (buf: Buffer): Buffer => {
         if (buf.length >= 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) {

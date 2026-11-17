@@ -10,6 +10,7 @@ import {
   Circle,
   Clock,
   Compass,
+  Copy,
   CreditCard,
   Edit3,
   Globe,
@@ -25,6 +26,7 @@ import {
   Maximize2,
   MessageSquare,
   Plus,
+  RefreshCw,
   Rocket,
   Save,
   Send,
@@ -108,6 +110,7 @@ interface StudentPersonalDashboardProps {
   externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
   onDismissExternalRingingAlert?: () => void;
   realtimeTransport?: RealtimeTransportMode;
+  onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
   ackSuccessFeedback: string | null;
   isSubmittingAck: boolean;
   guardianReplyText: string;
@@ -163,6 +166,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   externalLiveRingingAlert,
   onDismissExternalRingingAlert,
   realtimeTransport,
+  onForceCheckRealtime,
   ackSuccessFeedback,
   isSubmittingAck,
   guardianReplyText,
@@ -201,6 +205,40 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   );
   const [isVoiceCurrentlyPlaying, setIsVoiceCurrentlyPlaying] = useState<boolean>(false);
   const [pendingBlockedAlert, setPendingBlockedAlert] = useState<PendingBlockedSpeechAlert | null>(null);
+  const [isManualChecking, setIsManualChecking] = useState<boolean>(false);
+  const [manualCheckStatus, setManualCheckStatus] = useState<string | null>(null);
+  const [copiedSameServerLink, setCopiedSameServerLink] = useState<boolean>(false);
+
+  const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
+
+  const handleCopySameServerLink = () => {
+    if (typeof window === 'undefined') return;
+    const url = `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(student.id)}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+    setCopiedSameServerLink(true);
+    setTimeout(() => setCopiedSameServerLink(false), 2500);
+  };
+
+  const handleManualForceCheck = async () => {
+    onTestAudio(false);
+    if (!onForceCheckRealtime) return;
+    setIsManualChecking(true);
+    setManualCheckStatus(null);
+    try {
+      const prevLatestId = latestChildAlarm?.id || '';
+      const result = await onForceCheckRealtime();
+      if (result.latestLog && result.latestLog.id !== prevLatestId) {
+        setManualCheckStatus('✓ নতুন গেটপাস বার্তা পাওয়া গেছে!');
+      } else {
+        setManualCheckStatus('✓ সর্বশেষ তথ্য হালনাগাদ হয়েছে');
+      }
+      setTimeout(() => setManualCheckStatus(null), 4000);
+    } finally {
+      setIsManualChecking(false);
+    }
+  };
 
   useEffect(() => {
     const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
@@ -980,7 +1018,19 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {onForceCheckRealtime && (
+                  <button
+                    type="button"
+                    disabled={isManualChecking}
+                    onClick={handleManualForceCheck}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    title="সার্ভার থেকে তাৎক্ষণিক নতুন গেটপাস স্ক্যান পরীক্ষা করুন"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isManualChecking ? 'animate-spin' : ''}`} />
+                    <span>{isManualChecking ? 'চেক হচ্ছে...' : 'এখনই চেক'}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setGuardianAudioEnabled(!guardianAudioEnabled)}
@@ -1004,20 +1054,43 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             </div>
 
-            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-              <span>
-                স্পিকার অবস্থা:{' '}
-                <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
-                  {isHardwareAudioTrulyActive
-                    ? 'সক্রিয় (Web Audio প্রস্তুত)'
-                    : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
-                </strong>
-              </span>
-              <span className="text-slate-400">
-                {cloudUser
-                  ? 'ক্লাউড সিঙ্ক ও লাইভ স্পিকার প্রস্তুত; ফোনের মিডিয়া ভলিউম চালু রাখুন।'
-                  : 'স্কুল স্ক্যানার ও অভিভাবক ফোন অবশ্যই একই ওয়েবসাইট লিংকে খোলা রাখুন এবং মিডিয়া ভলিউম চালু রাখুন।'}
-              </span>
+            {manualCheckStatus && (
+              <div className="px-3 py-2 bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 rounded-xl text-xs font-semibold">
+                {manualCheckStatus}
+              </div>
+            )}
+
+            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  স্পিকার অবস্থা:{' '}
+                  <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
+                    {isHardwareAudioTrulyActive
+                      ? 'সক্রিয় (Web Audio প্রস্তুত)'
+                      : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
+                  </strong>
+                </span>
+                {currentServerHost && (
+                  <span className="text-slate-400 font-mono truncate max-w-xs sm:max-w-sm">
+                    সার্ভার: <strong className="text-slate-200">{currentServerHost}</strong>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopySameServerLink}
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition ${
+                    copiedSameServerLink
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                  }`}
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>{copiedSameServerLink ? 'লিংক কপি ✓' : 'লিংক কপি'}</span>
+                </button>
+              </div>
             </div>
 
             {ackSuccessFeedback && (

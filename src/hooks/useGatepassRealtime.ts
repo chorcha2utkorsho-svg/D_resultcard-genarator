@@ -120,6 +120,7 @@ export function useGatepassRealtime({
   const [connectionTransport, setConnectionTransport] =
     useState<RealtimeTransportMode>('connecting');
   const [lastSyncServerTime, setLastSyncServerTime] = useState<number>(0);
+  const [serverInstanceId, setServerInstanceId] = useState<string>('');
 
   const studentsRef = useRef(students);
   studentsRef.current = students;
@@ -219,7 +220,16 @@ export function useGatepassRealtime({
         }
       }
 
-      if (!isGuardianAudioEnabledPref()) return;
+      if (!isGuardianAudioEnabledPref()) {
+        setPendingBlockedSpeech({
+          message,
+          logId: log.id,
+          studentNameBn: targetStudent.nameBn,
+          action,
+          dailySchedule: currentSchedule,
+        });
+        return;
+      }
 
       playAlarmChime();
       showGuardianSystemNotification(
@@ -466,6 +476,9 @@ export function useGatepassRealtime({
         if (isDisposed || !data || !Array.isArray(data.logs)) return;
 
         setLastSyncServerTime(Date.now());
+        if (typeof data.serverInstanceId === 'string' && data.serverInstanceId) {
+          setServerInstanceId(data.serverInstanceId);
+        }
         if (!wsConnected && !sseConnected) {
           setConnectionTransport('polling');
         }
@@ -679,6 +692,80 @@ export function useGatepassRealtime({
     triggerAlertForStudent,
   ]);
 
+  const forceCheckNow = useCallback(async (): Promise<{
+    foundCount: number;
+    latestLog: SecurityGatepassLog | null;
+  }> => {
+    if (role === 'student') {
+      unlockMobileAudioAndSpeech(true);
+      if (isGuardianAudioEnabledPref()) {
+        setGuardianLiveWatchActive(true);
+      }
+    }
+    try {
+      const params = new URLSearchParams();
+      params.set('since', '0');
+      if (role) params.set('role', role);
+      if (role === 'student') {
+        if (effectiveStudentId) params.set('studentId', effectiveStudentId);
+        if (effectivePortalId) params.set('portalId', effectivePortalId);
+        if (effectiveClassId) params.set('classId', effectiveClassId);
+        if (effectiveRoll) params.set('roll', String(effectiveRoll));
+      }
+      const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) return { foundCount: 0, latestLog: null };
+      const data = await res.json();
+      setLastSyncServerTime(Date.now());
+      if (typeof data?.serverInstanceId === 'string' && data.serverInstanceId) {
+        setServerInstanceId(data.serverInstanceId);
+      }
+      const serverLogs: SecurityGatepassLog[] = Array.isArray(data?.logs) ? data.logs : [];
+      const serverNow = typeof data?.serverTime === 'number' ? data.serverTime : Date.now();
+      let matchingCount = 0;
+      let newestMatching: SecurityGatepassLog | null = null;
+      let unplayedRecent: SecurityGatepassLog | null = null;
+
+      for (const item of serverLogs) {
+        if (!item || !item.id) continue;
+        addSecurityLog(item);
+        markGatepassLogSeen(item.id);
+        if (role === 'student' && isMatchingStudentLog(item)) {
+          matchingCount += 1;
+          if (!newestMatching) newestMatching = item;
+          const logMs =
+            typeof item.serverTimestamp === 'number'
+              ? item.serverTimestamp
+              : new Date(item.timestamp).getTime() || 0;
+          if (
+            !unplayedRecent &&
+            !hasPlayedGuardianVoiceLog(item.id) &&
+            logMs >= serverNow - 15 * 60 * 1000
+          ) {
+            unplayedRecent = item;
+          }
+        }
+      }
+
+      if (unplayedRecent) {
+        triggerAlertForStudent(unplayedRecent);
+      }
+      return { foundCount: matchingCount, latestLog: newestMatching };
+    } catch {
+      return { foundCount: 0, latestLog: null };
+    }
+  }, [
+    role,
+    effectiveStudentId,
+    effectivePortalId,
+    effectiveClassId,
+    effectiveRoll,
+    addSecurityLog,
+    isMatchingStudentLog,
+    triggerAlertForStudent,
+  ]);
+
   return {
     liveRingingAlert,
     dismissLiveRingingAlert: () => {
@@ -687,5 +774,7 @@ export function useGatepassRealtime({
     },
     connectionTransport,
     lastSyncServerTime,
+    serverInstanceId,
+    forceCheckNow,
   };
 }

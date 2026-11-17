@@ -134,8 +134,11 @@ export interface PendingBlockedSpeechAlert {
 
 let pendingBlockedAlert: PendingBlockedSpeechAlert | null = null;
 
-// Memory LRU cache of fetched single-sentence MP3 ArrayBuffers so repeat alerts start in <5ms
+// Memory LRU cache of fetched single-sentence MP3 ArrayBuffers & decoded AudioBuffers for instant 0ms playback
 const ttsArrayBufferCache = new Map<string, ArrayBuffer>();
+const decodedAudioBufferCache = new Map<string, AudioBuffer>();
+let hwWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+let lastObservedCtxState: AudioContextState | 'unavailable' = 'unavailable';
 const activeUtterances = new Set<SpeechSynthesisUtterance>();
 const unlockSubscribers = new Set<(unlocked: boolean) => void>();
 const statusSubscribers = new Set<(status: GuardianAudioHardwareStatus) => void>();
@@ -371,20 +374,66 @@ function updateGuardianMediaSession(studentNameBn?: string) {
   }
 }
 
+function syncHardwareStateSnapshot(attemptResume = false): void {
+  const ctx = sharedAudioCtx;
+  if (attemptResume && liveWatchDesired && ctx && ctx.state === 'suspended') {
+    ctx
+      .resume()
+      .then(() => {
+        if (ctx.state === 'running' && liveWatchDesired) {
+          audioUnlockedInSession = true;
+          startSubAudibleKeepAlive(ctx);
+        }
+        lastObservedCtxState = ctx.state;
+        notifyUnlockSubscribers();
+      })
+      .catch(() => {
+        lastObservedCtxState = ctx.state;
+        notifyUnlockSubscribers();
+      });
+    return;
+  }
+  const currentState: AudioContextState | 'unavailable' = ctx ? ctx.state : 'unavailable';
+  if (currentState !== lastObservedCtxState) {
+    lastObservedCtxState = currentState;
+    if (currentState === 'running' && liveWatchDesired) {
+      audioUnlockedInSession = true;
+      if (ctx) startSubAudibleKeepAlive(ctx);
+    }
+    notifyUnlockSubscribers();
+  }
+}
+
+function startHardwareStateWatchdog(): void {
+  if (typeof window === 'undefined' || hwWatchdogTimer) return;
+  hwWatchdogTimer = setInterval(() => {
+    if (!liveWatchDesired) return;
+    syncHardwareStateSnapshot(false);
+  }, 4000);
+}
+
+function stopHardwareStateWatchdog(): void {
+  if (hwWatchdogTimer) {
+    clearInterval(hwWatchdogTimer);
+    hwWatchdogTimer = null;
+  }
+}
+
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && liveWatchDesired) {
-      const ctx = getSharedAudioContext();
-      if (ctx) {
-        ctx
-          .resume()
-          .then(() => {
-            if (ctx.state === 'running' && liveWatchDesired) {
-              startSubAudibleKeepAlive(ctx);
-            }
-          })
-          .catch(() => {});
+    if (document.visibilityState === 'visible') {
+      syncHardwareStateSnapshot(liveWatchDesired);
+      if (liveWatchDesired) {
+        void acquireWakeLock();
       }
+    }
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', () => {
+    syncHardwareStateSnapshot(liveWatchDesired);
+    if (liveWatchDesired) {
       void acquireWakeLock();
     }
   });
@@ -396,6 +445,7 @@ if (typeof document !== 'undefined') {
 export function setGuardianLiveWatchActive(active: boolean): void {
   liveWatchDesired = active;
   if (active) {
+    startHardwareStateWatchdog();
     const ctx = getSharedAudioContext();
     if (ctx) {
       ctx
@@ -405,12 +455,17 @@ export function setGuardianLiveWatchActive(active: boolean): void {
             audioUnlockedInSession = true;
             startSubAudibleKeepAlive(ctx);
           }
+          lastObservedCtxState = ctx.state;
           notifyUnlockSubscribers();
         })
-        .catch(() => {});
+        .catch(() => {
+          lastObservedCtxState = ctx.state;
+          notifyUnlockSubscribers();
+        });
     }
     void acquireWakeLock();
   } else {
+    stopHardwareStateWatchdog();
     stopSubAudibleKeepAlive();
     releaseWakeLock();
     notifyUnlockSubscribers();
@@ -822,11 +877,25 @@ export async function prewarmGuardianVoiceCache(
 
   for (const chunk of uniqueChunks) {
     const key = chunk.slice(0, 200);
-    if (ttsArrayBufferCache.has(key)) continue;
-    try {
-      await fetchSingleChunkTtsBuffer(chunk);
-    } catch {
-      // Non-fatal prewarm skip
+    let buf: ArrayBuffer | null = ttsArrayBufferCache.get(key) || null;
+    if (!buf) {
+      try {
+        buf = await fetchSingleChunkTtsBuffer(chunk);
+      } catch {
+        buf = null;
+      }
+    }
+    if (buf && !decodedAudioBufferCache.has(key) && sharedAudioCtx && sharedAudioCtx.state === 'running') {
+      try {
+        const decoded = await sharedAudioCtx.decodeAudioData(buf.slice(0));
+        if (decodedAudioBufferCache.size >= 80) {
+          const oldest = decodedAudioBufferCache.keys().next().value;
+          if (oldest) decodedAudioBufferCache.delete(oldest);
+        }
+        decodedAudioBufferCache.set(key, decoded);
+      } catch {
+        // Non-fatal decode prewarm skip
+      }
     }
   }
 }
@@ -917,10 +986,18 @@ async function playChunksViaWebAudio(
     let started = false;
     for (let i = 0; i < chunks.length; i++) {
       if (runToken !== currentSpeechRunToken) return true;
-      const rawBuf = buffers[i];
-      if (!rawBuf || rawBuf.byteLength === 0) continue;
-
-      const decoded = await ctx.decodeAudioData(rawBuf.slice(0));
+      const chunkKey = chunks[i].slice(0, 200);
+      let decoded = decodedAudioBufferCache.get(chunkKey);
+      if (!decoded) {
+        const rawBuf = buffers[i];
+        if (!rawBuf || rawBuf.byteLength === 0) continue;
+        decoded = await ctx.decodeAudioData(rawBuf.slice(0));
+        if (decodedAudioBufferCache.size >= 80) {
+          const oldest = decodedAudioBufferCache.keys().next().value;
+          if (oldest) decodedAudioBufferCache.delete(oldest);
+        }
+        decodedAudioBufferCache.set(chunkKey, decoded);
+      }
       if (runToken !== currentSpeechRunToken) return true;
 
       if (!started) {

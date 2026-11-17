@@ -116,6 +116,7 @@ function MainContent() {
     liveRingingAlert,
     dismissLiveRingingAlert,
     connectionTransport,
+    forceCheckNow,
   } = useGatepassRealtime({
     role: authSession?.role,
     studentId: authSession?.role === 'student' ? authSession.accountId : null,
@@ -428,6 +429,7 @@ function MainContent() {
                 externalLiveRingingAlert={liveRingingAlert}
                 onDismissExternalRingingAlert={dismissLiveRingingAlert}
                 realtimeTransport={connectionTransport}
+                onForceCheckRealtime={forceCheckNow}
                 onRoleLogout={handleLogout}
                 isDeviceLocked={isDeviceLocked}
                 onInstallLockedDashboard={handleInstallLockedDashboard}

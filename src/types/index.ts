@@ -237,6 +237,9 @@ export interface StudentAchievement {
 export interface SecurityGatepassLog {
   id: string;
   studentId: string;
+  portalUserId?: string;
+  classId?: string;
+  section?: string;
   studentNameBn: string;
   studentRoll: number;
   classNameBn: string;
@@ -248,6 +251,7 @@ export interface SecurityGatepassLog {
   smsDispatched: boolean;
   status: 'verified' | 'flagged';
   operatorNote?: string;
+  studentEtiquetteReply?: string;
   guardianAcknowledged?: boolean;
   acknowledgedAt?: string;
   guardianResponse?: string;

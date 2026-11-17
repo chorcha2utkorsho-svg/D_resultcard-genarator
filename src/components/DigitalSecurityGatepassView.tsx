@@ -50,6 +50,9 @@ import {
   XCircle,
   Settings,
   RotateCcw,
+  Mic,
+  MicOff,
+  Wifi,
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
@@ -81,6 +84,8 @@ import {
   setPendingBlockedSpeech,
   showGuardianSystemNotification,
   speakBengaliSpeech,
+  speakRepeatedGuardianAlert,
+  stopBengaliSpeech,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 import {
@@ -128,8 +133,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     batchUpdateStudentPhotos,
     securityLogs,
     addSecurityLog,
+    updateSecurityLogEtiquette,
     acknowledgeSecurityLog,
     clearSecurityLogs,
+    markStudentAttendanceFromScan,
+    upsertAttendanceRecordFromServer,
     selectedClassId,
     selectedYear,
     isServerSyncing,
@@ -193,6 +201,22 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
   const lastAmbiguousQueryRef = useRef<string>('');
+  const [autoInstantScanGreeting, setAutoInstantScanGreeting] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('dlikon_auto_instant_scan_greeting') === 'true';
+  });
+  const [lastScanEtiquette, setLastScanEtiquette] = useState<{
+    logId: string;
+    studentId: string;
+    studentNameBn: string;
+    salamText: string;
+    replied: boolean;
+    replyText?: string;
+    attendanceSaved?: boolean;
+  } | null>(null);
+  const [isListeningEtiquette, setIsListeningEtiquette] = useState<boolean>(false);
+  const [etiquetteSpeechError, setEtiquetteSpeechError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
   const [pendingScanConfirmation, setPendingScanConfirmation] = useState<{
     student: Student;
     classNameBn: string;
@@ -211,6 +235,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   useEffect(() => {
     pendingScanConfirmationRef.current = pendingScanConfirmation;
   }, [pendingScanConfirmation]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        'dlikon_auto_instant_scan_greeting',
+        autoInstantScanGreeting ? 'true' : 'false'
+      );
+    }
+  }, [autoInstantScanGreeting]);
 
   // QR Scanner Event Audit State
   const [scannerAuditLogs, setScannerAuditLogs] = useState<ScannerAuditEvent[]>([]);
@@ -410,7 +443,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     });
   };
 
-  // Perform Gate Verification and Broadcast
+  // Perform Gate Verification, Main-DB Attendance Sync, Warm Salam Greeting, and Guardian Push
   const handleVerifyStudent = (
     student: Student,
     options: { skipBeep?: boolean; forceVoice?: boolean } = {}
@@ -419,6 +452,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const studentClass = classes.find((c) => c.id === student.classId);
     const classNameBn = studentClass?.nameBn || 'শ্রেণি';
     const actionLabel = gateAction === 'entry' ? 'বিদ্যালয়ে প্রবেশ' : 'বিদ্যালয় থেকে প্রস্থান';
+    const nowIso = new Date().toISOString();
+    const portalIdCode = getStudentPortalId(student);
 
     const voiceMsg = buildScannerVoiceMessage(
       student,
@@ -437,23 +472,29 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const newLogRecord: SecurityGatepassLog = {
       id: `sec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       studentId: student.id,
+      portalUserId: portalIdCode,
+      classId: student.classId,
+      section: student.section || 'ক',
       studentNameBn: student.nameBn,
       studentRoll: student.roll,
       classNameBn,
       action: gateAction,
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
       guardianPhone,
       voiceDispatched: Boolean(voiceEnabled || options.forceVoice),
       smsDispatched: smsSimulationEnabled,
       status: 'verified',
-      operatorNote: `${actionLabel} সফলভাবে সম্পন্ন হয়েছে`,
+      operatorNote: `${actionLabel} সফল হয়েছে · দৈনিক হাজিরা সংরক্ষিত`,
     };
 
-    // 2. Add security log locally & notify same-browser tabs
+    // 2. Immediately persist today's attendance in Main DB / SchoolContext & notify Attendance app
+    markStudentAttendanceFromScan(student, gateAction, nowIso);
+
+    // 2b. Add security log locally & notify same-browser tabs
     addSecurityLog(newLogRecord);
     broadcastLocalGatepassScan(newLogRecord);
 
-    // 2b. Broadcast to central server (WebSocket + SSE push to all connected guardian phones) + Cloud Firestore
+    // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     try {
       fetch('/api/security/scan', {
@@ -467,6 +508,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           if (data?.log) {
             addSecurityLog(data.log);
           }
+          if (data?.attendanceRecord) {
+            upsertAttendanceRecordFromServer(data.attendanceRecord);
+          }
         })
         .catch((err) => console.warn('Gate log sync error:', err));
     } catch {
@@ -476,14 +520,23 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setAmbiguousCandidates([]);
     setRecentScannedStudent(student);
     setLiveAnnouncement(voiceMsg);
+    setLastScanEtiquette({
+      logId: newLogRecord.id,
+      studentId: student.id,
+      studentNameBn: student.nameBn,
+      salamText: voiceMsg,
+      replied: false,
+      attendanceSaved: true,
+    });
+    setEtiquetteSpeechError(null);
     setScannerFeedback(
-      `✓ ${student.nameBn} (${classNameBn}, রোল ${toBengaliRoll(student.roll)}) — ${actionLabel} অনুমোদিত!`
+      `✓ ${student.nameBn} (${classNameBn}, রোল ${toBengaliRoll(student.roll)}) — সালাম জানানো হয়েছে ও আজকের হাজিরা এটেনডেন্স এপে সংরক্ষিত!`
     );
 
-    // 3. Play Bengali Voice Announcement on scanner device
+    // 3. Play Bengali Warm Salam & Good Wishes Announcement on School Scanner Device
     if (options.forceVoice || voiceEnabled) {
       speakBengali(voiceMsg, Boolean(options.forceVoice), {
-        delayMs: soundBeepEnabled && !options.skipBeep ? 140 : 0,
+        delayMs: soundBeepEnabled && !options.skipBeep ? 120 : 0,
       });
     }
 
@@ -492,10 +545,87 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     setTimeout(() => {
       setScannerFeedback(null);
-    }, 4500);
+    }, 5000);
   };
 
-  // Open confirmation modal after a scan/match so operator verifies photo, name & class before playing 'স্বাগতম' audio
+  // Student Etiquette Practice Handler ("ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ")
+  const handleStudentEtiquetteReply = (replyPhrase = 'ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ') => {
+    if (!lastScanEtiquette) return;
+    unlockMobileAudioAndSpeech(true);
+    setIsListeningEtiquette(false);
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+    }
+    setLastScanEtiquette((prev) =>
+      prev ? { ...prev, replied: true, replyText: replyPhrase } : prev
+    );
+    void updateSecurityLogEtiquette(lastScanEtiquette.logId, replyPhrase);
+    const praiseMsg = `মাশাআল্লাহ ${lastScanEtiquette.studentNameBn}! তোমার চমৎকার সালাম ও শিষ্টাচারিতার জন্য অনেক ধন্যবাদ। ক্লাসে মনোযোগী হও।`;
+    speakBengali(praiseMsg, true, { delayMs: 80 });
+  };
+
+  const handleListenStudentEtiquetteVoice = () => {
+    if (!lastScanEtiquette) return;
+    setEtiquetteSpeechError(null);
+    const SpeechRec =
+      typeof window !== 'undefined'
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : null;
+    if (!SpeechRec) {
+      setEtiquetteSpeechError('এই ব্রাউজারে মাইক্রোফোন ভয়েস শনাক্তকরণ নেই — পাশের সবুজ বাটনে ট্যাপ করুন।');
+      return;
+    }
+    if (isListeningEtiquette && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      setIsListeningEtiquette(false);
+      return;
+    }
+    try {
+      const rec = new SpeechRec();
+      rec.lang = 'bn-BD';
+      rec.interimResults = true;
+      rec.maxAlternatives = 3;
+      recognitionRef.current = rec;
+      setIsListeningEtiquette(true);
+
+      rec.onresult = (event: any) => {
+        const transcript = Array.from(event.results || [])
+          .map((r: any) => r[0]?.transcript || '')
+          .join(' ')
+          .toLowerCase();
+        if (
+          transcript.includes('ওয়ালাইকুম') ||
+          transcript.includes('আলাইকুম') ||
+          transcript.includes('সালাম') ||
+          transcript.includes('walaikum') ||
+          transcript.includes('salam') ||
+          event.results?.[0]?.isFinal
+        ) {
+          handleStudentEtiquetteReply('ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ (কণ্ঠে উচ্চারিত)');
+        }
+      };
+
+      rec.onerror = () => {
+        setIsListeningEtiquette(false);
+        setEtiquetteSpeechError('মাইক্রোফোনে স্পষ্ট শোনা যায়নি — সরাসরি বোতামে ট্যাপ করে উত্তর সম্পন্ন করুন।');
+      };
+
+      rec.onend = () => {
+        setIsListeningEtiquette(false);
+      };
+
+      rec.start();
+    } catch {
+      setIsListeningEtiquette(false);
+      setEtiquetteSpeechError('মাইক্রোফোন চালু করা যায়নি — সরাসরি বোতামে ট্যাপ করুন।');
+    }
+  };
+
+  // Open confirmation modal OR trigger immediate auto-salam greeting after a scan/match
   const openScanConfirmationModal = (
     student: Student,
     matchedBy: string,
@@ -505,6 +635,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const classNameBn = classes.find((c) => c.id === student.classId)?.nameBn || 'শ্রেণি';
     if (soundBeepEnabled) {
       playScannerBeep();
+    }
+    if (autoInstantScanGreeting) {
+      lastScannedPayloadRef.current = rawPayload;
+      lastScannedTimeRef.current = Date.now();
+      pendingScanConfirmationRef.current = null;
+      setPendingScanConfirmation(null);
+      handleVerifyStudent(student, { skipBeep: true, forceVoice: true });
+      return;
     }
     const nextPending = {
       student,
@@ -1068,10 +1206,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setTimeout(() => setCopiedGuardianLinkId(null), 2500);
   };
 
-  // Filter logs strictly for logged in guardian's child
+  // Filter logs strictly for logged in guardian's child (matches ID, Portal ID, or Class+Roll)
   const guardianChildLogs = useMemo(() => {
     if (!loggedInGuardianStudent) return [];
-    return securityLogs.filter((log) => log.studentId === loggedInGuardianStudent.id);
+    const targetPortalId = getStudentPortalId(loggedInGuardianStudent).toUpperCase();
+    return securityLogs.filter(
+      (log) =>
+        log.studentId === loggedInGuardianStudent.id ||
+        (log.portalUserId && log.portalUserId.toUpperCase() === targetPortalId) ||
+        (log.classId === loggedInGuardianStudent.classId &&
+          Number(log.studentRoll) === Number(loggedInGuardianStudent.roll))
+    );
   }, [securityLogs, loggedInGuardianStudent]);
 
   const latestChildAlarm = guardianChildLogs[0] || null;
@@ -1127,19 +1272,23 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     playAlarmChime();
 
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
-    const msg = playDemo && targetStudent
-      ? buildGuardianVoiceMessage(targetStudent, 'entry')
-      : targetStudent
-      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে। এখন কার্ড স্ক্যান হলেই অডিও বেজে উঠবে।`
-      : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় হয়েছে।`;
-
-    speakBengali(msg, true, { delayMs: 280 });
+    if (playDemo && targetStudent) {
+      speakRepeatedGuardianAlert(targetStudent, 'entry', activeDailySchedule, {
+        repeatCount: 3,
+        delayMs: 240,
+      });
+    } else {
+      const msg = targetStudent
+        ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে। এখন স্কুলে কার্ড স্ক্যান হলেই এই ফোনে ${targetStudent.nameBn}-এর নাম ধরে বার্তা বেজে উঠবে।`
+        : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় হয়েছে।`;
+      speakBengali(msg, true, { delayMs: 240 });
+    }
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
       } catch {}
     }
-    setTimeout(() => setIsGuardianAlarmRinging(false), 4500);
+    setTimeout(() => setIsGuardianAlarmRinging(false), playDemo ? 18000 : 5000);
   };
 
   // Keep latest signed-in student ref synced without resetting poll timers on profile edits
@@ -1166,6 +1315,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     let isSubscribed = true;
 
+    const matchesSignedStudent = (log: any, studentObj: Student) => {
+      if (!log) return false;
+      if (log.studentId === studentObj.id) return true;
+      const pid = getStudentPortalId(studentObj).toUpperCase();
+      if (log.portalUserId && String(log.portalUserId).toUpperCase() === pid) return true;
+      if (log.classId === studentObj.classId && Number(log.studentRoll) === Number(studentObj.roll)) return true;
+      return false;
+    };
+
     const triggerVoiceAlarmForLog = (studentObj: Student, log: SecurityGatepassLog) => {
       if (hasPlayedGuardianVoiceLog(log.id)) return;
       markGuardianVoiceLogPlayed(log.id);
@@ -1173,19 +1331,26 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       if (guardianAudioEnabled) {
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
-        const announcement = buildGuardianVoiceMessage(studentObj, log.action);
+        const action: 'entry' | 'exit' = log.action === 'exit' ? 'exit' : 'entry';
+        const announcement = buildGuardianVoiceMessage(studentObj, action);
         showGuardianSystemNotification(
-          `${schoolInfo.name} • লাইভ গেটপাস`,
+          `${schoolInfo.name} • ${studentObj.nameBn}`,
           announcement
         );
-        speakBengali(announcement, true, {
-          delayMs: 260,
-          logId: log.id,
-          studentNameBn: studentObj.nameBn,
-          action: log.action,
+        speakRepeatedGuardianAlert(studentObj, action, activeDailySchedule, {
+          repeatCount: 3,
+          delayMs: 240,
+          onBlocked: () => {
+            setPendingBlockedSpeech({
+              message: announcement,
+              logId: log.id,
+              studentNameBn: studentObj.nameBn,
+              action,
+            });
+          },
         });
 
-        setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
+        setTimeout(() => setIsGuardianAlarmRinging(false), 26000);
       }
 
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -1202,10 +1367,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       try {
         const sinceParam =
           hasBaselinePollRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 5000)
+            ? Math.max(0, lastServerTimeRef.current - 6000)
             : 0;
+        const pid = getStudentPortalId(signedStudent);
         const res = await fetch(
-          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}`,
+          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}&portalId=${encodeURIComponent(pid)}`,
           { cache: 'no-store' }
         );
         if (!res.ok) return;
@@ -1221,7 +1387,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
           let newestLogToAlert: any = null;
           for (const log of serverLogs) {
-            if (log.studentId === signedStudent.id) {
+            if (matchesSignedStudent(log, signedStudent)) {
               addSecurityLog(log);
               markGatepassLogSeen(log.id);
               const alreadyPlayed = hasPlayedGuardianVoiceLog(log.id);
@@ -1229,7 +1395,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                 typeof log.serverTimestamp === 'number'
                   ? log.serverTimestamp
                   : new Date(log.timestamp).getTime() || 0;
-              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 45000 && !log.guardianAcknowledged) {
+              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 75000 && !log.guardianAcknowledged) {
                 newestLogToAlert = log;
               } else if (!alreadyPlayed) {
                 markGuardianVoiceLogPlayed(log.id);
@@ -1246,7 +1412,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         let freshLogToAlert: any = null;
 
         for (const log of serverLogs) {
-          if (log.studentId === signedStudent.id) {
+          if (matchesSignedStudent(log, signedStudent)) {
             addSecurityLog(log);
             markGatepassLogSeen(log.id);
             const sTime =
@@ -1264,7 +1430,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           }
         }
 
-        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, maxSeenTime, serverNow - 2000);
+        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, maxSeenTime, serverNow - 3000);
         if (freshLogToAlert) {
           triggerVoiceAlarmForLog(signedStudent, freshLogToAlert);
         }
@@ -2016,16 +2182,30 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
                     <button
                       type="button"
+                      onClick={() => setAutoInstantScanGreeting((prev) => !prev)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                        autoInstantScanGreeting
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-xs'
+                          : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                      }`}
+                      title="স্ক্যান হওয়া মাত্রই নিশ্চিতকরণ ছাড়াই সরাসরি সালাম, হাজিরা ও অভিভাবক ভয়েস পাঠান"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>তাৎক্ষণিক অটো-সালাম {autoInstantScanGreeting ? 'চালু ✓' : 'বন্ধ'}</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setShowWelcomeAudioEditor(!showWelcomeAudioEditor)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer ${
                         showWelcomeAudioEditor
                           ? 'bg-slate-900 border-slate-900 text-white shadow-xs'
                           : 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-950'
                       }`}
-                      title="স্ক্যান সফল হওয়ার পর বাজানো স্বাগতম/বিদায় অডিও বার্তার টেক্সট পরিবর্তন করুন"
+                      title="স্ক্যান সফল হওয়ার পর বাজানো সালাম/স্বাগতম/বিদায় অডিও বার্তার টেক্সট পরিবর্তন করুন"
                     >
                       <Settings className="w-3.5 h-3.5" />
-                      <span>স্বাগতম অডিও সেটিংস</span>
+                      <span>সালাম ও স্বাগতম অডিও সেটিংস</span>
                     </button>
                   </div>
                 </div>
@@ -2566,15 +2746,89 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         </div>
                       </div>
 
-                      <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex items-center justify-between">
+                      <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 font-bold text-indigo-950">
                           <Phone className="w-4 h-4 text-indigo-600" />
                           <span>অভিভাবক মোবাইল: {recentScannedStudent.guardianPhone || recentScannedStudent.fatherPhone || '-'}</span>
                         </div>
-                        <span className="text-emerald-700 font-bold text-[11px]">✓ লাইভ এলার্ম প্রেরিত</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-emerald-700 font-bold text-[11px]">✓ হাজিরা ও লাইভ এলার্ম প্রেরিত</span>
+                        </div>
                       </div>
                     </div>
                   </div>
+
+                  {/* Interactive Islamic Salam & Student Etiquette Practice ("শিষ্টাচারিতার অনুশীলন") */}
+                  {lastScanEtiquette && lastScanEtiquette.studentId === recentScannedStudent.id && (
+                    <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 text-emerald-700 shrink-0" />
+                          <span className="text-xs sm:text-sm font-bold text-emerald-950">
+                            সালাম বিনিময় ও শিষ্টাচারিতা অনুশীলন (School Gate Etiquette)
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-bold text-emerald-800 bg-white px-2.5 py-0.5 rounded-full border border-emerald-200">
+                          ✓ এটেনডেন্স এপে উপস্থিতি সংরক্ষিত
+                        </span>
+                      </div>
+
+                      <div className="bg-white/90 rounded-lg p-3 border border-emerald-200 text-xs text-slate-800 space-y-1">
+                        <div className="font-bold text-indigo-900">বিদ্যালয়ের ডিভাইস শিক্ষার্থীকে বলছে:</div>
+                        <p className="leading-relaxed text-slate-900">"{lastScanEtiquette.salamText}"</p>
+                      </div>
+
+                      {lastScanEtiquette.replied ? (
+                        <div className="bg-emerald-700 text-white rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2 font-bold">
+                            <CheckCircle2 className="w-4 h-4 text-amber-300 shrink-0" />
+                            <span>
+                              মাশাআল্লাহ! {lastScanEtiquette.studentNameBn} উত্তর দিয়েছে: "{lastScanEtiquette.replyText}"
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-emerald-100">শিষ্টাচার অনুশীলন সম্পন্ন ও লগে যুক্ত ✓</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-xs font-bold text-emerald-950">
+                            এবার শিক্ষার্থী সালামের জবাব বলবে (১ ক্লিক বা কণ্ঠে):
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleStudentEtiquetteReply('ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ')}
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            >
+                              <Check className="w-4 h-4" />
+                              <span>শিক্ষার্থী বলছে: ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ ✓</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleListenStudentEtiquetteVoice}
+                              className={`px-3.5 py-2 rounded-xl font-bold text-xs border transition flex items-center gap-1.5 cursor-pointer ${
+                                isListeningEtiquette
+                                  ? 'bg-rose-600 text-white border-rose-700 animate-pulse'
+                                  : 'bg-white hover:bg-emerald-100 text-emerald-900 border-emerald-300'
+                              }`}
+                            >
+                              {isListeningEtiquette ? (
+                                <MicOff className="w-4 h-4" />
+                              ) : (
+                                <Mic className="w-4 h-4 text-emerald-700" />
+                              )}
+                              <span>
+                                {isListeningEtiquette ? 'শুনছি... "ওয়ালাইকুম" বলুন' : 'মাইক্রোফোনে জবাব শুনুন'}
+                              </span>
+                            </button>
+                          </div>
+                          {etiquetteSpeechError && (
+                            <p className="text-[11px] text-amber-800 font-medium">{etiquetteSpeechError}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2706,6 +2960,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         </select>
                       </div>
 
+                      <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-[11.5px] text-amber-950 space-y-1 leading-relaxed">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <Wifi className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                          <span>দুটি আলাদা ফোনে লাইভ পরীক্ষা করার জরুরি নির্দেশনা:</span>
+                        </div>
+                        <p>
+                          স্কুল স্ক্যানার ফোন ও অভিভাবকের স্মার্টফোন <strong>অবশ্যই একই ওয়েবসাইট ঠিকানায়</strong> (নিচের কপি করা লিংক) চালু রাখতে হবে এবং অভিভাবকের ড্যাশবোর্ডে ঢুকে একবার <strong>"ভয়েস এলার্ম চালু করুন"</strong> বাটনে ট্যাপ করতে হবে। তাহলে স্ক্যান হওয়া মাত্রই নাম ধরে স্পষ্ট বাংলা ভয়েস এলার্ম বাজবে।
+                        </p>
+                      </div>
+
                       <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
                         {students
                           .filter((s) => s.classId === guardianShareClassId)
@@ -2779,12 +3043,20 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               guardianReplyText={guardianReplyText}
               setGuardianReplyText={setGuardianReplyText}
               onTestAudio={handleTestGuardianAudio}
+              onStopAudio={() => {
+                stopBengaliSpeech();
+                setIsGuardianAlarmRinging(false);
+              }}
               onReplayAlarm={(log) => {
                 setPendingBlockedSpeech(null);
                 unlockMobileAudioAndSpeech(true);
                 playAlarmChime();
-                const msg = buildGuardianVoiceMessage(activeSignedInStudent, log.action);
-                speakBengali(msg, true, { delayMs: 280 });
+                speakRepeatedGuardianAlert(
+                  activeSignedInStudent,
+                  log.action === 'exit' ? 'exit' : 'entry',
+                  activeDailySchedule,
+                  { repeatCount: 3, delayMs: 220 }
+                );
               }}
               onAcknowledgeAlarm={handleGuardianAcknowledge}
               buildGuardianVoiceMessage={buildGuardianVoiceMessage}
@@ -4553,8 +4825,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
                     <span>
                       {gateAction === 'entry'
-                        ? "'স্বাগতম' অডিও বার্তা (নিশ্চিত করলে বাজবে):"
-                        : "'বিদায়' অডিও বার্তা (নিশ্চিত করলে বাজবে):"}
+                        ? "সালাম ও 'স্বাগতম' অডিও বার্তা (নিশ্চিত করলে বাজবে):"
+                        : "সালাম ও 'বিদায়' অডিও বার্তা (নিশ্চিত করলে বাজবে):"}
                     </span>
                   </div>
                   <p className="text-xs text-emerald-950 leading-relaxed font-medium">
@@ -4581,8 +4853,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <Volume2 className="w-4 h-4 shrink-0" />
                     <span>
                       {gateAction === 'entry'
-                        ? "নিশ্চিত করুন ও 'স্বাগতম' অডিও বাজান"
-                        : "নিশ্চিত করুন ও 'বিদায়' অডিও বাজান"}
+                        ? "নিশ্চিত করুন, সালাম বলুন ও হাজিরা দিন"
+                        : "নিশ্চিত করুন ও সালামসহ 'বিদায়' বলুন"}
                     </span>
                   </button>
                 </div>

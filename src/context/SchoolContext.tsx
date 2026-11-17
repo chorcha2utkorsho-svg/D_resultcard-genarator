@@ -229,6 +229,12 @@ interface SchoolContextType {
     academicYear: string,
     records: Record<string, { status: AttendanceStatus; remarks?: string }>
   ) => void;
+  markStudentAttendanceFromScan: (
+    student: Pick<Student, 'id' | 'classId' | 'section' | 'academicYear'>,
+    action: 'entry' | 'exit',
+    timestampIso?: string
+  ) => { date: string; classId: string; section: string };
+  upsertAttendanceRecordFromServer: (record: DailyAttendanceRecord) => void;
   getDailyAttendance: (classId: string, section: string, date: string) => DailyAttendanceRecord | undefined;
   getMonthlyAttendance: (
     classId: string,
@@ -312,6 +318,7 @@ interface SchoolContextType {
   addSecurityLog: (
     log: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
   ) => SecurityGatepassLog;
+  updateSecurityLogEtiquette: (logId: string, replyText: string) => Promise<void>;
   acknowledgeSecurityLog: (
     logId: string,
     guardianResponse: string,
@@ -2267,6 +2274,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           updated[existingIdx] = {
             ...updated[existingIdx],
             ...newLog,
+            portalUserId: newLog.portalUserId || updated[existingIdx].portalUserId,
+            classId: newLog.classId || updated[existingIdx].classId,
+            section: newLog.section || updated[existingIdx].section,
+            studentEtiquetteReply:
+              newLog.studentEtiquetteReply || updated[existingIdx].studentEtiquetteReply,
             guardianAcknowledged: Boolean(
               updated[existingIdx].guardianAcknowledged || newLog.guardianAcknowledged
             ),
@@ -2282,6 +2294,22 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     },
     []
   );
+
+  const updateSecurityLogEtiquette = useCallback(async (logId: string, replyText: string) => {
+    const cleanReply = replyText.trim() || 'ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ';
+    setSecurityLogs((prev) =>
+      prev.map((l) => (l.id === logId ? { ...l, studentEtiquetteReply: cleanReply } : l))
+    );
+    try {
+      await fetch('/api/security/etiquette', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logId, studentEtiquetteReply: cleanReply }),
+      });
+    } catch {
+      // Non-fatal
+    }
+  }, []);
 
   const broadcastSecurityLogToCloud = useCallback(
     async (log: SecurityGatepassLog) => {
@@ -2748,14 +2776,134 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }));
   };
 
+  const upsertAttendanceRecordFromServer = useCallback((incoming: DailyAttendanceRecord) => {
+    if (!incoming || !incoming.id || !incoming.records) return;
+    setAttendanceRecords((prev) => {
+      const existing = prev[incoming.id];
+      return {
+        ...prev,
+        [incoming.id]: {
+          ...existing,
+          ...incoming,
+          records: {
+            ...(existing?.records || {}),
+            ...incoming.records,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const markStudentAttendanceFromScan = useCallback(
+    (
+      student: Pick<Student, 'id' | 'classId' | 'section' | 'academicYear'>,
+      action: 'entry' | 'exit',
+      timestampIso?: string
+    ) => {
+      const dt = timestampIso ? new Date(timestampIso) : new Date();
+      let dateStr = '';
+      try {
+        dateStr = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Dhaka',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(dt);
+      } catch {
+        dateStr = dt.toISOString().split('T')[0];
+      }
+      let timeLabel = '';
+      try {
+        timeLabel = dt.toLocaleTimeString('bn-BD', {
+          timeZone: 'Asia/Dhaka',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+      } catch {
+        timeLabel = dt.toLocaleTimeString('bn-BD');
+      }
+
+      const sec = student.section || 'ক';
+      const recId = `${student.classId}_${sec || 'all'}_${dateStr}`;
+      const remarkText =
+        action === 'exit'
+          ? `গেটপাস স্ক্যান (প্রস্থান ${timeLabel})`
+          : `ডিজিটাল গেটপাস স্ক্যান (উপস্থিত ${timeLabel})`;
+
+      setAttendanceRecords((prev) => {
+        const existing = prev[recId];
+        const prevEntry = existing?.records?.[student.id];
+        return {
+          ...prev,
+          [recId]: {
+            id: recId,
+            date: dateStr,
+            academicYear: student.academicYear || '২০২৬',
+            classId: student.classId,
+            section: sec,
+            records: {
+              ...(existing?.records || {}),
+              [student.id]: {
+                status: prevEntry?.status === 'late' ? 'late' : 'present',
+                remarks:
+                  action === 'exit' && prevEntry?.remarks?.includes('উপস্থিত')
+                    ? `${prevEntry.remarks} · প্রস্থান ${timeLabel}`
+                    : remarkText,
+              },
+            },
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+
+      return { date: dateStr, classId: student.classId, section: sec };
+    },
+    []
+  );
+
   const getDailyAttendance = (classId: string, section: string, date: string): DailyAttendanceRecord | undefined => {
-    const idWithSec = `${classId}_${section || 'all'}_${date}`;
-    if (attendanceRecords[idWithSec]) return attendanceRecords[idWithSec];
-    const idWithBlank = `${classId}__${date}`;
-    if (attendanceRecords[idWithBlank]) return attendanceRecords[idWithBlank];
-    return Object.values(attendanceRecords).find(
-      (r) => r.classId === classId && r.date === date && (!section || r.section === section)
-    );
+    if (!section) {
+      const matching = Object.values(attendanceRecords).filter(
+        (r) => r.classId === classId && r.date === date
+      );
+      if (matching.length === 0) return undefined;
+      if (matching.length === 1) return matching[0];
+      const mergedRecords: Record<string, { status: AttendanceStatus; remarks?: string }> = {};
+      matching.forEach((rec) => {
+        Object.assign(mergedRecords, rec.records || {});
+      });
+      return {
+        ...matching[0],
+        id: `${classId}_all_${date}`,
+        section: '',
+        records: mergedRecords,
+      };
+    }
+
+    const mergedRecords: Record<string, { status: AttendanceStatus; remarks?: string }> = {};
+    let baseRecord: DailyAttendanceRecord | undefined;
+
+    const candidates = [
+      attendanceRecords[`${classId}_all_${date}`],
+      attendanceRecords[`${classId}__${date}`],
+      attendanceRecords[`${classId}_${section}_${date}`],
+      ...Object.values(attendanceRecords).filter(
+        (r) => r.classId === classId && r.date === date && r.section === section
+      ),
+    ];
+
+    candidates.forEach((rec) => {
+      if (!rec) return;
+      if (!baseRecord) baseRecord = rec;
+      Object.assign(mergedRecords, rec.records || {});
+    });
+
+    if (!baseRecord) return undefined;
+    return {
+      ...baseRecord,
+      records: mergedRecords,
+    };
   };
 
   const getMonthlyAttendance = (
@@ -4219,6 +4367,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         sendBatchSMS,
         attendanceRecords,
         saveDailyAttendance,
+        markStudentAttendanceFromScan,
+        upsertAttendanceRecordFromServer,
         getDailyAttendance,
         getMonthlyAttendance,
         calculateStudentAttendanceMetrics,
@@ -4242,6 +4392,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         getClassDueOverview,
         securityLogs,
         addSecurityLog,
+        updateSecurityLogEtiquette,
         acknowledgeSecurityLog,
         clearSecurityLogs,
         isServerSyncing,

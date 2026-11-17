@@ -47,11 +47,13 @@ import {
   playAlarmChime,
   replayPendingBlockedSpeech,
   setGuardianLiveWatchActive,
-  speakBengaliSpeech,
+  speakRepeatedGuardianAlert,
+  stopBengaliSpeech,
   subscribePendingBlockedSpeech,
+  subscribeSpeechPlayback,
   unlockMobileAudioAndSpeech,
 } from './utils/gatepassAudio';
-import { BellRing, Volume2, X } from 'lucide-react';
+import { BellRing, Volume2, VolumeX, X } from 'lucide-react';
 
 const SESSION_STORAGE_KEY = 'dlikon_portal_auth_session_v1';
 
@@ -104,6 +106,7 @@ function MainContent() {
   const { liveRingingAlert, dismissLiveRingingAlert } = useGatepassRealtime({
     role: authSession?.role,
     studentId: authSession?.role === 'student' ? authSession.accountId : null,
+    portalId: authSession?.role === 'student' ? authSession.staffCode : null,
     enabled: Boolean(authSession),
   });
 
@@ -113,9 +116,15 @@ function MainContent() {
     studentNameBn?: string;
     action?: 'entry' | 'exit';
   } | null>(null);
+  const [isVoiceActivelyPlaying, setIsVoiceActivelyPlaying] = useState<boolean>(false);
 
   useEffect(() => {
-    return subscribePendingBlockedSpeech(setPendingBlockedAlert);
+    const unsubBlocked = subscribePendingBlockedSpeech(setPendingBlockedAlert);
+    const unsubSpeech = subscribeSpeechPlayback(setIsVoiceActivelyPlaying);
+    return () => {
+      unsubBlocked();
+      unsubSpeech();
+    };
   }, []);
 
   // Instant ?unlock=1 recovery & permanent device lock restore from IndexedDB
@@ -333,7 +342,20 @@ function MainContent() {
                     {(pendingBlockedAlert || liveRingingAlert)?.message}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {isVoiceActivelyPlaying && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopBengaliSpeech();
+                        dismissLiveRingingAlert();
+                      }}
+                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <VolumeX className="w-4 h-4" />
+                      <span>ভয়েস থামান ✓</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -342,17 +364,32 @@ function MainContent() {
                       } else if (liveRingingAlert) {
                         unlockMobileAudioAndSpeech(true);
                         playAlarmChime();
-                        speakBengaliSpeech(liveRingingAlert.message, { delayMs: 260 });
+                        const matchedStd =
+                          students.find((s) => s.id === authSession.accountId) ||
+                          ({
+                            id: authSession.accountId,
+                            nameBn:
+                              liveRingingAlert.log.studentNameBn || authSession.displayName,
+                          } as Student);
+                        speakRepeatedGuardianAlert(
+                          matchedStd,
+                          liveRingingAlert.log.action === 'exit' ? 'exit' : 'entry',
+                          schoolInfo.dailySchedule,
+                          { repeatCount: 3, delayMs: 220 }
+                        );
                       }
                     }}
                     className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
                   >
                     <Volume2 className="w-4 h-4" />
-                    <span>ভয়েস শুনুন</span>
+                    <span>ভয়েস শুনুন (নাম ধরে)</span>
                   </button>
                   <button
                     type="button"
-                    onClick={dismissLiveRingingAlert}
+                    onClick={() => {
+                      stopBengaliSpeech();
+                      dismissLiveRingingAlert();
+                    }}
                     aria-label="বন্ধ করুন"
                     className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
                   >

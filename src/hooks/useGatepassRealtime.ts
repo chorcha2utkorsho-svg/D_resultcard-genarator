@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalRole, SecurityGatepassLog } from '../types';
+import { getStudentPortalId } from '../utils/bengali';
 import {
   buildGuardianVoiceMessage,
   playAlarmChime,
+  setGuardianLiveWatchActive,
   setPendingBlockedSpeech,
   showGuardianSystemNotification,
-  speakBengaliSpeech,
+  speakRepeatedGuardianAlert,
+  stopBengaliSpeech,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 
@@ -86,6 +89,7 @@ export function broadcastLocalGatepassScan(log: SecurityGatepassLog): void {
 interface UseGatepassRealtimeParams {
   role?: PortalRole | null;
   studentId?: string | null;
+  portalId?: string | null;
   enabled?: boolean;
 }
 
@@ -94,9 +98,10 @@ export type RealtimeTransportMode = 'ws' | 'sse' | 'polling' | 'connecting';
 export function useGatepassRealtime({
   role,
   studentId,
+  portalId,
   enabled = true,
 }: UseGatepassRealtimeParams) {
-  const { students, schoolInfo, addSecurityLog } = useSchool();
+  const { students, schoolInfo, addSecurityLog, upsertAttendanceRecordFromServer } = useSchool();
   const [liveRingingAlert, setLiveRingingAlert] = useState<{
     log: SecurityGatepassLog;
     message: string;
@@ -118,12 +123,25 @@ export function useGatepassRealtime({
   const hasBaselineRef = useRef<boolean>(false);
   const ringClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const resolvedStudent = students.find(
+    (s) =>
+      (studentId && s.id === studentId) ||
+      (portalId && getStudentPortalId(s).toUpperCase() === portalId.trim().toUpperCase())
+  );
+  const effectiveStudentId = resolvedStudent?.id || studentId || '';
+  const effectivePortalId =
+    portalId?.trim().toUpperCase() ||
+    (resolvedStudent ? getStudentPortalId(resolvedStudent).toUpperCase() : '');
+
   // Unlock mobile audio strictly on real tap/click activation gestures (never false-positive passive scroll)
   useEffect(() => {
     if (!enabled || role !== 'student' || typeof window === 'undefined') return;
 
     const handleActivationGesture = () => {
       unlockMobileAudioAndSpeech(true);
+      if (isGuardianAudioEnabledPref()) {
+        setGuardianLiveWatchActive(true);
+      }
     };
 
     window.addEventListener('click', handleActivationGesture, { capture: true, passive: true });
@@ -139,7 +157,7 @@ export function useGatepassRealtime({
 
   useEffect(() => {
     if (!enabled || !role) return;
-    if (role === 'student' && !studentId) return;
+    if (role === 'student' && !effectiveStudentId && !effectivePortalId) return;
 
     hasBaselineRef.current = false;
     lastServerTimeRef.current = 0;
@@ -157,30 +175,53 @@ export function useGatepassRealtime({
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let bc: BroadcastChannel | null = null;
 
+    const isMatchingStudentLog = (log: SecurityGatepassLog | null | undefined): boolean => {
+      if (!log) return false;
+      if (effectiveStudentId && log.studentId === effectiveStudentId) return true;
+      const logPortal = (log.portalUserId || '').trim().toUpperCase();
+      if (effectivePortalId && logPortal && logPortal === effectivePortalId) return true;
+      const currentStd =
+        studentsRef.current.find(
+          (s) =>
+            (effectiveStudentId && s.id === effectiveStudentId) ||
+            (effectivePortalId && getStudentPortalId(s).toUpperCase() === effectivePortalId)
+        ) || null;
+      if (
+        currentStd &&
+        log.classId &&
+        log.classId === currentStd.classId &&
+        Number(log.studentRoll) === Number(currentStd.roll)
+      ) {
+        return true;
+      }
+      return false;
+    };
+
     const triggerAlertForStudent = (log: SecurityGatepassLog) => {
-      if (role !== 'student' || !studentId || log.studentId !== studentId) return;
+      if (role !== 'student' || !isMatchingStudentLog(log)) return;
       if (hasPlayedGuardianVoiceLog(log.id)) return;
       markGuardianVoiceLogPlayed(log.id);
 
       const targetStudent =
-        studentsRef.current.find((s) => s.id === studentId) ||
-        ({ id: studentId, nameBn: log.studentNameBn || 'আপনার সন্তান' } as any);
+        studentsRef.current.find(
+          (s) =>
+            s.id === (effectiveStudentId || log.studentId) ||
+            (effectivePortalId && getStudentPortalId(s).toUpperCase() === effectivePortalId)
+        ) ||
+        ({ id: effectiveStudentId || log.studentId, nameBn: log.studentNameBn || 'আপনার সন্তান' } as any);
 
-      const message = buildGuardianVoiceMessage(
-        targetStudent,
-        log.action === 'exit' ? 'exit' : 'entry',
-        scheduleRef.current
-      );
+      const action: 'entry' | 'exit' = log.action === 'exit' ? 'exit' : 'entry';
+      const message = buildGuardianVoiceMessage(targetStudent, action, scheduleRef.current);
 
       setLiveRingingAlert({ log, message });
       if (ringClearTimerRef.current) clearTimeout(ringClearTimerRef.current);
       ringClearTimerRef.current = setTimeout(() => {
         setLiveRingingAlert(null);
-      }, 9000);
+      }, 28000);
 
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
-          navigator.vibrate([220, 90, 220, 90, 350]);
+          navigator.vibrate([240, 100, 240, 100, 420]);
         } catch {
           // Ignore
         }
@@ -190,18 +231,19 @@ export function useGatepassRealtime({
 
       playAlarmChime();
       showGuardianSystemNotification(
-        `${schoolNameRef.current || 'ডি-লিকন একাডেমী'} • লাইভ গেটপাস`,
+        `${schoolNameRef.current || 'ডি-লিকন একাডেমী'} • ${targetStudent.nameBn}`,
         message
       );
 
-      speakBengaliSpeech(message, {
-        delayMs: 240,
+      speakRepeatedGuardianAlert(targetStudent, action, scheduleRef.current, {
+        repeatCount: 3,
+        delayMs: 220,
         onBlocked: () => {
           setPendingBlockedSpeech({
             message,
             logId: log.id,
             studentNameBn: targetStudent.nameBn,
-            action: log.action === 'exit' ? 'exit' : 'entry',
+            action,
           });
         },
       });
@@ -230,20 +272,19 @@ export function useGatepassRealtime({
           if (
             isFirstInit &&
             role === 'student' &&
-            item.studentId === studentId &&
+            isMatchingStudentLog(item) &&
             !hasPlayedGuardianVoiceLog(item.id)
           ) {
             const logMs =
               typeof item.serverTimestamp === 'number'
                 ? item.serverTimestamp
                 : new Date(item.timestamp).getTime() || 0;
-            // Play if a fresh scan occurred right before the guardian opened the page (within 45s)
-            if (logMs >= serverTime - 45000 && !item.guardianAcknowledged) {
+            // Play if a fresh scan occurred right before or while the guardian opened the page (within 75s)
+            if (logMs >= serverTime - 75000 && !item.guardianAcknowledged) {
               if (!newestRecentUnseen) {
                 newestRecentUnseen = item;
               }
             } else {
-              // Historical log on initial load: mark played so opening dashboard doesn't replay yesterday's alerts
               markGuardianVoiceLogPlayed(item.id);
             }
           }
@@ -259,7 +300,10 @@ export function useGatepassRealtime({
         addSecurityLog(incomingLog);
         markGatepassLogSeen(incomingLog.id);
         hasBaselineRef.current = true;
-        if (role === 'student' && incomingLog.studentId === studentId) {
+        if (rawPayload.attendanceRecord) {
+          upsertAttendanceRecordFromServer(rawPayload.attendanceRecord);
+        }
+        if (role === 'student' && isMatchingStudentLog(incomingLog)) {
           triggerAlertForStudent(incomingLog);
         }
         return;
@@ -275,13 +319,15 @@ export function useGatepassRealtime({
       try {
         const sinceParam =
           hasBaselineRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 5000)
+            ? Math.max(0, lastServerTimeRef.current - 6000)
             : 0;
-        const queryStr =
-          role === 'student' && studentId
-            ? `since=${sinceParam}&studentId=${encodeURIComponent(studentId)}`
-            : `since=${sinceParam}`;
-        const res = await fetch(`/api/security/latest-logs?${queryStr}`, { cache: 'no-store' });
+        const params = new URLSearchParams();
+        params.set('since', String(sinceParam));
+        if (role === 'student') {
+          if (effectiveStudentId) params.set('studentId', effectiveStudentId);
+          if (effectivePortalId) params.set('portalId', effectivePortalId);
+        }
+        const res = await fetch(`/api/security/latest-logs?${params.toString()}`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (isDisposed || !data || !Array.isArray(data.logs)) return;
@@ -302,7 +348,7 @@ export function useGatepassRealtime({
           return;
         }
 
-        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 2000);
+        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 3000);
         // Process chronological oldest-to-newest for fresh logs
         const sorted = [...data.logs].sort(
           (a, b) =>
@@ -312,7 +358,7 @@ export function useGatepassRealtime({
         for (const log of sorted) {
           if (log && log.id) {
             const isNewGuardianAlert =
-              role === 'student' && log.studentId === studentId && !hasPlayedGuardianVoiceLog(log.id);
+              role === 'student' && isMatchingStudentLog(log) && !hasPlayedGuardianVoiceLog(log.id);
             if (!seenGatepassLogIds.has(log.id) || isNewGuardianAlert) {
               handleIncomingPayload({ type: 'gatepass:scan', log, serverTime: serverNow });
             } else {
@@ -329,7 +375,8 @@ export function useGatepassRealtime({
       if (isDisposed || sse || wsConnected || typeof EventSource === 'undefined') return;
       try {
         const params = new URLSearchParams();
-        if (studentId) params.set('studentId', studentId);
+        if (effectiveStudentId) params.set('studentId', effectiveStudentId);
+        if (effectivePortalId) params.set('portalId', effectivePortalId);
         if (role) params.set('role', role);
         sse = new EventSource(`/api/security/stream?${params.toString()}`);
         sse.onopen = () => {
@@ -369,7 +416,8 @@ export function useGatepassRealtime({
       try {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const params = new URLSearchParams();
-        if (studentId) params.set('studentId', studentId);
+        if (effectiveStudentId) params.set('studentId', effectiveStudentId);
+        if (effectivePortalId) params.set('portalId', effectivePortalId);
         if (role) params.set('role', role);
         const wsUrl = `${proto}//${window.location.host}/ws/gatepass?${params.toString()}`;
         ws = new WebSocket(wsUrl);
@@ -491,11 +539,14 @@ export function useGatepassRealtime({
         } catch {}
       }
     };
-  }, [enabled, role, studentId, addSecurityLog]);
+  }, [enabled, role, effectiveStudentId, effectivePortalId, addSecurityLog, upsertAttendanceRecordFromServer]);
 
   return {
     liveRingingAlert,
-    dismissLiveRingingAlert: () => setLiveRingingAlert(null),
+    dismissLiveRingingAlert: () => {
+      stopBengaliSpeech();
+      setLiveRingingAlert(null);
+    },
     connectionTransport,
     lastSyncServerTime,
   };

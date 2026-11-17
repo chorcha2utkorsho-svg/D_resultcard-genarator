@@ -23,6 +23,7 @@ import {
   Info,
   PhoneCall,
   UserCheck,
+  QrCode,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { AttendanceStatus } from '../types';
@@ -72,23 +73,32 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
   // Active view tab inside Attendance Module
   const [activeTab, setActiveTab] = useState<'daily' | 'monthly' | 'progress_metrics'>('daily');
 
-  // Daily attendance state
+  // Daily attendance state (uses Asia/Dhaka date so scanned gatepass attendance shows immediately)
   const todayStr = useMemo(() => {
-    const d = new Date();
-    const yr = d.getFullYear();
-    const mo = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${yr}-${mo}-${day}`;
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      const d = new Date();
+      const yr = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${yr}-${mo}-${day}`;
+    }
   }, []);
 
-  const [attendanceDate, setAttendanceDate] = useState<string>('2026-09-24'); // default to current mock/app date or today
+  const [attendanceDate, setAttendanceDate] = useState<string>(todayStr);
   const [dailyStatusMap, setDailyStatusMap] = useState<Record<string, { status: AttendanceStatus; remarks: string }>>({});
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState<string>('');
 
   // Monthly report state
-  const [reportMonth, setReportMonth] = useState<number>(9); // September by default
-  const [reportYear, setReportYear] = useState<string>('২০২৬');
+  const [reportMonth, setReportMonth] = useState<number>(() => Number(todayStr.slice(5, 7)) || new Date().getMonth() + 1);
+  const [reportYear, setReportYear] = useState<string>(() => toBengaliNumber(Number(todayStr.slice(0, 4)) || 2026));
 
   // Progress card sync state
   const [customWorkingDays, setCustomWorkingDays] = useState<number>(120);
@@ -147,6 +157,7 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
     let absent = 0;
     let late = 0;
     let leave = 0;
+    let gatepassCount = 0;
 
     currentStudents.forEach((std) => {
       const entry = dailyStatusMap[std.id];
@@ -155,6 +166,12 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
         else if (entry.status === 'absent') absent++;
         else if (entry.status === 'late') late++;
         else if (entry.status === 'leave') leave++;
+        if (
+          entry.remarks &&
+          (entry.remarks.includes('স্ক্যান') || entry.remarks.includes('গেটপাস'))
+        ) {
+          gatepassCount++;
+        }
       } else {
         present++;
       }
@@ -163,7 +180,7 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
     const total = currentStudents.length;
     const rate = total > 0 ? parseFloat((((present + late) / total) * 100).toFixed(1)) : 0;
 
-    return { total, present, absent, late, leave, rate };
+    return { total, present, absent, late, leave, rate, gatepassCount };
   }, [currentStudents, dailyStatusMap]);
 
   // Quick mark all actions
@@ -582,11 +599,17 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             {/* Table Search & Title Header */}
             <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <Users className="w-5 h-5 text-emerald-600" />
                 <h3 className="font-bold text-slate-800 text-sm sm:text-base">
                   {currentClass.nameBn} - শিক্ষার্থী হাজিরা তালিকা ({toBengaliNumber(currentStudents.length)} জন)
                 </h3>
+                {dailyStats.gatepassCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    <QrCode className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>ডিজিটাল গেটপাস উপস্থিতি: {toBengaliNumber(dailyStats.gatepassCount)} জন</span>
+                  </span>
+                )}
               </div>
 
               <div className="relative w-full sm:w-64">
@@ -648,7 +671,16 @@ export const AttendanceView: React.FC<{ onNavigateToResults?: () => void }> = ({
 
                           {/* Name & Gender */}
                           <td className="py-3 px-4">
-                            <div className="font-bold text-slate-800 text-sm">{student.nameBn}</div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-slate-800 text-sm">{student.nameBn}</span>
+                              {entry.remarks &&
+                                (entry.remarks.includes('স্ক্যান') || entry.remarks.includes('গেটপাস')) && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                    <QrCode className="w-3 h-3 text-emerald-700" />
+                                    ডিজিটাল গেটপাস উপস্থিতি
+                                  </span>
+                                )}
+                            </div>
                             <div className="text-[11px] text-slate-500 flex items-center space-x-2">
                               <span>{student.nameEn}</span>
                               <span>•</span>

@@ -17,9 +17,9 @@ export const DEFAULT_DAILY_SCHEDULE: DailyScheduleConfig = {
 
 export const DEFAULT_SCANNER_VOICE_SETTINGS: ScannerVoiceSettings = {
   entryMessageTemplate:
-    'স্বাগতম {name}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
+    'আসসালামু আলাইকুম ওয়া রাহমাতুল্লাহ {name}, স্বাগতম! শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
   exitMessageTemplate:
-    'বিদায় {name}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
+    'আসসালামু আলাইকুম ওয়া রাহমাতুল্লাহ {name}, বিদায়! শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
 };
 
 export function buildScannerVoiceMessage(
@@ -64,11 +64,33 @@ export function buildGuardianVoiceMessage(
     breakTimeBn: dailySchedule?.breakTimeBn || DEFAULT_DAILY_SCHEDULE.breakTimeBn,
     dismissalTimeBn: dailySchedule?.dismissalTimeBn || DEFAULT_DAILY_SCHEDULE.dismissalTimeBn,
   };
+  const studentName = student.nameBn || 'আপনার সন্তান';
 
   if (action === 'entry') {
-    return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গনে প্রবেশ করেছে। আজকে পিটি শুরু হবে ${schedule.ptStartTimeBn}, ক্লাস শুরু হবে ${schedule.classStartTimeBn}। প্রথমবার বিরতি থাকবে ${schedule.breakTimeBn}। ছুটি ${schedule.dismissalTimeBn}।`;
+    return `মনোযোগ দিন! আপনার প্রিয় ${studentName}, আপনার সন্তান ${studentName} এইমাত্র স্কুল প্রাঙ্গনে প্রবেশ করেছে। আজকে পিটি শুরু হবে ${schedule.ptStartTimeBn}, ক্লাস শুরু হবে ${schedule.classStartTimeBn}। প্রথমবার বিরতি থাকবে ${schedule.breakTimeBn}। ছুটি ${schedule.dismissalTimeBn}।`;
   }
-  return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গন থেকে নিরাপদে প্রস্থান করেছে।`;
+  return `মনোযোগ দিন! আপনার প্রিয় ${studentName}, আপনার সন্তান ${studentName} এইমাত্র স্কুল প্রাঙ্গন থেকে নিরাপদে প্রস্থান করেছে।`;
+}
+
+export function buildGuardianRepeatedAlertPhrases(
+  student: Pick<Student, 'nameBn'>,
+  action: 'entry' | 'exit',
+  dailySchedule?: Partial<DailyScheduleConfig> | null,
+  repeatCount = 3
+): string[] {
+  const studentName = student.nameBn || 'আপনার সন্তান';
+  const primary = buildGuardianVoiceMessage(student, action, dailySchedule);
+  const shortRepeat =
+    action === 'entry'
+      ? `প্রিয় অভিভাবক, ${studentName} বিদ্যালয়ে প্রবেশ করেছে! ${studentName}-এর উপস্থিতি নিশ্চিত হয়েছে।`
+      : `প্রিয় অভিভাবক, ${studentName} বিদ্যালয় থেকে নিরাপদে প্রস্থান করেছে!`;
+
+  const phrases: string[] = [primary];
+  const extraCycles = Math.max(0, Math.min(4, repeatCount - 1));
+  for (let i = 0; i < extraCycles; i++) {
+    phrases.push(shortRepeat);
+  }
+  return phrases;
 }
 
 // 44-byte silent PCM WAV data URL used to prime HTML5 <audio> on iOS Safari / Android Chrome
@@ -109,11 +131,12 @@ let pendingBlockedAlert: {
   action?: 'entry' | 'exit';
 } | null = null;
 
-// Memory LRU cache of fetched MP3 ArrayBuffers so repeat alerts/replays start in <5ms
+// Memory LRU cache of fetched single-sentence MP3 ArrayBuffers so repeat alerts start in <5ms
 const ttsArrayBufferCache = new Map<string, ArrayBuffer>();
 const activeUtterances = new Set<SpeechSynthesisUtterance>();
 const unlockSubscribers = new Set<(unlocked: boolean) => void>();
 const statusSubscribers = new Set<(status: GuardianAudioHardwareStatus) => void>();
+const playbackSubscribers = new Set<(playing: boolean) => void>();
 const pendingAlertSubscribers = new Set<
   (pending: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null) => void
 >();
@@ -126,6 +149,30 @@ export function getGuardianAudioStatus(): GuardianAudioHardwareStatus {
     wakeLockActive: Boolean(wakeLockSentinel),
     lastEngineUsed,
     lastPlaybackError,
+  };
+}
+
+export function isSpeechActivelyPlaying(): boolean {
+  return isVoiceAudioPlaying;
+}
+
+function setVoicePlayingState(playing: boolean) {
+  if (isVoiceAudioPlaying === playing) return;
+  isVoiceAudioPlaying = playing;
+  for (const cb of playbackSubscribers) {
+    try {
+      cb(playing);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+}
+
+export function subscribeSpeechPlayback(cb: (playing: boolean) => void): () => void {
+  playbackSubscribers.add(cb);
+  cb(isVoiceAudioPlaying);
+  return () => {
+    playbackSubscribers.delete(cb);
   };
 }
 
@@ -242,8 +289,8 @@ function startSubAudibleKeepAlive(ctx: AudioContext): void {
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(20, ctx.currentTime);
-    // Inaudible DC/ultra-low amplitude just to prevent Android Chrome / iOS Safari from suspending AudioContext
-    gain.gain.setValueAtTime(0.00008, ctx.currentTime);
+    // Sub-audible ultra-low gain keeping Android Chrome / iOS Safari AudioContext awake while guardian alarm is armed
+    gain.gain.setValueAtTime(0.00012, ctx.currentTime);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
@@ -299,6 +346,29 @@ function releaseWakeLock(): void {
       // Ignore
     }
     wakeLockSentinel = null;
+  }
+}
+
+function updateGuardianMediaSession(studentNameBn?: string) {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  try {
+    const MediaMeta = (window as any).MediaMetadata;
+    if (MediaMeta) {
+      (navigator as any).mediaSession.metadata = new MediaMeta({
+        title: studentNameBn ? `${studentNameBn} • লাইভ গেটপাস এলার্ম` : 'ডি-লিকন লাইভ গেটপাস',
+        artist: 'ডি-লিকন মডেল একাডেমী',
+        album: 'স্মার্ট অভিভাবক নিরাপত্তা এলার্ম',
+      });
+    }
+    (navigator as any).mediaSession.playbackState = 'playing';
+    (navigator as any).mediaSession.setActionHandler('stop', () => {
+      stopBengaliSpeech();
+    });
+    (navigator as any).mediaSession.setActionHandler('pause', () => {
+      stopBengaliSpeech();
+    });
+  } catch {
+    // Ignore browsers without full MediaSession support
   }
 }
 
@@ -496,7 +566,16 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
     const queued = pendingBlockedAlert;
     setPendingBlockedSpeech(null);
     playAlarmChime();
-    speakBengaliSpeech(queued.message, { delayMs: 280 });
+    if (queued.studentNameBn && queued.action) {
+      speakRepeatedGuardianAlert(
+        { nameBn: queued.studentNameBn },
+        queued.action,
+        null,
+        { delayMs: 280, repeatCount: 3 }
+      );
+    } else {
+      speakBengaliSpeech(queued.message, { delayMs: 280 });
+    }
   }
 
   return audioUnlockedInSession;
@@ -511,7 +590,16 @@ export function replayPendingBlockedSpeech(): boolean {
   setPendingBlockedSpeech(null);
   unlockMobileAudioAndSpeech(true);
   playAlarmChime();
-  speakBengaliSpeech(queued.message, { delayMs: 280 });
+  if (queued.studentNameBn && queued.action) {
+    speakRepeatedGuardianAlert(
+      { nameBn: queued.studentNameBn },
+      queued.action,
+      null,
+      { delayMs: 280, repeatCount: 3 }
+    );
+  } else {
+    speakBengaliSpeech(queued.message, { delayMs: 280 });
+  }
   return true;
 }
 
@@ -570,7 +658,7 @@ export function playAlarmChime(): void {
         osc1.frequency.setValueAtTime(n.f1, now + n.start);
         osc2.frequency.setValueAtTime(n.f2, now + n.start);
         gain.gain.setValueAtTime(0.001, now + n.start);
-        gain.gain.linearRampToValueAtTime(0.28, now + n.start + 0.02);
+        gain.gain.linearRampToValueAtTime(0.3, now + n.start + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, now + n.start + n.dur);
         osc1.connect(gain);
         osc2.connect(gain);
@@ -592,7 +680,11 @@ export function playAlarmChime(): void {
   }
 }
 
-function splitBengaliSentences(text: string): string[] {
+/**
+ * Split Bengali text strictly into <= 145 char sentence chunks so `/api/tts/bn` always returns a
+ * single pure MP3 frame stream (ZERO multi-MP3 ID3 concatenation errors in AudioContext.decodeAudioData!).
+ */
+function splitBengaliSentences(text: string, maxLen = 145): string[] {
   const cleaned = text.replace(/\s+/g, ' ').trim();
   if (!cleaned) return [];
   const rawParts = cleaned
@@ -602,23 +694,36 @@ function splitBengaliSentences(text: string): string[] {
 
   const chunks: string[] = [];
   for (const part of rawParts) {
-    if (part.length <= 165) {
+    if (part.length <= maxLen) {
       chunks.push(part);
     } else {
-      const subParts = part.split(/(?<=[,;])\s+/);
+      const subParts = part.split(/(?<=[,;—–])\s+/);
       let current = '';
       for (const sp of subParts) {
-        if ((current + ' ' + sp).trim().length <= 165) {
+        if ((current + ' ' + sp).trim().length <= maxLen) {
           current = (current + ' ' + sp).trim();
         } else {
           if (current) chunks.push(current);
-          current = sp;
+          if (sp.length <= maxLen) {
+            current = sp;
+          } else {
+            const words = sp.split(/\s+/);
+            current = '';
+            for (const w of words) {
+              if ((current + ' ' + w).trim().length <= maxLen) {
+                current = (current + ' ' + w).trim();
+              } else {
+                if (current) chunks.push(current);
+                current = w.slice(0, maxLen);
+              }
+            }
+          }
         }
       }
       if (current) chunks.push(current);
     }
   }
-  return chunks.length > 0 ? chunks : [cleaned];
+  return chunks.length > 0 ? chunks : [cleaned.slice(0, maxLen)];
 }
 
 function selectBestBengaliVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -661,10 +766,11 @@ export interface SpeakBengaliOptions {
   onStart?: () => void;
   onEnd?: () => void;
   onBlocked?: () => void;
+  studentNameBn?: string;
 }
 
-async function fetchBengaliTtsBuffer(cleanedText: string): Promise<ArrayBuffer> {
-  const key = cleanedText.slice(0, 1450);
+async function fetchSingleChunkTtsBuffer(chunk: string): Promise<ArrayBuffer> {
+  const key = chunk.slice(0, 200);
   const cached = ttsArrayBufferCache.get(key);
   if (cached && cached.byteLength > 0) {
     return cached.slice(0);
@@ -685,7 +791,7 @@ async function fetchBengaliTtsBuffer(cleanedText: string): Promise<ArrayBuffer> 
     if (!buf || buf.byteLength === 0) {
       throw new Error('Empty TTS audio buffer');
     }
-    if (ttsArrayBufferCache.size >= 40) {
+    if (ttsArrayBufferCache.size >= 80) {
       const oldest = ttsArrayBufferCache.keys().next().value;
       if (oldest) ttsArrayBufferCache.delete(oldest);
     }
@@ -696,10 +802,74 @@ async function fetchBengaliTtsBuffer(cleanedText: string): Promise<ArrayBuffer> 
   }
 }
 
-async function playBufferViaWebAudio(
-  arrBuf: ArrayBuffer,
+function playSingleDecodedBuffer(
+  ctx: AudioContext,
+  audioBuffer: AudioBuffer,
+  runToken: number
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (runToken !== currentSpeechRunToken) {
+      resolve(false);
+      return;
+    }
+    try {
+      if (activeBufferSource) {
+        try {
+          activeBufferSource.onended = null;
+          activeBufferSource.stop();
+          activeBufferSource.disconnect();
+        } catch {
+          // Ignore
+        }
+        activeBufferSource = null;
+      }
+
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      source.buffer = audioBuffer;
+      gain.gain.setValueAtTime(1.18, ctx.currentTime);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+
+      activeBufferSource = source;
+      let done = false;
+      const safetyTimeout = setTimeout(() => {
+        if (!done) {
+          done = true;
+          resolve(true);
+        }
+      }, Math.max(1500, Math.ceil((audioBuffer.duration || 3) * 1000) + 1200));
+
+      source.onended = () => {
+        clearTimeout(safetyTimeout);
+        if (activeBufferSource === source) {
+          activeBufferSource = null;
+        }
+        try {
+          source.disconnect();
+          gain.disconnect();
+        } catch {
+          // Ignore
+        }
+        if (!done) {
+          done = true;
+          resolve(runToken === currentSpeechRunToken);
+        }
+      };
+
+      source.start(0);
+    } catch (err: any) {
+      lastPlaybackError = String(err?.message || 'WebAudio start failed');
+      resolve(false);
+    }
+  });
+}
+
+async function playChunksViaWebAudio(
+  chunks: string[],
+  buffers: (ArrayBuffer | null)[],
   runToken: number,
-  options: SpeakBengaliOptions
+  options: { onFirstStart?: () => void }
 ): Promise<boolean> {
   const ctx = getSharedAudioContext();
   if (!ctx) return false;
@@ -715,92 +885,68 @@ async function playBufferViaWebAudio(
       return false;
     }
 
-    const audioBuffer = await ctx.decodeAudioData(arrBuf.slice(0));
-    if (runToken !== currentSpeechRunToken) return true;
+    let started = false;
+    for (let i = 0; i < chunks.length; i++) {
+      if (runToken !== currentSpeechRunToken) return true;
+      const rawBuf = buffers[i];
+      if (!rawBuf || rawBuf.byteLength === 0) continue;
 
-    if (activeBufferSource) {
-      try {
-        activeBufferSource.onended = null;
-        activeBufferSource.stop();
-        activeBufferSource.disconnect();
-      } catch {
-        // Ignore
+      const decoded = await ctx.decodeAudioData(rawBuf.slice(0));
+      if (runToken !== currentSpeechRunToken) return true;
+
+      if (!started) {
+        started = true;
+        setVoicePlayingState(true);
+        lastEngineUsed = 'webaudio';
+        lastPlaybackError = null;
+        audioUnlockedInSession = true;
+        notifyUnlockSubscribers();
+        options.onFirstStart?.();
       }
-      activeBufferSource = null;
+
+      const completed = await playSingleDecodedBuffer(ctx, decoded, runToken);
+      if (!completed || runToken !== currentSpeechRunToken) {
+        return true;
+      }
     }
-
-    const source = ctx.createBufferSource();
-    const gain = ctx.createGain();
-    source.buffer = audioBuffer;
-    gain.gain.setValueAtTime(1.15, ctx.currentTime);
-    source.connect(gain);
-    gain.connect(ctx.destination);
-
-    activeBufferSource = source;
-    isVoiceAudioPlaying = true;
-    lastEngineUsed = 'webaudio';
-    lastPlaybackError = null;
-    audioUnlockedInSession = true;
-    notifyUnlockSubscribers();
-
-    source.onended = () => {
-      if (activeBufferSource === source) {
-        activeBufferSource = null;
-      }
-      try {
-        source.disconnect();
-        gain.disconnect();
-      } catch {
-        // Ignore
-      }
-      isVoiceAudioPlaying = false;
-      if (runToken === currentSpeechRunToken) {
-        options.onEnd?.();
-      }
-    };
-
-    source.start(0);
-    options.onStart?.();
-    return true;
+    return started;
   } catch (err: any) {
     lastPlaybackError = String(err?.message || err || 'WebAudio decode failed');
-    isVoiceAudioPlaying = false;
     return false;
   }
 }
 
-async function playViaHtmlAudioElement(
+function playSingleHtmlAudioChunk(
   arrBuf: ArrayBuffer | null,
   fallbackUrl: string,
   runToken: number,
-  options: SpeakBengaliOptions
-): Promise<boolean> {
+  onFirstStart?: () => void
+): Promise<'ended' | 'aborted' | 'failed'> {
   const audioEl = getSharedVoiceAudioElement();
-  if (!audioEl) return false;
+  if (!audioEl) return Promise.resolve('failed');
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise((resolve) => {
     let settled = false;
     let started = false;
 
-    const cleanupListeners = () => {
+    const cleanup = () => {
       audioEl.onplaying = null;
       audioEl.onended = null;
       audioEl.onerror = null;
     };
 
-    const fail = (errMsg?: string) => {
+    const finish = (outcome: 'ended' | 'aborted' | 'failed', errMsg?: string) => {
       if (settled) return;
       settled = true;
-      isVoiceAudioPlaying = false;
       clearTimeout(loadTimeout);
-      cleanupListeners();
+      cleanup();
       if (errMsg) lastPlaybackError = errMsg;
-      resolve(false);
+      resolve(outcome);
     };
 
     const loadTimeout = setTimeout(() => {
-      if (!started && !settled) {
-        fail('HTMLAudio timeout');
+      if (!started) {
+        finish('failed', 'HTMLAudio timeout');
       }
     }, 5500);
 
@@ -809,17 +955,12 @@ async function playViaHtmlAudioElement(
         try {
           audioEl.pause();
         } catch {}
-        clearTimeout(loadTimeout);
-        cleanupListeners();
-        if (!settled) {
-          settled = true;
-          resolve(true);
-        }
+        finish('aborted');
         return;
       }
       started = true;
-      settled = true;
-      isVoiceAudioPlaying = true;
+      clearTimeout(loadTimeout);
+      setVoicePlayingState(true);
       voiceElementPrimed = true;
       lastEngineUsed = 'html_audio';
       lastPlaybackError = null;
@@ -827,32 +968,21 @@ async function playViaHtmlAudioElement(
         audioUnlockedInSession = true;
         notifyUnlockSubscribers();
       }
-      clearTimeout(loadTimeout);
-      options.onStart?.();
-      resolve(true);
+      onFirstStart?.();
     };
 
     audioEl.onended = () => {
-      isVoiceAudioPlaying = false;
-      clearTimeout(loadTimeout);
-      cleanupListeners();
       if (activeObjectUrl) {
         try {
           URL.revokeObjectURL(activeObjectUrl);
         } catch {}
         activeObjectUrl = null;
       }
-      if (runToken === currentSpeechRunToken) {
-        options.onEnd?.();
-      }
-      if (!settled) {
-        settled = true;
-        resolve(true);
-      }
+      finish(runToken === currentSpeechRunToken ? 'ended' : 'aborted');
     };
 
     audioEl.onerror = () => {
-      fail('HTMLAudio element error');
+      finish('failed', 'HTMLAudio element error');
     };
 
     try {
@@ -878,152 +1008,171 @@ async function playViaHtmlAudioElement(
       const playPromise = audioEl.play();
       if (playPromise && typeof playPromise.then === 'function') {
         playPromise.catch((err: any) => {
-          fail(String(err?.name || err?.message || 'HTMLAudio play rejected'));
+          finish('failed', String(err?.name || err?.message || 'HTMLAudio play rejected'));
         });
       }
     } catch (err: any) {
-      fail(String(err?.message || 'HTMLAudio setup failed'));
+      finish('failed', String(err?.message || 'HTMLAudio setup failed'));
     }
   });
 }
 
-async function playWithWebSpeechFallback(
-  text: string,
+async function playChunksViaHtmlAudio(
+  chunks: string[],
+  buffers: (ArrayBuffer | null)[],
   runToken: number,
-  options: SpeakBengaliOptions
-): Promise<void> {
-  const { onStart, onEnd, onBlocked } = options;
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    onBlocked?.();
-    onEnd?.();
-    return;
+  options: { onFirstStart?: () => void }
+): Promise<boolean> {
+  let startedAny = false;
+  for (let i = 0; i < chunks.length; i++) {
+    if (runToken !== currentSpeechRunToken) return true;
+    const chunk = chunks[i];
+    const buf = buffers[i] || null;
+    const url = `/api/tts/bn?text=${encodeURIComponent(chunk.slice(0, 200))}`;
+    const outcome = await playSingleHtmlAudioChunk(buf, url, runToken, () => {
+      if (!startedAny) {
+        startedAny = true;
+        options.onFirstStart?.();
+      }
+    });
+    if (outcome === 'aborted') return true;
+    if (outcome === 'failed') return startedAny;
   }
-
-  const sentences = splitBengaliSentences(text);
-
-  try {
-    const needsCancel = window.speechSynthesis.speaking || window.speechSynthesis.pending;
-    if (needsCancel) {
-      window.speechSynthesis.cancel();
-      await new Promise((r) => setTimeout(r, 90));
-    }
-    if (runToken !== currentSpeechRunToken) return;
-
-    const voices = await waitForVoices(350);
-    if (runToken !== currentSpeechRunToken) return;
-    const bnVoice = selectBestBengaliVoice(voices);
-
-    try {
-      window.speechSynthesis.resume();
-    } catch {
-      // Ignore
-    }
-
-    let anyChunkStarted = false;
-    let blockedNotified = false;
-    const notifyBlocked = () => {
-      if (!blockedNotified) {
-        blockedNotified = true;
-        lastPlaybackError = 'Mobile browser blocked background speech synthesis';
-        notifyUnlockSubscribers();
-        onBlocked?.();
-      }
-    };
-
-    const speakChunk = (index: number) => {
-      if (runToken !== currentSpeechRunToken) {
-        onEnd?.();
-        return;
-      }
-      if (index >= sentences.length) {
-        onEnd?.();
-        return;
-      }
-
-      const utterance = new SpeechSynthesisUtterance(sentences[index]);
-      utterance.rate = 0.94;
-      utterance.pitch = 1.02;
-      utterance.volume = 1;
-      utterance.lang = bnVoice?.lang || 'bn-BD';
-      if (bnVoice) {
-        utterance.voice = bnVoice;
-      }
-
-      activeUtterances.add(utterance);
-
-      let chunkStarted = false;
-      const startWatchdog =
-        index === 0
-          ? setTimeout(() => {
-              if (!chunkStarted && !anyChunkStarted && runToken === currentSpeechRunToken) {
-                notifyBlocked();
-              }
-            }, 1300)
-          : null;
-
-      utterance.onstart = () => {
-        chunkStarted = true;
-        if (startWatchdog) clearTimeout(startWatchdog);
-        if (!anyChunkStarted) {
-          anyChunkStarted = true;
-          lastEngineUsed = 'web_speech';
-          lastPlaybackError = null;
-          onStart?.();
-        }
-      };
-
-      utterance.onend = () => {
-        if (startWatchdog) clearTimeout(startWatchdog);
-        activeUtterances.delete(utterance);
-        if (runToken === currentSpeechRunToken) {
-          speakChunk(index + 1);
-        }
-      };
-
-      utterance.onerror = (ev) => {
-        if (startWatchdog) clearTimeout(startWatchdog);
-        activeUtterances.delete(utterance);
-        const errCode = (ev as SpeechSynthesisErrorEvent)?.error || '';
-        if (
-          errCode === 'not-allowed' ||
-          errCode === 'audio-busy' ||
-          errCode === 'synthesis-failed' ||
-          !anyChunkStarted
-        ) {
-          notifyBlocked();
-        }
-        onEnd?.();
-      };
-
-      window.speechSynthesis.speak(utterance);
-    };
-
-    speakChunk(0);
-  } catch {
-    onBlocked?.();
-    onEnd?.();
-  }
+  return startedAny;
 }
 
-/**
- * Reliable cross-device Bengali TTS playback:
- * 1. Tier 1 (Mobile-Proof): Fetch `/api/tts/bn` MP3 -> `ctx.decodeAudioData()` -> play on unlocked `AudioContext`.
- *    Works asynchronously from WebSocket/SSE/Polling hours after initial tap on Android Chrome & iOS Safari!
- * 2. Tier 2: Persistent `HTMLAudioElement` using Blob ObjectURL (or direct streaming URL).
- * 3. Tier 3: Web Speech API fallback (offline / desktop).
- */
-export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = {}): void {
-  const { delayMs = 0, onStart, onEnd, onBlocked } = options;
-  const cleaned = text.replace(/\s+/g, ' ').trim();
-  if (typeof window === 'undefined' || !cleaned) {
-    onBlocked?.();
-    onEnd?.();
-    return;
+async function playWithWebSpeechFallback(
+  sentences: string[],
+  runToken: number,
+  options: { onFirstStart?: () => void; onBlocked?: () => void }
+): Promise<boolean> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || sentences.length === 0) {
+    options.onBlocked?.();
+    return false;
   }
 
-  const runToken = ++currentSpeechRunToken;
+  return new Promise<boolean>((resolve) => {
+    const startExec = async () => {
+      try {
+        const needsCancel = window.speechSynthesis.speaking || window.speechSynthesis.pending;
+        if (needsCancel) {
+          window.speechSynthesis.cancel();
+          await new Promise((r) => setTimeout(r, 90));
+        }
+        if (runToken !== currentSpeechRunToken) {
+          resolve(false);
+          return;
+        }
 
-  // Halt any prior speech cleanly
+        const voices = await waitForVoices(350);
+        if (runToken !== currentSpeechRunToken) {
+          resolve(false);
+          return;
+        }
+        const bnVoice = selectBestBengaliVoice(voices);
+
+        try {
+          window.speechSynthesis.resume();
+        } catch {
+          // Ignore
+        }
+
+        let anyChunkStarted = false;
+        let blockedNotified = false;
+        const notifyBlocked = () => {
+          if (!blockedNotified) {
+            blockedNotified = true;
+            lastPlaybackError = 'Mobile browser blocked background speech synthesis';
+            notifyUnlockSubscribers();
+            options.onBlocked?.();
+          }
+        };
+
+        const speakChunk = (index: number) => {
+          if (runToken !== currentSpeechRunToken) {
+            resolve(anyChunkStarted);
+            return;
+          }
+          if (index >= sentences.length) {
+            resolve(anyChunkStarted);
+            return;
+          }
+
+          const utterance = new SpeechSynthesisUtterance(sentences[index]);
+          utterance.rate = 0.94;
+          utterance.pitch = 1.02;
+          utterance.volume = 1;
+          utterance.lang = bnVoice?.lang || 'bn-BD';
+          if (bnVoice) {
+            utterance.voice = bnVoice;
+          }
+
+          activeUtterances.add(utterance);
+
+          let chunkStarted = false;
+          const startWatchdog =
+            index === 0
+              ? setTimeout(() => {
+                  if (!chunkStarted && !anyChunkStarted && runToken === currentSpeechRunToken) {
+                    notifyBlocked();
+                    resolve(false);
+                  }
+                }, 1300)
+              : null;
+
+          utterance.onstart = () => {
+            chunkStarted = true;
+            if (startWatchdog) clearTimeout(startWatchdog);
+            if (!anyChunkStarted) {
+              anyChunkStarted = true;
+              setVoicePlayingState(true);
+              lastEngineUsed = 'web_speech';
+              lastPlaybackError = null;
+              options.onFirstStart?.();
+            }
+          };
+
+          utterance.onend = () => {
+            if (startWatchdog) clearTimeout(startWatchdog);
+            activeUtterances.delete(utterance);
+            if (runToken === currentSpeechRunToken) {
+              speakChunk(index + 1);
+            } else {
+              resolve(anyChunkStarted);
+            }
+          };
+
+          utterance.onerror = (ev) => {
+            if (startWatchdog) clearTimeout(startWatchdog);
+            activeUtterances.delete(utterance);
+            const errCode = (ev as SpeechSynthesisErrorEvent)?.error || '';
+            if (
+              errCode === 'not-allowed' ||
+              errCode === 'audio-busy' ||
+              errCode === 'synthesis-failed' ||
+              !anyChunkStarted
+            ) {
+              notifyBlocked();
+            }
+            resolve(anyChunkStarted);
+          };
+
+          window.speechSynthesis.speak(utterance);
+        };
+
+        speakChunk(0);
+      } catch {
+        options.onBlocked?.();
+        resolve(false);
+      }
+    };
+    void startExec();
+  });
+}
+
+function haltCurrentPlaybackPreserveToken() {
+  setVoicePlayingState(false);
+
   if (activeBufferSource) {
     try {
       activeBufferSource.onended = null;
@@ -1046,78 +1195,167 @@ export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = 
       // Ignore
     }
   }
-  isVoiceAudioPlaying = false;
+}
 
-  const beginPlayback = async () => {
-    if (runToken !== currentSpeechRunToken) return;
+async function playPhraseList(
+  phrases: string[],
+  runToken: number,
+  options: {
+    pauseBetweenMs?: number;
+    chimeBetweenCycles?: boolean;
+    studentNameBn?: string;
+    onStart?: () => void;
+    onEnd?: () => void;
+    onBlocked?: () => void;
+  }
+) {
+  const { pauseBetweenMs = 850, chimeBetweenCycles = false, studentNameBn, onStart, onEnd, onBlocked } = options;
+  const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+  let notifiedStart = false;
 
-    const ttsUrl = `/api/tts/bn?text=${encodeURIComponent(cleaned.slice(0, 1450))}`;
-    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+  const fireStartOnce = () => {
+    if (!notifiedStart) {
+      notifiedStart = true;
+      updateGuardianMediaSession(studentNameBn);
+      onStart?.();
+    }
+  };
 
-    if (isOnline) {
-      let arrBuf: ArrayBuffer | null = null;
-      try {
-        arrBuf = await fetchBengaliTtsBuffer(cleaned);
-      } catch (err: any) {
-        lastPlaybackError = String(err?.message || 'TTS fetch failed');
-        arrBuf = null;
+  for (let pIdx = 0; pIdx < phrases.length; pIdx++) {
+    if (runToken !== currentSpeechRunToken) break;
+    const phrase = phrases[pIdx].replace(/\s+/g, ' ').trim();
+    if (!phrase) continue;
+
+    if (pIdx > 0) {
+      await new Promise((r) => setTimeout(r, pauseBetweenMs));
+      if (runToken !== currentSpeechRunToken) break;
+      if (chimeBetweenCycles && pIdx === 1) {
+        playAlarmChime();
+        await new Promise((r) => setTimeout(r, 380));
+        if (runToken !== currentSpeechRunToken) break;
       }
-
-      if (runToken !== currentSpeechRunToken) return;
-
-      // Tier 1: Unlocked Web Audio API Buffer playback (never triggers HTMLMediaElement NotAllowedError)
-      if (arrBuf) {
-        const playedViaWebAudio = await playBufferViaWebAudio(arrBuf, runToken, options);
-        if (playedViaWebAudio) return;
-      }
-
-      if (runToken !== currentSpeechRunToken) return;
-
-      // Tier 2: HTML5 Audio fallback (using pre-fetched Blob URL or direct URL)
-      const playedViaHtml = await playViaHtmlAudioElement(arrBuf, ttsUrl, runToken, options);
-      if (playedViaHtml) return;
     }
 
-    if (runToken !== currentSpeechRunToken) return;
+    const sentenceChunks = splitBengaliSentences(phrase, 145);
+    let playedPhrase = false;
 
-    // Tier 3: Web Speech API offline/backup
-    await playWithWebSpeechFallback(cleaned, runToken, options);
+    if (isOnline) {
+      const fetchedBuffers: (ArrayBuffer | null)[] = await Promise.all(
+        sentenceChunks.map((chunk) =>
+          fetchSingleChunkTtsBuffer(chunk).catch((err: any) => {
+            lastPlaybackError = String(err?.message || 'TTS fetch failed');
+            return null;
+          })
+        )
+      );
+      if (runToken !== currentSpeechRunToken) break;
+
+      if (fetchedBuffers.some(Boolean)) {
+        playedPhrase = await playChunksViaWebAudio(sentenceChunks, fetchedBuffers, runToken, {
+          onFirstStart: fireStartOnce,
+        });
+      }
+
+      if (!playedPhrase && runToken === currentSpeechRunToken) {
+        playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, fetchedBuffers, runToken, {
+          onFirstStart: fireStartOnce,
+        });
+      }
+    }
+
+    if (!playedPhrase && runToken === currentSpeechRunToken) {
+      playedPhrase = await playWithWebSpeechFallback(sentenceChunks, runToken, {
+        onFirstStart: fireStartOnce,
+        onBlocked: pIdx === 0 ? onBlocked : undefined,
+      });
+      if (!playedPhrase) break;
+    }
+  }
+
+  if (runToken === currentSpeechRunToken) {
+    setVoicePlayingState(false);
+    onEnd?.();
+  }
+}
+
+/**
+ * Reliable cross-device Bengali TTS playback:
+ * Splits text into clean single-sentence chunks (<=145 chars) so every MP3 decodes reliably
+ * on Android Chrome & iOS Safari via AudioContext, with HTML5 Audio & Web Speech fallbacks.
+ */
+export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = {}): void {
+  const { delayMs = 0, onStart, onEnd, onBlocked, studentNameBn } = options;
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (typeof window === 'undefined' || !cleaned) {
+    onBlocked?.();
+    onEnd?.();
+    return;
+  }
+
+  const runToken = ++currentSpeechRunToken;
+  haltCurrentPlaybackPreserveToken();
+
+  const startFn = () => {
+    if (runToken !== currentSpeechRunToken) return;
+    void playPhraseList([cleaned], runToken, {
+      studentNameBn,
+      onStart,
+      onEnd,
+      onBlocked,
+    });
   };
 
   if (delayMs > 0) {
-    setTimeout(() => {
-      void beginPlayback();
-    }, delayMs);
+    setTimeout(startFn, delayMs);
   } else {
-    void beginPlayback();
+    startFn();
+  }
+}
+
+/**
+ * Repeat Guardian Voice Notification multiple times calling the student's name clearly
+ * until stopped or all repeat rounds finish cleanly.
+ */
+export function speakRepeatedGuardianAlert(
+  student: Pick<Student, 'nameBn'>,
+  action: 'entry' | 'exit',
+  dailySchedule?: Partial<DailyScheduleConfig> | null,
+  options: SpeakBengaliOptions & { repeatCount?: number } = {}
+): void {
+  const { delayMs = 0, repeatCount = 3, onStart, onEnd, onBlocked } = options;
+  if (typeof window === 'undefined') {
+    onBlocked?.();
+    onEnd?.();
+    return;
+  }
+
+  const phrases = buildGuardianRepeatedAlertPhrases(student, action, dailySchedule, repeatCount);
+  const runToken = ++currentSpeechRunToken;
+  haltCurrentPlaybackPreserveToken();
+
+  const startFn = () => {
+    if (runToken !== currentSpeechRunToken) return;
+    void playPhraseList(phrases, runToken, {
+      pauseBetweenMs: 950,
+      chimeBetweenCycles: true,
+      studentNameBn: student.nameBn,
+      onStart,
+      onEnd,
+      onBlocked,
+    });
+  };
+
+  if (delayMs > 0) {
+    setTimeout(startFn, delayMs);
+  } else {
+    startFn();
   }
 }
 
 export function stopBengaliSpeech(): void {
   currentSpeechRunToken++;
-  isVoiceAudioPlaying = false;
+  haltCurrentPlaybackPreserveToken();
 
-  if (activeBufferSource) {
-    try {
-      activeBufferSource.onended = null;
-      activeBufferSource.stop();
-      activeBufferSource.disconnect();
-    } catch {
-      // Ignore
-    }
-    activeBufferSource = null;
-  }
-
-  if (sharedVoiceAudioEl) {
-    try {
-      sharedVoiceAudioEl.onplaying = null;
-      sharedVoiceAudioEl.onended = null;
-      sharedVoiceAudioEl.onerror = null;
-      sharedVoiceAudioEl.pause();
-    } catch {
-      // Ignore
-    }
-  }
   if (activeObjectUrl) {
     try {
       URL.revokeObjectURL(activeObjectUrl);
@@ -1132,4 +1370,9 @@ export function stopBengaliSpeech(): void {
     }
   }
   activeUtterances.clear();
+  if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    try {
+      (navigator as any).mediaSession.playbackState = 'none';
+    } catch {}
+  }
 }

@@ -87,9 +87,11 @@ import {
   GuardianAudioHardwareStatus,
   isMobileAudioUnlocked,
   replayPendingBlockedSpeech,
+  stopBengaliSpeech,
   subscribeGuardianAudioStatus,
   subscribeMobileAudioUnlock,
   subscribePendingBlockedSpeech,
+  subscribeSpeechPlayback,
 } from '../utils/gatepassAudio';
 
 interface StudentPersonalDashboardProps {
@@ -106,6 +108,7 @@ interface StudentPersonalDashboardProps {
   guardianReplyText: string;
   setGuardianReplyText: (val: string) => void;
   onTestAudio: (playDemo?: boolean) => void;
+  onStopAudio?: () => void;
   onReplayAlarm: (log: SecurityGatepassLog) => void;
   onAcknowledgeAlarm: (log: SecurityGatepassLog, customText?: string) => void;
   buildGuardianVoiceMessage: (student: Student, action: 'entry' | 'exit') => string;
@@ -157,6 +160,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   guardianReplyText,
   setGuardianReplyText,
   onTestAudio,
+  onStopAudio,
   onReplayAlarm,
   onAcknowledgeAlarm,
   buildGuardianVoiceMessage,
@@ -186,6 +190,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const [audioHardwareStatus, setAudioHardwareStatus] = useState<GuardianAudioHardwareStatus>(() =>
     getGuardianAudioStatus()
   );
+  const [isVoiceCurrentlyPlaying, setIsVoiceCurrentlyPlaying] = useState<boolean>(false);
   const [pendingBlockedAlert, setPendingBlockedAlert] = useState<{
     message: string;
     logId: string;
@@ -197,10 +202,12 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
     const unsubHw = subscribeGuardianAudioStatus(setAudioHardwareStatus);
     const unsubPending = subscribePendingBlockedSpeech(setPendingBlockedAlert);
+    const unsubSpeech = subscribeSpeechPlayback(setIsVoiceCurrentlyPlaying);
     return () => {
       unsubUnlock();
       unsubHw();
       unsubPending();
+      unsubSpeech();
     };
   }, []);
 
@@ -790,7 +797,37 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         </div>
       </section>
 
-      {/* Pending Autoplay-Blocked Voice Alert (if scan arrived before user tapped mobile screen) */}
+      {/* Active Voice Playing Banner OR Pending Autoplay-Blocked Voice Alert */}
+      {(isVoiceCurrentlyPlaying || isGuardianAlarmRinging) && latestChildAlarm && !pendingBlockedAlert && (
+        <div className="bg-emerald-950 text-white rounded-2xl p-4 sm:p-5 shadow-lg border-2 border-emerald-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-sm sm:text-base font-bold text-emerald-300 flex items-center gap-2">
+              <Volume2 className="w-5 h-5 text-amber-300 shrink-0 animate-pulse" />
+              <span>লাইভ ভয়েস এলার্ম বাজছে — {student.nameBn}</span>
+            </div>
+            <p className="text-xs sm:text-sm text-emerald-50 leading-relaxed">
+              {buildGuardianVoiceMessage(student, latestChildAlarm.action)}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                stopBengaliSpeech();
+                if (onStopAudio) onStopAudio();
+                if (!latestChildAlarm.guardianAcknowledged) {
+                  onAcknowledgeAlarm(latestChildAlarm, 'মেসেজ শুনেছি ও নিশ্চিত করলাম');
+                }
+              }}
+              className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+            >
+              <CheckCheck className="w-4 h-4" />
+              <span>শুনেছি ও এলার্ম থামান ✓</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {pendingBlockedAlert && (
         <div className="bg-rose-600 text-white rounded-2xl p-4 sm:p-5 shadow-md border-2 border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-1">
@@ -806,7 +843,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             className="px-4 py-2.5 bg-amber-300 hover:bg-amber-200 text-slate-950 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shrink-0 shadow-sm"
           >
             <Volume2 className="w-4 h-4" />
-            <span>এখনই ভয়েস শুনুন</span>
+            <span>এখনই ভয়েস শুনুন (নাম ধরে)</span>
           </button>
         </div>
       )}
@@ -817,7 +854,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           <div className="flex items-start sm:items-center gap-2.5 text-xs sm:text-sm text-amber-950">
             <Volume2 className="w-5 h-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
             <span>
-              <strong>অটোমেটিক গেটপাস ভয়েস এলার্ম:</strong> স্কুলের গেটে আইডি কার্ড স্ক্যান হওয়া মাত্রই এই ফোনে সরাসরি বাংলা ভয়েস মেসেজ শুনতে নিচের বাটনে একবার ট্যাপ করুন।
+              <strong>অটোমেটিক গেটপাস ভয়েস এলার্ম:</strong> স্কুলের গেটে আইডি কার্ড স্ক্যান হওয়া মাত্রই এই ফোনে সরাসরি {student.nameBn}-এর নাম ধরে বাংলা ভয়েস মেসেজ শুনতে নিচের বাটনে একবার ট্যাপ করুন।
             </span>
           </div>
           <button
@@ -966,19 +1003,43 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onReplayAlarm(latestChildAlarm)}
-                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                  >
-                    <Volume2 className="w-4 h-4 text-amber-300" />
-                    <span>অডিও বার্তা শুনুন</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isVoiceCurrentlyPlaying && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          stopBengaliSpeech();
+                          if (onStopAudio) onStopAudio();
+                        }}
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <VolumeX className="w-4 h-4" />
+                        <span>থামান</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onReplayAlarm(latestChildAlarm)}
+                      className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <Volume2 className="w-4 h-4 text-amber-300" />
+                      <span>নাম ধরে শুনুন (৩ বার)</span>
+                    </button>
+                  </div>
                 </div>
 
                 <p className="text-sm sm:text-base text-slate-100 leading-relaxed bg-slate-900 p-4 rounded-xl border border-slate-800">
                   {buildGuardianVoiceMessage(student, latestChildAlarm.action)}
                 </p>
+
+                {latestChildAlarm.studentEtiquetteReply && (
+                  <div className="px-3.5 py-2 bg-emerald-950/50 border border-emerald-600/40 rounded-lg text-xs text-emerald-200 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      বিদ্যালয় গেটে শিষ্টাচার অনুশীলন: {student.nameBn} সালামের জবাবে বলেছে "{latestChildAlarm.studentEtiquetteReply}"
+                    </span>
+                  </div>
+                )}
 
                 {latestChildAlarm.guardianAcknowledged ? (
                   <div className="p-3 bg-emerald-950/60 border border-emerald-700/50 rounded-xl text-xs text-emerald-200 flex flex-wrap items-center justify-between gap-2">

@@ -9490,5 +9490,22 @@
   ],
   "staffAttendance": [],
   "admissionRequests": [],
-  "_lastUpdated": "2026-11-17T15:34:27.501Z"
+  "_lastUpdated": "2026-11-17T17:05:06.628Z",
+  "_lastSecurityEvent": {
+    "id": "sec-e2e-verify-1794935106183",
+    "studentId": "std_1794322963381_0_wpxc",
+    "portalUserId": "DL-C1-01",
+    "classId": "class_play",
+    "section": "ক",
+    "studentNameBn": "মোঃ মাজিদ",
+    "studentRoll": 1,
+    "classNameBn": "প্রথম শ্রেণি",
+    "action": "entry",
+    "timestamp": "2026-11-17T17:05:06.183Z",
+    "guardianPhone": "01700000000",
+    "voiceDispatched": true,
+    "smsDispatched": true,
+    "status": "verified",
+    "serverTimestamp": 1794935106199
+  }
 }

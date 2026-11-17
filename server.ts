@@ -351,27 +351,106 @@ async function startServer() {
   interface GatepassWsClient {
     ws: WebSocket;
     studentId: string;
+    portalId: string;
     role: string;
     isAlive: boolean;
   }
   interface GatepassSseClient {
     res: express.Response;
     studentId: string;
+    portalId: string;
     role: string;
   }
 
   const gatepassWsClients = new Set<GatepassWsClient>();
   const gatepassSseClients = new Set<GatepassSseClient>();
 
+  const computePortalIdQuick = (s: any): string => {
+    if (s?.portalUserId && String(s.portalUserId).trim()) {
+      return String(s.portalUserId).trim().toUpperCase();
+    }
+    const classCodeMap: Record<string, string> = {
+      class_play: 'PL',
+      class_nursery: 'NU',
+      class_kg: 'KG',
+      class_1: 'C1',
+      class_2: 'C2',
+      class_3: 'C3',
+      class_4: 'C4',
+      class_5: 'C5',
+      class_6: 'C6',
+      class_7: 'C7',
+      class_8: 'C8',
+      class_9: 'C9',
+      class_10: 'C10',
+    };
+    const cls = String(s?.classId || '');
+    const clsCode = classCodeMap[cls] || cls.replace('class_', '').toUpperCase().slice(0, 3) || 'ST';
+    const rollStr = String(s?.roll ?? s?.studentRoll ?? 0).padStart(2, '0');
+    return `DL-${clsCode}-${rollStr}`;
+  };
+
+  const getSchoolTodayDateStr = (isoTimestamp?: string): string => {
+    const dt = isoTimestamp ? new Date(isoTimestamp) : new Date();
+    const safeDt = Number.isNaN(dt.getTime()) ? new Date() : dt;
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(safeDt);
+      const y = parts.find((p) => p.type === 'year')?.value;
+      const m = parts.find((p) => p.type === 'month')?.value;
+      const d = parts.find((p) => p.type === 'day')?.value;
+      if (y && m && d) return `${y}-${m}-${d}`;
+    } catch {
+      // Fallback
+    }
+    return safeDt.toISOString().split('T')[0];
+  };
+
+  const getSchoolTimeLabelBn = (isoTimestamp?: string): string => {
+    const dt = isoTimestamp ? new Date(isoTimestamp) : new Date();
+    const safeDt = Number.isNaN(dt.getTime()) ? new Date() : dt;
+    try {
+      return safeDt.toLocaleTimeString('bn-BD', {
+        timeZone: 'Asia/Dhaka',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return safeDt.toTimeString().slice(0, 5);
+    }
+  };
+
+  const logMatchesTargetStudent = (
+    log: any,
+    targetStudentId?: string,
+    targetPortalId?: string
+  ): boolean => {
+    if (!log) return false;
+    const cleanStdId = (targetStudentId || '').trim();
+    const cleanPortal = (targetPortalId || '').trim().toUpperCase();
+    if (!cleanStdId && !cleanPortal) return true;
+    if (cleanStdId && log.studentId === cleanStdId) return true;
+    if (cleanPortal) {
+      const logPortal = (log.portalUserId || computePortalIdQuick(log)).trim().toUpperCase();
+      if (logPortal && logPortal === cleanPortal) return true;
+    }
+    return false;
+  };
+
   const shouldDeliverToSubscriber = (
-    sub: { studentId: string; role: string },
+    sub: { studentId: string; portalId?: string; role: string },
     log: any
   ): boolean => {
     if (!log || !log.studentId) return false;
-    if (sub.role === 'official' || sub.role === 'employee' || !sub.studentId) {
+    if (sub.role === 'official' || sub.role === 'employee' || (!sub.studentId && !sub.portalId)) {
       return true;
     }
-    return sub.studentId === log.studentId;
+    return logMatchesTargetStudent(log, sub.studentId, sub.portalId);
   };
 
   const broadcastGatepassEvent = (
@@ -1058,7 +1137,7 @@ async function startServer() {
   // REAL-TIME SECURITY GATEPASS & GUARDIAN AUDIO ALARM ENDPOINTS
   // =========================================================================
 
-  // POST new scan event from school gate (broadcasts immediately across devices)
+  // POST new scan event from school gate (logs scan + marks today's attendance present + broadcasts live)
   app.post('/api/security/scan', (req, res) => {
     try {
       const { log } = req.body;
@@ -1070,8 +1149,35 @@ async function startServer() {
         loadDatabaseFromFile();
       }
 
+      const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+      const matchedStudent =
+        studentsList.find((s) => s && s.id === log.studentId) ||
+        (log.portalUserId
+          ? studentsList.find(
+              (s) => s && computePortalIdQuick(s) === String(log.portalUserId).trim().toUpperCase()
+            )
+          : undefined) ||
+        (log.classId && log.studentRoll !== undefined
+          ? studentsList.find(
+              (s) => s && s.classId === log.classId && Number(s.roll) === Number(log.studentRoll)
+            )
+          : undefined);
+
+      const resolvedStudentId = matchedStudent?.id || log.studentId;
+      const resolvedClassId = matchedStudent?.classId || log.classId || '';
+      const resolvedSection = matchedStudent?.section || log.section || 'ক';
+      const resolvedAcademicYear = matchedStudent?.academicYear || '২০২৬';
+      const resolvedPortalId =
+        log.portalUserId ||
+        (matchedStudent ? computePortalIdQuick(matchedStudent) : computePortalIdQuick(log));
+
+      const scanIso = log.timestamp || new Date().toISOString();
       const savedLog = {
         ...log,
+        studentId: resolvedStudentId,
+        portalUserId: resolvedPortalId,
+        ...(resolvedClassId ? { classId: resolvedClassId } : {}),
+        ...(resolvedSection ? { section: resolvedSection } : {}),
         serverTimestamp: Date.now(),
       };
 
@@ -1080,23 +1186,131 @@ async function startServer() {
       // Prepend new log and keep latest 1000 logs
       const updatedLogs = [savedLog, ...withoutDup].slice(0, 1000);
 
+      // Automatically persist daily attendance ('present') into main DB attendanceRecords
+      const currentAttendance: Record<string, any> =
+        memoryDb?.attendanceRecords && typeof memoryDb.attendanceRecords === 'object'
+          ? { ...memoryDb.attendanceRecords }
+          : {};
+      let updatedAttendanceRecord: any = null;
+
+      if (resolvedClassId) {
+        const todayDate = getSchoolTodayDateStr(scanIso);
+        const timeLabel = getSchoolTimeLabelBn(scanIso);
+        const actionTag = savedLog.action === 'exit' ? 'প্রস্থান স্ক্যান' : 'ডিজিটাল গেটপাস স্ক্যান';
+        const candidateKeys = [
+          `${resolvedClassId}_${resolvedSection || 'all'}_${todayDate}`,
+          `${resolvedClassId}_${resolvedSection}_${todayDate}`,
+          `${resolvedClassId}__${todayDate}`,
+          `${resolvedClassId}_all_${todayDate}`,
+        ];
+        const existingKey =
+          candidateKeys.find((k) => Boolean(currentAttendance[k])) ||
+          Object.keys(currentAttendance).find((k) => {
+            const r = currentAttendance[k];
+            return (
+              r &&
+              r.classId === resolvedClassId &&
+              r.date === todayDate &&
+              (!r.section || r.section === resolvedSection)
+            );
+          }) ||
+          candidateKeys[0];
+
+        const existingRec = currentAttendance[existingKey] || {
+          id: existingKey,
+          date: todayDate,
+          academicYear: resolvedAcademicYear,
+          classId: resolvedClassId,
+          section: resolvedSection,
+          records: {},
+          updatedAt: scanIso,
+        };
+
+        const prevEntry = existingRec.records?.[resolvedStudentId];
+        const nextStatus =
+          prevEntry && (prevEntry.status === 'late' || prevEntry.status === 'leave')
+            ? prevEntry.status
+            : 'present';
+        const scanRemark = `${actionTag} • ${timeLabel}`;
+        const nextRemarks =
+          prevEntry?.remarks && prevEntry.remarks.includes('স্ক্যান')
+            ? `${prevEntry.remarks.split('|')[0].trim()} | ${scanRemark}`
+            : prevEntry?.remarks
+            ? `${scanRemark} (${prevEntry.remarks})`
+            : scanRemark;
+
+        updatedAttendanceRecord = {
+          ...existingRec,
+          records: {
+            ...(existingRec.records || {}),
+            [resolvedStudentId]: {
+              status: nextStatus,
+              remarks: nextRemarks,
+            },
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        currentAttendance[existingKey] = updatedAttendanceRecord;
+      }
+
       const updatedDb = {
         ...(memoryDb || {}),
         securityLogs: updatedLogs,
+        attendanceRecords: currentAttendance,
         _lastSecurityEvent: savedLog,
         _lastUpdated: new Date().toISOString(),
       };
 
       saveDatabaseToFile(updatedDb);
-      broadcastGatepassEvent('gatepass:scan', savedLog);
+      broadcastGatepassEvent('gatepass:scan', savedLog, {
+        ...(updatedAttendanceRecord ? { attendanceRecord: updatedAttendanceRecord } : {}),
+      });
 
       return res.json({
         success: true,
-        message: 'Gatepass scan logged and synced across all devices',
+        message: 'Gatepass scan logged, attendance saved, and synced across all devices',
         log: savedLog,
+        attendanceRecord: updatedAttendanceRecord,
       });
     } catch (err: any) {
       console.error('[Server API] Security scan log error:', err);
+      return res.status(500).json({ success: false, message: err?.message || 'Server error' });
+    }
+  });
+
+  // POST record student Salam etiquette response ('ওয়ালাইকুমুস সালাম') on scan log
+  app.post('/api/security/etiquette', (req, res) => {
+    try {
+      const { logId, studentId, replyText } = req.body || {};
+      if (!logId && !studentId) {
+        return res.status(400).json({ success: false, message: 'logId or studentId required' });
+      }
+      if (!memoryDb) {
+        loadDatabaseFromFile();
+      }
+      const existingLogs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
+      const reply = String(replyText || 'ওয়ালাইকুমুস সালাম ওয়া রাহমাতুল্লাহ').trim();
+      let updatedTarget: any = null;
+      const updatedLogs = existingLogs.map((l) => {
+        if (!updatedTarget && ((logId && l.id === logId) || (!logId && studentId && l.studentId === studentId))) {
+          updatedTarget = {
+            ...l,
+            studentEtiquetteReply: reply,
+          };
+          return updatedTarget;
+        }
+        return l;
+      });
+      if (!updatedTarget) {
+        return res.json({ success: true, message: 'Etiquette noted locally' });
+      }
+      saveDatabaseToFile({
+        ...(memoryDb || {}),
+        securityLogs: updatedLogs,
+        _lastUpdated: new Date().toISOString(),
+      });
+      return res.json({ success: true, log: updatedTarget });
+    } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Server error' });
     }
   });
@@ -1162,6 +1376,7 @@ async function startServer() {
   // Real-time Server-Sent Events (SSE) stream fallback for gatepass notifications
   app.get('/api/security/stream', (req, res) => {
     const studentId = String(req.query.studentId || '').trim();
+    const portalId = String(req.query.portalId || '').trim().toUpperCase();
     const role = String(req.query.role || 'student').trim();
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1172,14 +1387,17 @@ async function startServer() {
       (res as any).flushHeaders();
     }
 
-    const clientEntry: GatepassSseClient = { res, studentId, role };
+    const clientEntry: GatepassSseClient = { res, studentId, portalId, role };
     gatepassSseClients.add(clientEntry);
 
     if (!memoryDb) {
       loadDatabaseFromFile();
     }
     const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
-    const recentLogs = studentId ? logs.filter((l) => l.studentId === studentId).slice(0, 10) : logs.slice(0, 20);
+    const recentLogs =
+      studentId || portalId
+        ? logs.filter((l) => logMatchesTargetStudent(l, studentId, portalId)).slice(0, 10)
+        : logs.slice(0, 20);
 
     try {
       res.write(
@@ -1217,7 +1435,8 @@ async function startServer() {
       }
 
       const since = Number(req.query.since) || 0;
-      const studentId = (req.query.studentId as string) || '';
+      const studentId = String(req.query.studentId || '').trim();
+      const portalId = String(req.query.portalId || '').trim().toUpperCase();
 
       const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
 
@@ -1229,7 +1448,8 @@ async function startServer() {
             ? l.timestamp
             : new Date(l.timestamp).getTime() || 0;
         const matchesTime = since > 0 ? logTime > since : true;
-        const matchesStudent = studentId ? l.studentId === studentId : true;
+        const matchesStudent =
+          studentId || portalId ? logMatchesTargetStudent(l, studentId, portalId) : true;
         return matchesTime && matchesStudent;
       });
 
@@ -1435,7 +1655,25 @@ async function startServer() {
         })
       );
 
-      const mergedAudio = Buffer.concat(audioBuffers);
+      const stripLeadingId3v2 = (buf: Buffer): Buffer => {
+        if (buf.length >= 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) {
+          const tagSize =
+            ((buf[6] & 0x7f) << 21) |
+            ((buf[7] & 0x7f) << 14) |
+            ((buf[8] & 0x7f) << 7) |
+            (buf[9] & 0x7f);
+          const totalHeader = 10 + tagSize;
+          if (totalHeader < buf.length) {
+            return buf.subarray(totalHeader);
+          }
+        }
+        return buf;
+      };
+
+      const cleanedAudioBuffers = audioBuffers.map((buf, idx) =>
+        idx === 0 ? buf : stripLeadingId3v2(buf)
+      );
+      const mergedAudio = Buffer.concat(cleanedAudioBuffers);
       if (mergedAudio.length === 0) {
         return res.status(502).json({ success: false, message: 'Empty TTS response' });
       }
@@ -2691,6 +2929,7 @@ async function startServer() {
     const clientEntry: GatepassWsClient = {
       ws,
       studentId: urlObj?.searchParams.get('studentId')?.trim() || '',
+      portalId: urlObj?.searchParams.get('portalId')?.trim().toUpperCase() || '',
       role: urlObj?.searchParams.get('role')?.trim() || 'student',
       isAlive: true,
     };
@@ -2700,9 +2939,12 @@ async function startServer() {
       loadDatabaseFromFile();
     }
     const logs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
-    const recentLogs = clientEntry.studentId
-      ? logs.filter((l) => l.studentId === clientEntry.studentId).slice(0, 10)
-      : logs.slice(0, 20);
+    const recentLogs =
+      clientEntry.studentId || clientEntry.portalId
+        ? logs
+            .filter((l) => logMatchesTargetStudent(l, clientEntry.studentId, clientEntry.portalId))
+            .slice(0, 10)
+        : logs.slice(0, 20);
 
     try {
       ws.send(
@@ -2725,11 +2967,15 @@ async function startServer() {
         const parsed = JSON.parse(String(rawMsg));
         if (parsed && parsed.type === 'subscribe') {
           clientEntry.studentId = String(parsed.studentId || '').trim();
+          clientEntry.portalId = String(parsed.portalId || '').trim().toUpperCase();
           clientEntry.role = String(parsed.role || clientEntry.role).trim();
           const currentLogs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
-          const subLogs = clientEntry.studentId
-            ? currentLogs.filter((l) => l.studentId === clientEntry.studentId).slice(0, 10)
-            : currentLogs.slice(0, 20);
+          const subLogs =
+            clientEntry.studentId || clientEntry.portalId
+              ? currentLogs
+                  .filter((l) => logMatchesTargetStudent(l, clientEntry.studentId, clientEntry.portalId))
+                  .slice(0, 10)
+              : currentLogs.slice(0, 20);
           ws.send(
             JSON.stringify({
               type: 'gatepass:init',

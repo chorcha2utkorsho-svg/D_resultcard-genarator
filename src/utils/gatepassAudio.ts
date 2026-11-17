@@ -1,4 +1,5 @@
-import { Student } from '../types';
+import { ScannerVoiceSettings, Student } from '../types';
+import { toBengaliRoll } from './bengali';
 
 export interface DailyScheduleConfig {
   ptStartTimeBn: string;
@@ -13,6 +14,44 @@ export const DEFAULT_DAILY_SCHEDULE: DailyScheduleConfig = {
   breakTimeBn: 'দুপুর একটা দশ মিনিটে',
   dismissalTimeBn: 'বিকাল চারটায়',
 };
+
+export const DEFAULT_SCANNER_VOICE_SETTINGS: ScannerVoiceSettings = {
+  entryMessageTemplate:
+    'স্বাগতম {name}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
+  exitMessageTemplate:
+    'বিদায় {name}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি {name}।',
+};
+
+export function buildScannerVoiceMessage(
+  student: Pick<Student, 'nameBn' | 'roll'>,
+  classNameBn: string,
+  action: 'entry' | 'exit',
+  settings?: Partial<ScannerVoiceSettings> | null
+): string {
+  const defaultTemplate =
+    action === 'entry'
+      ? DEFAULT_SCANNER_VOICE_SETTINGS.entryMessageTemplate
+      : DEFAULT_SCANNER_VOICE_SETTINGS.exitMessageTemplate;
+
+  const rawTemplate =
+    action === 'entry'
+      ? settings?.entryMessageTemplate
+      : settings?.exitMessageTemplate;
+
+  const template =
+    typeof rawTemplate === 'string' && rawTemplate.trim()
+      ? rawTemplate.trim()
+      : defaultTemplate;
+
+  const studentName = student.nameBn || 'শিক্ষার্থী';
+  const studentRoll = toBengaliRoll(student.roll || 1);
+  const className = classNameBn || 'শ্রেণি';
+
+  return template
+    .replace(/\{name\}|\{নাম\}/gi, studentName)
+    .replace(/\{class\}|\{শ্রেণি\}/gi, className)
+    .replace(/\{roll\}|\{রোল\}/gi, studentRoll);
+}
 
 export function buildGuardianVoiceMessage(
   student: Pick<Student, 'nameBn'>,
@@ -32,30 +71,76 @@ export function buildGuardianVoiceMessage(
   return `আপনার প্রিয় ${student.nameBn} এইমাত্র স্কুল প্রাঙ্গন থেকে নিরাপদে প্রস্থান করেছে।`;
 }
 
-// 44-byte silent PCM WAV data URL used to unlock HTML5 <audio> playback on iOS Safari / Android Chrome
+// 44-byte silent PCM WAV data URL used to prime HTML5 <audio> on iOS Safari / Android Chrome
 const SILENT_WAV_DATA_URI =
   'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
 
+export interface GuardianAudioHardwareStatus {
+  unlocked: boolean;
+  audioContextState: AudioContextState | 'unavailable';
+  liveWatchActive: boolean;
+  wakeLockActive: boolean;
+  lastEngineUsed: 'none' | 'webaudio' | 'html_audio' | 'web_speech';
+  lastPlaybackError: string | null;
+}
+
 let sharedAudioCtx: AudioContext | null = null;
-// Single persistent <audio> element kept unlocked across the session for async WebSocket/poll playback
 let sharedVoiceAudioEl: HTMLAudioElement | null = null;
+let activeBufferSource: AudioBufferSourceNode | null = null;
+let activeObjectUrl: string | null = null;
+
+// Sub-audible continuous oscillator keeping Android Chrome / iOS Safari AudioContext awake while guardian alarm is armed
+let liveWatchOsc: OscillatorNode | null = null;
+let liveWatchGain: GainNode | null = null;
+let liveWatchDesired = false;
+let wakeLockSentinel: any = null;
+
 let voiceElementPrimed = false;
 let isVoiceAudioPlaying = false;
 let audioUnlockedInSession = false;
 let currentSpeechRunToken = 0;
-let pendingBlockedAlert: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null =
-  null;
+let lastEngineUsed: GuardianAudioHardwareStatus['lastEngineUsed'] = 'none';
+let lastPlaybackError: string | null = null;
 
+let pendingBlockedAlert: {
+  message: string;
+  logId: string;
+  studentNameBn?: string;
+  action?: 'entry' | 'exit';
+} | null = null;
+
+// Memory LRU cache of fetched MP3 ArrayBuffers so repeat alerts/replays start in <5ms
+const ttsArrayBufferCache = new Map<string, ArrayBuffer>();
 const activeUtterances = new Set<SpeechSynthesisUtterance>();
 const unlockSubscribers = new Set<(unlocked: boolean) => void>();
+const statusSubscribers = new Set<(status: GuardianAudioHardwareStatus) => void>();
 const pendingAlertSubscribers = new Set<
   (pending: { message: string; logId: string; studentNameBn?: string; action?: 'entry' | 'exit' } | null) => void
 >();
+
+export function getGuardianAudioStatus(): GuardianAudioHardwareStatus {
+  return {
+    unlocked: audioUnlockedInSession,
+    audioContextState: sharedAudioCtx ? sharedAudioCtx.state : 'unavailable',
+    liveWatchActive: Boolean(liveWatchOsc) || liveWatchDesired,
+    wakeLockActive: Boolean(wakeLockSentinel),
+    lastEngineUsed,
+    lastPlaybackError,
+  };
+}
 
 function notifyUnlockSubscribers() {
   for (const cb of unlockSubscribers) {
     try {
       cb(audioUnlockedInSession);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+  const snap = getGuardianAudioStatus();
+  for (const cb of statusSubscribers) {
+    try {
+      cb(snap);
     } catch {
       // Ignore subscriber errors
     }
@@ -84,6 +169,16 @@ export function subscribeMobileAudioUnlock(cb: (unlocked: boolean) => void): () 
   };
 }
 
+export function subscribeGuardianAudioStatus(
+  cb: (status: GuardianAudioHardwareStatus) => void
+): () => void {
+  statusSubscribers.add(cb);
+  cb(getGuardianAudioStatus());
+  return () => {
+    statusSubscribers.delete(cb);
+  };
+}
+
 export function getPendingBlockedSpeech() {
   return pendingBlockedAlert;
 }
@@ -108,13 +203,20 @@ export function subscribePendingBlockedSpeech(
 export function getSharedAudioContext(): AudioContext | null {
   try {
     if (typeof window === 'undefined') return null;
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return null;
     if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
       sharedAudioCtx = new AudioCtx();
-    }
-    if (sharedAudioCtx.state === 'suspended') {
-      sharedAudioCtx.resume().catch(() => {});
+      sharedAudioCtx.onstatechange = () => {
+        if (!sharedAudioCtx) return;
+        const isRunning = sharedAudioCtx.state === 'running';
+        if (isRunning && !audioUnlockedInSession) {
+          audioUnlockedInSession = true;
+        }
+        notifyUnlockSubscribers();
+      };
     }
     return sharedAudioCtx;
   } catch {
@@ -133,26 +235,211 @@ function getSharedVoiceAudioElement(): HTMLAudioElement | null {
   return sharedVoiceAudioEl;
 }
 
+function startSubAudibleKeepAlive(ctx: AudioContext): void {
+  try {
+    if (liveWatchOsc || ctx.state !== 'running') return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(20, ctx.currentTime);
+    // Inaudible DC/ultra-low amplitude just to prevent Android Chrome / iOS Safari from suspending AudioContext
+    gain.gain.setValueAtTime(0.00008, ctx.currentTime);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    liveWatchOsc = osc;
+    liveWatchGain = gain;
+    notifyUnlockSubscribers();
+  } catch {
+    // Non-fatal
+  }
+}
+
+function stopSubAudibleKeepAlive(): void {
+  if (liveWatchOsc) {
+    try {
+      liveWatchOsc.stop();
+      liveWatchOsc.disconnect();
+    } catch {
+      // Ignore
+    }
+    liveWatchOsc = null;
+  }
+  if (liveWatchGain) {
+    try {
+      liveWatchGain.disconnect();
+    } catch {
+      // Ignore
+    }
+    liveWatchGain = null;
+  }
+}
+
+async function acquireWakeLock(): Promise<void> {
+  if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+  try {
+    if (!wakeLockSentinel) {
+      wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+      wakeLockSentinel?.addEventListener?.('release', () => {
+        wakeLockSentinel = null;
+        notifyUnlockSubscribers();
+      });
+      notifyUnlockSubscribers();
+    }
+  } catch {
+    // Wake lock not permitted on some browsers/battery-saver modes
+  }
+}
+
+function releaseWakeLock(): void {
+  if (wakeLockSentinel) {
+    try {
+      wakeLockSentinel.release().catch(() => {});
+    } catch {
+      // Ignore
+    }
+    wakeLockSentinel = null;
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && liveWatchDesired) {
+      const ctx = getSharedAudioContext();
+      if (ctx) {
+        ctx
+          .resume()
+          .then(() => {
+            if (ctx.state === 'running' && liveWatchDesired) {
+              startSubAudibleKeepAlive(ctx);
+            }
+          })
+          .catch(() => {});
+      }
+      void acquireWakeLock();
+    }
+  });
+}
+
 /**
- * Unlock mobile Chrome / Android WebView / iOS Safari AudioContext + persistent HTML5 <audio> + Web Speech API
- * inside any direct user gesture (login submit, button tap, or first screen touch).
+ * Keep Guardian Phone AudioContext running & awake while alarm watch is armed.
+ */
+export function setGuardianLiveWatchActive(active: boolean): void {
+  liveWatchDesired = active;
+  if (active) {
+    const ctx = getSharedAudioContext();
+    if (ctx) {
+      ctx
+        .resume()
+        .then(() => {
+          if (ctx.state === 'running' && liveWatchDesired) {
+            audioUnlockedInSession = true;
+            startSubAudibleKeepAlive(ctx);
+          }
+          notifyUnlockSubscribers();
+        })
+        .catch(() => {});
+    }
+    void acquireWakeLock();
+  } else {
+    stopSubAudibleKeepAlive();
+    releaseWakeLock();
+    notifyUnlockSubscribers();
+  }
+}
+
+export function isGuardianLiveWatchActive(): boolean {
+  return liveWatchDesired;
+}
+
+export async function requestGuardianNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'unsupported';
+  }
+  if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+    return Notification.permission;
+  }
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    return Notification.permission;
+  }
+}
+
+/**
+ * Show system notification cleanly across both Desktop and Android Chrome (via ServiceWorkerRegistration.showNotification).
+ */
+export function showGuardianSystemNotification(title: string, body: string): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  const opts: NotificationOptions = {
+    body,
+    icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
+    tag: 'dlikon-gatepass-live',
+  };
+
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.showNotification(title, opts))
+      .catch(() => {
+        try {
+          new Notification(title, opts);
+        } catch {
+          // Ignore Android constructor restriction
+        }
+      });
+    return;
+  }
+
+  try {
+    new Notification(title, opts);
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Unlock mobile Chrome / Android WebView / iOS Safari AudioContext + persistent HTML5 <audio>
+ * HONESTLY: only sets `audioUnlockedInSession = true` when hardware AudioContext enters 'running'
+ * OR <audio>.play() genuinely resolves without NotAllowedError.
  */
 export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
   if (typeof window === 'undefined') return false;
-  let didUnlock = false;
 
   try {
     const ctx = getSharedAudioContext();
     if (ctx) {
+      const activateBuffer = () => {
+        try {
+          const buffer = ctx.createBuffer(1, 1, 22050);
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          source.start(0);
+          if (ctx.state === 'running') {
+            audioUnlockedInSession = true;
+            if (liveWatchDesired) {
+              startSubAudibleKeepAlive(ctx);
+            }
+            notifyUnlockSubscribers();
+          }
+        } catch {
+          // Non-fatal
+        }
+      };
+
       if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+        ctx
+          .resume()
+          .then(() => {
+            activateBuffer();
+          })
+          .catch(() => {});
+      } else if (ctx.state === 'running') {
+        activateBuffer();
       }
-      const buffer = ctx.createBuffer(1, 1, 22050);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start(0);
-      didUnlock = true;
     }
   } catch {
     // Non-fatal
@@ -160,7 +447,6 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
 
   try {
     const voiceEl = getSharedVoiceAudioElement();
-    // Never interrupt active real TTS audio on passive screen touch, and avoid re-priming if already primed cleanly
     if (voiceEl && !isVoiceAudioPlaying && (!voiceElementPrimed || voiceEl.paused)) {
       if (!voiceEl.src || voiceEl.src.startsWith('data:audio/wav')) {
         voiceEl.src = SILENT_WAV_DATA_URI;
@@ -172,22 +458,25 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
         playPromise
           .then(() => {
             voiceElementPrimed = true;
+            if (!audioUnlockedInSession) {
+              audioUnlockedInSession = true;
+              notifyUnlockSubscribers();
+            }
           })
-          .catch(() => {});
-      } else {
-        voiceElementPrimed = true;
+          .catch(() => {
+            // Do NOT mark unlocked on failed silent prime (e.g. passive scroll rejected by Chrome)
+          });
       }
-      didUnlock = true;
     }
   } catch {
     // Non-fatal
   }
 
   try {
-    if ('speechSynthesis' in window) {
+    if ('speechSynthesis' in window && !skipSpeechPrime) {
       window.speechSynthesis.resume();
       window.speechSynthesis.getVoices();
-      if (!skipSpeechPrime && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
         const silentUtter = new SpeechSynthesisUtterance(' ');
         silentUtter.volume = 0;
         silentUtter.rate = 10;
@@ -197,23 +486,17 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
         silentUtter.onerror = () => activeUtterances.delete(silentUtter);
         window.speechSynthesis.speak(silentUtter);
       }
-      didUnlock = true;
     }
   } catch {
     // Non-fatal
   }
 
-  if (didUnlock && !audioUnlockedInSession) {
-    audioUnlockedInSession = true;
-    notifyUnlockSubscribers();
-  }
-
-  // If a gatepass voice alert arrived earlier before the user touched the screen, play it right now inside this gesture!
-  if (pendingBlockedAlert) {
+  // If an alert arrived before user tapped screen, replay immediately once unlocked
+  if (pendingBlockedAlert && (audioUnlockedInSession || (sharedAudioCtx && sharedAudioCtx.state === 'running'))) {
     const queued = pendingBlockedAlert;
     setPendingBlockedSpeech(null);
     playAlarmChime();
-    speakBengaliSpeech(queued.message, { delayMs: 300 });
+    speakBengaliSpeech(queued.message, { delayMs: 280 });
   }
 
   return audioUnlockedInSession;
@@ -228,7 +511,7 @@ export function replayPendingBlockedSpeech(): boolean {
   setPendingBlockedSpeech(null);
   unlockMobileAudioAndSpeech(true);
   playAlarmChime();
-  speakBengaliSpeech(queued.message, { delayMs: 300 });
+  speakBengaliSpeech(queued.message, { delayMs: 280 });
   return true;
 }
 
@@ -238,6 +521,7 @@ export function playScannerBeep(freq = 1900, durationMs = 120): void {
     const ctx = getSharedAudioContext();
     if (!ctx) return;
     const triggerBeep = () => {
+      if (ctx.state !== 'running') return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
 
@@ -263,13 +547,14 @@ export function playScannerBeep(freq = 1900, durationMs = 120): void {
   }
 }
 
-// Clear 3-note chime for guardian alert (resumes AudioContext before scheduling so mobile idle doesn't drop notes)
+// Clear 3-note chime for guardian alert
 export function playAlarmChime(): void {
   try {
     const ctx = getSharedAudioContext();
     if (!ctx) return;
 
     const triggerNotes = () => {
+      if (ctx.state !== 'running') return;
       const now = ctx.currentTime;
       const notes = [
         { f1: 587.33, f2: 880, start: 0, dur: 0.16 },
@@ -285,7 +570,7 @@ export function playAlarmChime(): void {
         osc1.frequency.setValueAtTime(n.f1, now + n.start);
         osc2.frequency.setValueAtTime(n.f2, now + n.start);
         gain.gain.setValueAtTime(0.001, now + n.start);
-        gain.gain.linearRampToValueAtTime(0.24, now + n.start + 0.02);
+        gain.gain.linearRampToValueAtTime(0.28, now + n.start + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, now + n.start + n.dur);
         osc1.connect(gain);
         osc2.connect(gain);
@@ -378,6 +663,230 @@ export interface SpeakBengaliOptions {
   onBlocked?: () => void;
 }
 
+async function fetchBengaliTtsBuffer(cleanedText: string): Promise<ArrayBuffer> {
+  const key = cleanedText.slice(0, 1450);
+  const cached = ttsArrayBufferCache.get(key);
+  if (cached && cached.byteLength > 0) {
+    return cached.slice(0);
+  }
+
+  const url = `/api/tts/bn?text=${encodeURIComponent(key)}`;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
+  try {
+    const resp = await fetch(url, {
+      cache: 'force-cache',
+      signal: controller ? controller.signal : undefined,
+    });
+    if (!resp.ok) {
+      throw new Error(`TTS HTTP ${resp.status}`);
+    }
+    const buf = await resp.arrayBuffer();
+    if (!buf || buf.byteLength === 0) {
+      throw new Error('Empty TTS audio buffer');
+    }
+    if (ttsArrayBufferCache.size >= 40) {
+      const oldest = ttsArrayBufferCache.keys().next().value;
+      if (oldest) ttsArrayBufferCache.delete(oldest);
+    }
+    ttsArrayBufferCache.set(key, buf.slice(0));
+    return buf;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function playBufferViaWebAudio(
+  arrBuf: ArrayBuffer,
+  runToken: number,
+  options: SpeakBengaliOptions
+): Promise<boolean> {
+  const ctx = getSharedAudioContext();
+  if (!ctx) return false;
+
+  try {
+    if (ctx.state === 'suspended') {
+      await Promise.race([
+        ctx.resume(),
+        new Promise<void>((_, rej) => setTimeout(() => rej(new Error('AudioContext resume timeout')), 1200)),
+      ]);
+    }
+    if (ctx.state !== 'running') {
+      return false;
+    }
+
+    const audioBuffer = await ctx.decodeAudioData(arrBuf.slice(0));
+    if (runToken !== currentSpeechRunToken) return true;
+
+    if (activeBufferSource) {
+      try {
+        activeBufferSource.onended = null;
+        activeBufferSource.stop();
+        activeBufferSource.disconnect();
+      } catch {
+        // Ignore
+      }
+      activeBufferSource = null;
+    }
+
+    const source = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    source.buffer = audioBuffer;
+    gain.gain.setValueAtTime(1.15, ctx.currentTime);
+    source.connect(gain);
+    gain.connect(ctx.destination);
+
+    activeBufferSource = source;
+    isVoiceAudioPlaying = true;
+    lastEngineUsed = 'webaudio';
+    lastPlaybackError = null;
+    audioUnlockedInSession = true;
+    notifyUnlockSubscribers();
+
+    source.onended = () => {
+      if (activeBufferSource === source) {
+        activeBufferSource = null;
+      }
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // Ignore
+      }
+      isVoiceAudioPlaying = false;
+      if (runToken === currentSpeechRunToken) {
+        options.onEnd?.();
+      }
+    };
+
+    source.start(0);
+    options.onStart?.();
+    return true;
+  } catch (err: any) {
+    lastPlaybackError = String(err?.message || err || 'WebAudio decode failed');
+    isVoiceAudioPlaying = false;
+    return false;
+  }
+}
+
+async function playViaHtmlAudioElement(
+  arrBuf: ArrayBuffer | null,
+  fallbackUrl: string,
+  runToken: number,
+  options: SpeakBengaliOptions
+): Promise<boolean> {
+  const audioEl = getSharedVoiceAudioElement();
+  if (!audioEl) return false;
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let started = false;
+
+    const cleanupListeners = () => {
+      audioEl.onplaying = null;
+      audioEl.onended = null;
+      audioEl.onerror = null;
+    };
+
+    const fail = (errMsg?: string) => {
+      if (settled) return;
+      settled = true;
+      isVoiceAudioPlaying = false;
+      clearTimeout(loadTimeout);
+      cleanupListeners();
+      if (errMsg) lastPlaybackError = errMsg;
+      resolve(false);
+    };
+
+    const loadTimeout = setTimeout(() => {
+      if (!started && !settled) {
+        fail('HTMLAudio timeout');
+      }
+    }, 5500);
+
+    audioEl.onplaying = () => {
+      if (runToken !== currentSpeechRunToken) {
+        try {
+          audioEl.pause();
+        } catch {}
+        clearTimeout(loadTimeout);
+        cleanupListeners();
+        if (!settled) {
+          settled = true;
+          resolve(true);
+        }
+        return;
+      }
+      started = true;
+      settled = true;
+      isVoiceAudioPlaying = true;
+      voiceElementPrimed = true;
+      lastEngineUsed = 'html_audio';
+      lastPlaybackError = null;
+      if (!audioUnlockedInSession) {
+        audioUnlockedInSession = true;
+        notifyUnlockSubscribers();
+      }
+      clearTimeout(loadTimeout);
+      options.onStart?.();
+      resolve(true);
+    };
+
+    audioEl.onended = () => {
+      isVoiceAudioPlaying = false;
+      clearTimeout(loadTimeout);
+      cleanupListeners();
+      if (activeObjectUrl) {
+        try {
+          URL.revokeObjectURL(activeObjectUrl);
+        } catch {}
+        activeObjectUrl = null;
+      }
+      if (runToken === currentSpeechRunToken) {
+        options.onEnd?.();
+      }
+      if (!settled) {
+        settled = true;
+        resolve(true);
+      }
+    };
+
+    audioEl.onerror = () => {
+      fail('HTMLAudio element error');
+    };
+
+    try {
+      if (activeObjectUrl) {
+        try {
+          URL.revokeObjectURL(activeObjectUrl);
+        } catch {}
+        activeObjectUrl = null;
+      }
+
+      if (arrBuf) {
+        const blob = new Blob([arrBuf], { type: 'audio/mpeg' });
+        activeObjectUrl = URL.createObjectURL(blob);
+        audioEl.src = activeObjectUrl;
+      } else {
+        audioEl.src = fallbackUrl;
+      }
+
+      audioEl.muted = false;
+      audioEl.volume = 1;
+      audioEl.playbackRate = 1.0;
+
+      const playPromise = audioEl.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.catch((err: any) => {
+          fail(String(err?.name || err?.message || 'HTMLAudio play rejected'));
+        });
+      }
+    } catch (err: any) {
+      fail(String(err?.message || 'HTMLAudio setup failed'));
+    }
+  });
+}
+
 async function playWithWebSpeechFallback(
   text: string,
   runToken: number,
@@ -415,6 +924,8 @@ async function playWithWebSpeechFallback(
     const notifyBlocked = () => {
       if (!blockedNotified) {
         blockedNotified = true;
+        lastPlaybackError = 'Mobile browser blocked background speech synthesis';
+        notifyUnlockSubscribers();
         onBlocked?.();
       }
     };
@@ -455,6 +966,8 @@ async function playWithWebSpeechFallback(
         if (startWatchdog) clearTimeout(startWatchdog);
         if (!anyChunkStarted) {
           anyChunkStarted = true;
+          lastEngineUsed = 'web_speech';
+          lastPlaybackError = null;
           onStart?.();
         }
       };
@@ -494,10 +1007,10 @@ async function playWithWebSpeechFallback(
 
 /**
  * Reliable cross-device Bengali TTS playback:
- * 1. Primary: Plays natural Bengali MP3 (/api/tts/bn) through the persistent session-unlocked
- *    HTMLAudioElement so Android Chrome & iOS Safari play asynchronously from WebSocket/SSE/Polling
- *    even long after the user gesture expires!
- * 2. Fallback: Automatically falls back to chunked window.speechSynthesis if offline or MP3 unavailable.
+ * 1. Tier 1 (Mobile-Proof): Fetch `/api/tts/bn` MP3 -> `ctx.decodeAudioData()` -> play on unlocked `AudioContext`.
+ *    Works asynchronously from WebSocket/SSE/Polling hours after initial tap on Android Chrome & iOS Safari!
+ * 2. Tier 2: Persistent `HTMLAudioElement` using Blob ObjectURL (or direct streaming URL).
+ * 3. Tier 3: Web Speech API fallback (offline / desktop).
  */
 export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = {}): void {
   const { delayMs = 0, onStart, onEnd, onBlocked } = options;
@@ -510,7 +1023,18 @@ export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = 
 
   const runToken = ++currentSpeechRunToken;
 
-  // Halt previous speech cleanly without destroying the unlocked HTMLAudioElement reference
+  // Halt any prior speech cleanly
+  if (activeBufferSource) {
+    try {
+      activeBufferSource.onended = null;
+      activeBufferSource.stop();
+      activeBufferSource.disconnect();
+    } catch {
+      // Ignore
+    }
+    activeBufferSource = null;
+  }
+
   const voiceEl = getSharedVoiceAudioElement();
   if (voiceEl) {
     try {
@@ -527,99 +1051,36 @@ export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = 
   const beginPlayback = async () => {
     if (runToken !== currentSpeechRunToken) return;
 
-    const audioEl = getSharedVoiceAudioElement();
-    const canTryServerMp3 = Boolean(audioEl) && (typeof navigator === 'undefined' || navigator.onLine !== false);
+    const ttsUrl = `/api/tts/bn?text=${encodeURIComponent(cleaned.slice(0, 1450))}`;
+    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
 
-    if (canTryServerMp3 && audioEl) {
-      let settled = false;
-      let started = false;
-
-      const cleanupListeners = () => {
-        audioEl.onplaying = null;
-        audioEl.onended = null;
-        audioEl.onerror = null;
-      };
-
-      const loadTimeout = setTimeout(() => {
-        if (!started && !settled && runToken === currentSpeechRunToken) {
-          settled = true;
-          cleanupListeners();
-          isVoiceAudioPlaying = false;
-          void playWithWebSpeechFallback(cleaned, runToken, options);
-        }
-      }, 6000);
-
-      audioEl.onplaying = () => {
-        if (runToken !== currentSpeechRunToken) {
-          try {
-            audioEl.pause();
-          } catch {}
-          clearTimeout(loadTimeout);
-          cleanupListeners();
-          return;
-        }
-        started = true;
-        isVoiceAudioPlaying = true;
-        voiceElementPrimed = true;
-        clearTimeout(loadTimeout);
-        onStart?.();
-      };
-
-      audioEl.onended = () => {
-        if (settled) return;
-        settled = true;
-        isVoiceAudioPlaying = false;
-        clearTimeout(loadTimeout);
-        cleanupListeners();
-        if (runToken === currentSpeechRunToken) {
-          onEnd?.();
-        }
-      };
-
-      audioEl.onerror = () => {
-        if (settled) return;
-        settled = true;
-        isVoiceAudioPlaying = false;
-        clearTimeout(loadTimeout);
-        cleanupListeners();
-        if (runToken === currentSpeechRunToken) {
-          void playWithWebSpeechFallback(cleaned, runToken, options);
-        }
-      };
-
+    if (isOnline) {
+      let arrBuf: ArrayBuffer | null = null;
       try {
-        if ('speechSynthesis' in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
-          window.speechSynthesis.cancel();
-        }
-        audioEl.muted = false;
-        audioEl.volume = 1;
-        audioEl.playbackRate = 1.0;
-        audioEl.src = `/api/tts/bn?text=${encodeURIComponent(cleaned.slice(0, 1450))}`;
-        const playResult = audioEl.play();
-        if (playResult && typeof playResult.then === 'function') {
-          playResult.catch((err: any) => {
-            if (settled || runToken !== currentSpeechRunToken) return;
-            settled = true;
-            isVoiceAudioPlaying = false;
-            clearTimeout(loadTimeout);
-            cleanupListeners();
-            const isNotAllowed = err?.name === 'NotAllowedError' || /not\s*allowed|gesture|interact/i.test(String(err?.message || ''));
-            if (isNotAllowed) {
-              // Still try Web Speech fallback before flagging blocked
-              void playWithWebSpeechFallback(cleaned, runToken, options);
-            } else {
-              void playWithWebSpeechFallback(cleaned, runToken, options);
-            }
-          });
-        }
-        return;
-      } catch {
-        clearTimeout(loadTimeout);
-        cleanupListeners();
-        isVoiceAudioPlaying = false;
+        arrBuf = await fetchBengaliTtsBuffer(cleaned);
+      } catch (err: any) {
+        lastPlaybackError = String(err?.message || 'TTS fetch failed');
+        arrBuf = null;
       }
+
+      if (runToken !== currentSpeechRunToken) return;
+
+      // Tier 1: Unlocked Web Audio API Buffer playback (never triggers HTMLMediaElement NotAllowedError)
+      if (arrBuf) {
+        const playedViaWebAudio = await playBufferViaWebAudio(arrBuf, runToken, options);
+        if (playedViaWebAudio) return;
+      }
+
+      if (runToken !== currentSpeechRunToken) return;
+
+      // Tier 2: HTML5 Audio fallback (using pre-fetched Blob URL or direct URL)
+      const playedViaHtml = await playViaHtmlAudioElement(arrBuf, ttsUrl, runToken, options);
+      if (playedViaHtml) return;
     }
 
+    if (runToken !== currentSpeechRunToken) return;
+
+    // Tier 3: Web Speech API offline/backup
     await playWithWebSpeechFallback(cleaned, runToken, options);
   };
 
@@ -635,6 +1096,18 @@ export function speakBengaliSpeech(text: string, options: SpeakBengaliOptions = 
 export function stopBengaliSpeech(): void {
   currentSpeechRunToken++;
   isVoiceAudioPlaying = false;
+
+  if (activeBufferSource) {
+    try {
+      activeBufferSource.onended = null;
+      activeBufferSource.stop();
+      activeBufferSource.disconnect();
+    } catch {
+      // Ignore
+    }
+    activeBufferSource = null;
+  }
+
   if (sharedVoiceAudioEl) {
     try {
       sharedVoiceAudioEl.onplaying = null;
@@ -644,6 +1117,12 @@ export function stopBengaliSpeech(): void {
     } catch {
       // Ignore
     }
+  }
+  if (activeObjectUrl) {
+    try {
+      URL.revokeObjectURL(activeObjectUrl);
+    } catch {}
+    activeObjectUrl = null;
   }
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {

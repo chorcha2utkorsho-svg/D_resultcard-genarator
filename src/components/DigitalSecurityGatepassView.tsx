@@ -48,6 +48,8 @@ import {
   ClipboardList,
   ShieldAlert,
   XCircle,
+  Settings,
+  RotateCcw,
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { useSchool } from '../context/SchoolContext';
@@ -69,18 +71,24 @@ import { StudentPersonalDashboard } from './StudentPersonalDashboard';
 import { isDeviceExplicitlyUnlockedSync } from '../utils/deviceLock';
 import {
   buildGuardianVoiceMessage as buildGuardianVoiceMsgShared,
+  buildScannerVoiceMessage,
   DEFAULT_DAILY_SCHEDULE,
+  DEFAULT_SCANNER_VOICE_SETTINGS,
   playAlarmChime,
   playScannerBeep,
+  requestGuardianNotificationPermission,
+  setGuardianLiveWatchActive,
   setPendingBlockedSpeech,
+  showGuardianSystemNotification,
   speakBengaliSpeech,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 import {
   broadcastLocalGatepassScan,
+  hasPlayedGuardianVoiceLog,
   isGuardianAudioEnabledPref,
   markGatepassLogSeen,
-  seenGatepassLogIds,
+  markGuardianVoiceLogPlayed,
   setGuardianAudioEnabledPref,
 } from '../hooks/useGatepassRealtime';
 
@@ -347,11 +355,30 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     }
   }, [cameraFacingMode]);
 
-  // Default & Dynamic Daily School Schedule for Guardian Voice Announcement
+  // Default & Dynamic Daily School Schedule + Welcome Audio Settings
   const activeDailySchedule = useMemo(
     () => schoolInfo.dailySchedule || DEFAULT_DAILY_SCHEDULE,
     [schoolInfo.dailySchedule]
   );
+
+  const activeScannerVoiceSettings = useMemo(
+    () => schoolInfo.scannerVoiceSettings || DEFAULT_SCANNER_VOICE_SETTINGS,
+    [schoolInfo.scannerVoiceSettings]
+  );
+
+  const [showWelcomeAudioEditor, setShowWelcomeAudioEditor] = useState<boolean>(false);
+  const [welcomeVoiceDraft, setWelcomeVoiceDraft] = useState({
+    entryMessageTemplate: activeScannerVoiceSettings.entryMessageTemplate,
+    exitMessageTemplate: activeScannerVoiceSettings.exitMessageTemplate,
+  });
+  const [welcomeVoiceSaveNotice, setWelcomeVoiceSaveNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setWelcomeVoiceDraft({
+      entryMessageTemplate: activeScannerVoiceSettings.entryMessageTemplate,
+      exitMessageTemplate: activeScannerVoiceSettings.exitMessageTemplate,
+    });
+  }, [activeScannerVoiceSettings]);
 
   const buildGuardianVoiceMessage = (student: Student, action: 'entry' | 'exit') =>
     buildGuardianVoiceMsgShared(student, action, activeDailySchedule);
@@ -393,10 +420,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const classNameBn = studentClass?.nameBn || 'শ্রেণি';
     const actionLabel = gateAction === 'entry' ? 'বিদ্যালয়ে প্রবেশ' : 'বিদ্যালয় থেকে প্রস্থান';
 
-    const voiceMsg =
-      gateAction === 'entry'
-        ? `স্বাগতম ${student.nameBn}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি ${student.nameBn}।`
-        : `বিদায় ${student.nameBn}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি ${student.nameBn}।`;
+    const voiceMsg = buildScannerVoiceMessage(
+      student,
+      classNameBn,
+      gateAction,
+      activeScannerVoiceSettings
+    );
     const guardianPhone =
       student.guardianPhone || student.fatherPhone || student.motherPhone || '০১৭০০-০০০০০০';
 
@@ -430,6 +459,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       fetch('/api/security/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
         body: JSON.stringify({ log: newLogRecord }),
       })
         .then((res) => (res.ok ? res.json() : null))
@@ -1001,6 +1031,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
   // Logout & Clear Guardian Device Pairing
   const handleGuardianLogout = () => {
+    setGuardianLiveWatchActive(false);
     setLoggedInGuardianStudent(null);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('dlikon_guardian_paired_student_id');
@@ -1087,7 +1118,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
   const handleTestGuardianAudio = (playDemo: boolean = false) => {
     setPendingBlockedSpeech(null);
-    unlockMobileAudioAndSpeech(true);
+    unlockMobileAudioAndSpeech(false);
+    setGuardianLiveWatchActive(true);
+    void requestGuardianNotificationPermission();
     setGuardianAudioTested(true);
     setGuardianAudioEnabled(true);
     setIsGuardianAlarmRinging(true);
@@ -1097,10 +1130,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const msg = playDemo && targetStudent
       ? buildGuardianVoiceMessage(targetStudent, 'entry')
       : targetStudent
-      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে।`
+      ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে। এখন কার্ড স্ক্যান হলেই অডিও বেজে উঠবে।`
       : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় হয়েছে।`;
 
-    speakBengali(msg, true, { delayMs: 380 });
+    speakBengali(msg, true, { delayMs: 280 });
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
@@ -1134,25 +1167,23 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     let isSubscribed = true;
 
     const triggerVoiceAlarmForLog = (studentObj: Student, log: SecurityGatepassLog) => {
+      if (hasPlayedGuardianVoiceLog(log.id)) return;
+      markGuardianVoiceLogPlayed(log.id);
+
       if (guardianAudioEnabled) {
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
         const announcement = buildGuardianVoiceMessage(studentObj, log.action);
+        showGuardianSystemNotification(
+          `${schoolInfo.name} • লাইভ গেটপাস`,
+          announcement
+        );
         speakBengali(announcement, true, {
-          delayMs: 420,
+          delayMs: 260,
           logId: log.id,
           studentNameBn: studentObj.nameBn,
           action: log.action,
         });
-
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(`${schoolInfo.name} • লাইভ গেটপাস`, {
-              body: announcement,
-              icon: '/pwa-192x192.png',
-            });
-          } catch {}
-        }
 
         setTimeout(() => setIsGuardianAlarmRinging(false), 6000);
       }
@@ -1192,14 +1223,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           for (const log of serverLogs) {
             if (log.studentId === signedStudent.id) {
               addSecurityLog(log);
-              const alreadySeen = seenGatepassLogIds.has(log.id);
               markGatepassLogSeen(log.id);
+              const alreadyPlayed = hasPlayedGuardianVoiceLog(log.id);
               const sTime =
                 typeof log.serverTimestamp === 'number'
                   ? log.serverTimestamp
                   : new Date(log.timestamp).getTime() || 0;
-              if (!alreadySeen && !newestLogToAlert && sTime >= serverNow - 25000 && !log.guardianAcknowledged) {
+              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 45000 && !log.guardianAcknowledged) {
                 newestLogToAlert = log;
+              } else if (!alreadyPlayed) {
+                markGuardianVoiceLogPlayed(log.id);
               }
             }
           }
@@ -1215,6 +1248,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         for (const log of serverLogs) {
           if (log.studentId === signedStudent.id) {
             addSecurityLog(log);
+            markGatepassLogSeen(log.id);
             const sTime =
               typeof log.serverTimestamp === 'number'
                 ? log.serverTimestamp
@@ -1222,8 +1256,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             if (sTime > maxSeenTime) {
               maxSeenTime = sTime;
             }
-            if (!seenGatepassLogIds.has(log.id)) {
-              markGatepassLogSeen(log.id);
+            if (!hasPlayedGuardianVoiceLog(log.id)) {
               if (!freshLogToAlert) {
                 freshLogToAlert = log;
               }
@@ -1282,18 +1315,21 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       let recentLog: SecurityGatepassLog | null = null;
       for (const l of childLogs) {
         const logTimeMs = l.serverTimestamp || new Date(l.timestamp).getTime() || 0;
-        if (!seenGatepassLogIds.has(l.id)) {
-          markGatepassLogSeen(l.id);
-          if (!recentLog && nowMs - logTimeMs <= 25000 && nowMs - logTimeMs >= -5000 && !l.guardianAcknowledged) {
+        markGatepassLogSeen(l.id);
+        if (!hasPlayedGuardianVoiceLog(l.id)) {
+          if (!recentLog && nowMs - logTimeMs <= 45000 && nowMs - logTimeMs >= -5000 && !l.guardianAcknowledged) {
             recentLog = l;
+          } else {
+            markGuardianVoiceLogPlayed(l.id);
           }
         }
       }
       if (recentLog && guardianAudioEnabled) {
+        markGuardianVoiceLogPlayed(recentLog.id);
         setIsGuardianAlarmRinging(true);
         playAlarmChime();
         speakBengali(buildGuardianVoiceMessage(signedStudent, recentLog.action), true, {
-          delayMs: 420,
+          delayMs: 280,
           logId: recentLog.id,
           studentNameBn: signedStudent.nameBn,
           action: recentLog.action,
@@ -1305,8 +1341,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     let freshCloudLog: SecurityGatepassLog | null = null;
     for (const l of childLogs) {
-      if (!seenGatepassLogIds.has(l.id)) {
-        markGatepassLogSeen(l.id);
+      markGatepassLogSeen(l.id);
+      if (!hasPlayedGuardianVoiceLog(l.id)) {
+        markGuardianVoiceLogPlayed(l.id);
         if (!freshCloudLog) {
           freshCloudLog = l;
         }
@@ -1316,20 +1353,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       setIsGuardianAlarmRinging(true);
       playAlarmChime();
       const announcement = buildGuardianVoiceMessage(signedStudent, freshCloudLog.action);
+      showGuardianSystemNotification(
+        `${schoolInfo.name} • লাইভ গেটপাস`,
+        announcement
+      );
       speakBengali(announcement, true, {
-        delayMs: 420,
+        delayMs: 280,
         logId: freshCloudLog.id,
         studentNameBn: signedStudent.nameBn,
         action: freshCloudLog.action,
       });
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        try {
-          new Notification(`${schoolInfo.name} • লাইভ গেটপাস`, {
-            body: announcement,
-            icon: '/pwa-192x192.png',
-          });
-        } catch {}
-      }
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
           navigator.vibrate([200, 100, 200, 100, 400]);
@@ -1947,8 +1980,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </div>
                   </div>
 
-                  {/* Sound & Voice Toggles */}
-                  <div className="flex items-center gap-2">
+                  {/* Sound, Voice & Customizable Welcome Audio Settings */}
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setSoundBeepEnabled(!soundBeepEnabled)}
@@ -1980,8 +2013,222 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       )}
                       <span>বাংলা ভয়েস {voiceEnabled ? 'চালু' : 'বন্ধ'}</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowWelcomeAudioEditor(!showWelcomeAudioEditor)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                        showWelcomeAudioEditor
+                          ? 'bg-slate-900 border-slate-900 text-white shadow-xs'
+                          : 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-950'
+                      }`}
+                      title="স্ক্যান সফল হওয়ার পর বাজানো স্বাগতম/বিদায় অডিও বার্তার টেক্সট পরিবর্তন করুন"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      <span>স্বাগতম অডিও সেটিংস</span>
+                    </button>
                   </div>
                 </div>
+
+                {/* Collapsible Customizable 'Welcome' Audio Message Settings Menu */}
+                {showWelcomeAudioEditor && (
+                  <div className="bg-slate-50 border-2 border-indigo-200 rounded-xl p-4 space-y-3.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                          <Volume2 className="w-4 h-4 text-indigo-600" />
+                          <span>স্ক্যানার 'স্বাগতম' ও 'বিদায়' অডিও বার্তা সেটিংস</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          শিক্ষক বা অ্যাডমিন চাইলে স্ক্যান নিশ্চিত করার পর বাজানো অডিও বার্তার টেক্সট পরিবর্তন করতে পারবেন। শিক্ষার্থীর নামের জায়গায় <code className="bg-indigo-100 text-indigo-900 px-1 rounded font-mono">{'{name}'}</code> ব্যবহার করুন।
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowWelcomeAudioEditor(false)}
+                        className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+                        aria-label="সেটিংস মেনু বন্ধ করুন"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {welcomeVoiceSaveNotice && (
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-lg font-bold text-xs flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{welcomeVoiceSaveNotice}</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      {/* Entry Welcome Message */}
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <label className="font-bold text-emerald-900">
+                            বিদ্যালয়ে প্রবেশের ('স্বাগতম') অডিও বার্তা:
+                          </label>
+                          <div className="flex items-center gap-1">
+                            {[
+                              { token: '{name}', label: '+ নাম' },
+                              { token: '{class}', label: '+ শ্রেণি' },
+                              { token: '{roll}', label: '+ রোল' },
+                            ].map((chip) => (
+                              <button
+                                key={`entry-${chip.token}`}
+                                type="button"
+                                onClick={() =>
+                                  setWelcomeVoiceDraft((prev) => ({
+                                    ...prev,
+                                    entryMessageTemplate: `${prev.entryMessageTemplate} ${chip.token}`.trim(),
+                                  }))
+                                }
+                                className="px-2 py-0.5 bg-white hover:bg-indigo-50 border border-slate-300 rounded text-[10.5px] font-bold text-indigo-900 cursor-pointer"
+                              >
+                                {chip.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={welcomeVoiceDraft.entryMessageTemplate}
+                          onChange={(e) =>
+                            setWelcomeVoiceDraft((prev) => ({
+                              ...prev,
+                              entryMessageTemplate: e.target.value,
+                            }))
+                          }
+                          placeholder={DEFAULT_SCANNER_VOICE_SETTINGS.entryMessageTemplate}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 focus:outline-none leading-relaxed"
+                        />
+                      </div>
+
+                      {/* Exit Message */}
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <label className="font-bold text-amber-900">
+                            বিদ্যালয় থেকে প্রস্থানের ('বিদায়') অডিও বার্তা:
+                          </label>
+                          <div className="flex items-center gap-1">
+                            {[
+                              { token: '{name}', label: '+ নাম' },
+                              { token: '{class}', label: '+ শ্রেণি' },
+                              { token: '{roll}', label: '+ রোল' },
+                            ].map((chip) => (
+                              <button
+                                key={`exit-${chip.token}`}
+                                type="button"
+                                onClick={() =>
+                                  setWelcomeVoiceDraft((prev) => ({
+                                    ...prev,
+                                    exitMessageTemplate: `${prev.exitMessageTemplate} ${chip.token}`.trim(),
+                                  }))
+                                }
+                                className="px-2 py-0.5 bg-white hover:bg-indigo-50 border border-slate-300 rounded text-[10.5px] font-bold text-indigo-900 cursor-pointer"
+                              >
+                                {chip.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={welcomeVoiceDraft.exitMessageTemplate}
+                          onChange={(e) =>
+                            setWelcomeVoiceDraft((prev) => ({
+                              ...prev,
+                              exitMessageTemplate: e.target.value,
+                            }))
+                          }
+                          placeholder={DEFAULT_SCANNER_VOICE_SETTINGS.exitMessageTemplate}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 focus:outline-none leading-relaxed"
+                        />
+                      </div>
+
+                      {/* Live Preview */}
+                      <div className="bg-white border border-slate-200 rounded-lg p-2.5 text-[11px] text-slate-700">
+                        <span className="font-bold text-indigo-900 block mb-0.5">
+                          লাইভ প্রিভিউ ({gateAction === 'entry' ? 'প্রবেশ' : 'প্রস্থান'}):
+                        </span>
+                        <span className="text-slate-800">
+                          "
+                          {buildScannerVoiceMessage(
+                            recentScannedStudent || { nameBn: 'সিলমি আক্তার', roll: 1 },
+                            (recentScannedStudent &&
+                              classes.find((c) => c.id === recentScannedStudent.classId)?.nameBn) ||
+                              'প্রথম শ্রেণি',
+                            gateAction,
+                            welcomeVoiceDraft
+                          )}
+                          "
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWelcomeVoiceDraft({ ...DEFAULT_SCANNER_VOICE_SETTINGS });
+                          setWelcomeVoiceSaveNotice('ডিফল্ট টেক্সট লোড করা হয়েছে — সংরক্ষণ করতে "সেভ করুন" ক্লিক করুন।');
+                          setTimeout(() => setWelcomeVoiceSaveNotice(null), 3500);
+                        }}
+                        className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>ডিফল্ট রিসেট</span>
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            unlockMobileAudioAndSpeech(true);
+                            const sample = buildScannerVoiceMessage(
+                              recentScannedStudent || { nameBn: 'সিলমি আক্তার', roll: 1 },
+                              (recentScannedStudent &&
+                                classes.find((c) => c.id === recentScannedStudent.classId)?.nameBn) ||
+                                'প্রথম শ্রেণি',
+                              gateAction,
+                              welcomeVoiceDraft
+                            );
+                            speakBengali(sample, true);
+                          }}
+                          className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-950 font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>টেস্ট শুনুন</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cleanedSettings = {
+                              entryMessageTemplate:
+                                welcomeVoiceDraft.entryMessageTemplate.trim() ||
+                                DEFAULT_SCANNER_VOICE_SETTINGS.entryMessageTemplate,
+                              exitMessageTemplate:
+                                welcomeVoiceDraft.exitMessageTemplate.trim() ||
+                                DEFAULT_SCANNER_VOICE_SETTINGS.exitMessageTemplate,
+                              updatedAt: new Date().toISOString(),
+                            };
+                            setWelcomeVoiceDraft({
+                              entryMessageTemplate: cleanedSettings.entryMessageTemplate,
+                              exitMessageTemplate: cleanedSettings.exitMessageTemplate,
+                            });
+                            updateSchoolInfo({ scannerVoiceSettings: cleanedSettings });
+                            setWelcomeVoiceSaveNotice('✓ স্বাগতম ও বিদায় অডিও বার্তা স্থায়ীভাবে সংরক্ষিত হয়েছে!');
+                            setTimeout(() => setWelcomeVoiceSaveNotice(null), 3500);
+                          }}
+                          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs flex items-center gap-1 cursor-pointer shadow-xs"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>সেভ করুন</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Barcode Scanner Gun / Keyboard Input */}
                 <div className="space-y-2">
@@ -2516,7 +2763,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               guardianChildLogs={guardianChildLogs}
               guardianAudioEnabled={guardianAudioEnabled}
               setGuardianAudioEnabled={(val) => {
-                if (val) unlockMobileAudioAndSpeech(false);
+                if (val) {
+                  unlockMobileAudioAndSpeech(false);
+                  setGuardianLiveWatchActive(true);
+                  void requestGuardianNotificationPermission();
+                } else {
+                  setGuardianLiveWatchActive(false);
+                }
                 setGuardianAudioEnabled(val);
               }}
               guardianAudioTested={guardianAudioTested}
@@ -4206,10 +4459,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       {/* ========================================================================= */}
       {pendingScanConfirmation && (() => {
         const pendingStd = pendingScanConfirmation.student;
-        const previewAudioText =
-          gateAction === 'entry'
-            ? `স্বাগতম ${pendingStd.nameBn}, শৃঙ্খলা, শান্ত মন, শেখার আগ্রহই তোমার সব। তোমার চূড়ান্ত সাফল্য কামনা করছি ${pendingStd.nameBn}।`
-            : `বিদায় ${pendingStd.nameBn}, শৃঙ্খলা ও শান্ত মন নিয়ে নিরাপদে বাড়ি ফিরে যাও। তোমার চূড়ান্ত সাফল্য কামনা করছি ${pendingStd.nameBn}।`;
+        const previewAudioText = buildScannerVoiceMessage(
+          pendingStd,
+          pendingScanConfirmation.classNameBn,
+          gateAction,
+          activeScannerVoiceSettings
+        );
         const guardianPhoneDisplay =
           pendingStd.guardianPhone || pendingStd.fatherPhone || pendingStd.motherPhone || '-';
 

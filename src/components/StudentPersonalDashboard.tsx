@@ -83,8 +83,11 @@ import {
   getShortStudentAppName,
 } from '../utils/studentAppIcon';
 import {
+  getGuardianAudioStatus,
+  GuardianAudioHardwareStatus,
   isMobileAudioUnlocked,
   replayPendingBlockedSpeech,
+  subscribeGuardianAudioStatus,
   subscribeMobileAudioUnlock,
   subscribePendingBlockedSpeech,
 } from '../utils/gatepassAudio';
@@ -180,6 +183,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
   const [mobileAudioUnlocked, setMobileAudioUnlocked] = useState<boolean>(() => isMobileAudioUnlocked());
+  const [audioHardwareStatus, setAudioHardwareStatus] = useState<GuardianAudioHardwareStatus>(() =>
+    getGuardianAudioStatus()
+  );
   const [pendingBlockedAlert, setPendingBlockedAlert] = useState<{
     message: string;
     logId: string;
@@ -189,12 +195,19 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
 
   useEffect(() => {
     const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
+    const unsubHw = subscribeGuardianAudioStatus(setAudioHardwareStatus);
     const unsubPending = subscribePendingBlockedSpeech(setPendingBlockedAlert);
     return () => {
       unsubUnlock();
+      unsubHw();
       unsubPending();
     };
   }, []);
+
+  const isHardwareAudioTrulyActive =
+    guardianAudioEnabled &&
+    (guardianAudioTested || mobileAudioUnlocked) &&
+    audioHardwareStatus.audioContextState === 'running';
 
   const [dashboardSection, setDashboardSection] = useState<
     | 'overview'
@@ -666,14 +679,14 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                 isGuardianAlarmRinging
                   ? 'bg-rose-600 text-white'
-                  : guardianAudioTested || mobileAudioUnlocked
+                  : isHardwareAudioTrulyActive
                   ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
                   : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
               }`}
             >
               <BellRing className="w-4 h-4" />
               <span>
-                {guardianAudioTested || mobileAudioUnlocked ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
+                {isHardwareAudioTrulyActive ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
               </span>
             </button>
 
@@ -798,8 +811,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         </div>
       )}
 
-      {/* One-Tap Mobile Audio Unlock Prompt (shown until user unlocks browser speaker permission) */}
-      {!mobileAudioUnlocked && !guardianAudioTested && guardianAudioEnabled && !pendingBlockedAlert && (
+      {/* One-Tap Mobile Audio Unlock Prompt (shown until hardware AudioContext is truly running) */}
+      {!isHardwareAudioTrulyActive && guardianAudioEnabled && !pendingBlockedAlert && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start sm:items-center gap-2.5 text-xs sm:text-sm text-amber-950">
             <Volume2 className="w-5 h-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
@@ -913,9 +926,20 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </button>
                 <span className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
                   <Globe className="w-3.5 h-3.5" />
-                  <span>লাইভ সিঙ্ক</span>
+                  <span>{isHardwareAudioTrulyActive ? 'অডিও স্পিকার প্রস্তুত' : 'লাইভ সিঙ্ক'}</span>
                 </span>
               </div>
+            </div>
+
+            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                স্পিকার অবস্থা: <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
+                  {isHardwareAudioTrulyActive ? 'সক্রিয় (Web Audio প্রস্তুত)' : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
+                </strong>
+              </span>
+              <span className="text-slate-400">
+                ভয়েস শুনতে ফোনের মিডিয়া ভলিউম চালু রাখুন ও পেজটি খোলা রাখুন।
+              </span>
             </div>
 
             {ackSuccessFeedback && (

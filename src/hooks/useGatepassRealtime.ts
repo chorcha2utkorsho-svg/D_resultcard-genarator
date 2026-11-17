@@ -5,35 +5,57 @@ import {
   buildGuardianVoiceMessage,
   playAlarmChime,
   setPendingBlockedSpeech,
+  showGuardianSystemNotification,
   speakBengaliSpeech,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 
-// Shared module-level dedup set (synced with sessionStorage) so WS + SSE + HTTP polling + Firestore never double-play the same scan ID
+// Shared dedup sets (synced with sessionStorage):
+// 1) seenGatepassLogIds: tracks logs merged into React state (used across Official/Employee/Student roles)
+// 2) playedGuardianVoiceLogIds: strictly tracks logs that ACTUALLY fired a guardian smartphone voice alert
+// Separating these ensures background Official/Employee syncing never silences a Guardian Portal alert!
 const SEEN_LOGS_STORAGE_KEY = 'dlikon_seen_gatepass_log_ids_v1';
-export const seenGatepassLogIds = new Set<string>(
-  (() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const raw = sessionStorage.getItem(SEEN_LOGS_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
-    } catch {
-      return [];
-    }
-  })()
-);
+const PLAYED_GUARDIAN_VOICE_KEY = 'dlikon_played_guardian_voice_ids_v1';
+
+function readSessionIdSet(key: string): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = sessionStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSessionIdSet(key: string, setObj: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const recent = Array.from(setObj).slice(-200);
+    sessionStorage.setItem(key, JSON.stringify(recent));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export const seenGatepassLogIds = new Set<string>(readSessionIdSet(SEEN_LOGS_STORAGE_KEY));
+export const playedGuardianVoiceLogIds = new Set<string>(readSessionIdSet(PLAYED_GUARDIAN_VOICE_KEY));
 
 export function markGatepassLogSeen(id: string): void {
   if (!id) return;
   seenGatepassLogIds.add(id);
-  if (typeof window === 'undefined') return;
-  try {
-    const recent = Array.from(seenGatepassLogIds).slice(-200);
-    sessionStorage.setItem(SEEN_LOGS_STORAGE_KEY, JSON.stringify(recent));
-  } catch {
-    // Ignore storage limit errors
-  }
+  writeSessionIdSet(SEEN_LOGS_STORAGE_KEY, seenGatepassLogIds);
+}
+
+export function hasPlayedGuardianVoiceLog(id: string): boolean {
+  if (!id) return false;
+  return playedGuardianVoiceLogIds.has(id);
+}
+
+export function markGuardianVoiceLogPlayed(id: string): void {
+  if (!id) return;
+  playedGuardianVoiceLogIds.add(id);
+  writeSessionIdSet(PLAYED_GUARDIAN_VOICE_KEY, playedGuardianVoiceLogIds);
 }
 
 export const GUARDIAN_AUDIO_PREF_KEY = 'dlikon_guardian_audio_enabled';
@@ -67,6 +89,8 @@ interface UseGatepassRealtimeParams {
   enabled?: boolean;
 }
 
+export type RealtimeTransportMode = 'ws' | 'sse' | 'polling' | 'connecting';
+
 export function useGatepassRealtime({
   role,
   studentId,
@@ -77,6 +101,9 @@ export function useGatepassRealtime({
     log: SecurityGatepassLog;
     message: string;
   } | null>(null);
+  const [connectionTransport, setConnectionTransport] =
+    useState<RealtimeTransportMode>('connecting');
+  const [lastSyncServerTime, setLastSyncServerTime] = useState<number>(0);
 
   const studentsRef = useRef(students);
   studentsRef.current = students;
@@ -91,22 +118,22 @@ export function useGatepassRealtime({
   const hasBaselineRef = useRef<boolean>(false);
   const ringClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Passive first-touch unlock on mobile phones (crucial when PWA auto-logs in without a button click)
+  // Unlock mobile audio strictly on real tap/click activation gestures (never false-positive passive scroll)
   useEffect(() => {
     if (!enabled || role !== 'student' || typeof window === 'undefined') return;
 
-    const handleFirstUserGesture = () => {
+    const handleActivationGesture = () => {
       unlockMobileAudioAndSpeech(true);
     };
 
-    window.addEventListener('pointerdown', handleFirstUserGesture, { capture: true, passive: true });
-    window.addEventListener('touchstart', handleFirstUserGesture, { capture: true, passive: true });
-    window.addEventListener('keydown', handleFirstUserGesture, { capture: true, passive: true });
+    window.addEventListener('click', handleActivationGesture, { capture: true, passive: true });
+    window.addEventListener('touchend', handleActivationGesture, { capture: true, passive: true });
+    window.addEventListener('keydown', handleActivationGesture, { capture: true, passive: true });
 
     return () => {
-      window.removeEventListener('pointerdown', handleFirstUserGesture, { capture: true });
-      window.removeEventListener('touchstart', handleFirstUserGesture, { capture: true });
-      window.removeEventListener('keydown', handleFirstUserGesture, { capture: true });
+      window.removeEventListener('click', handleActivationGesture, { capture: true });
+      window.removeEventListener('touchend', handleActivationGesture, { capture: true });
+      window.removeEventListener('keydown', handleActivationGesture, { capture: true });
     };
   }, [enabled, role]);
 
@@ -116,6 +143,7 @@ export function useGatepassRealtime({
 
     hasBaselineRef.current = false;
     lastServerTimeRef.current = 0;
+    setConnectionTransport('connecting');
 
     let isDisposed = false;
     let ws: WebSocket | null = null;
@@ -131,6 +159,8 @@ export function useGatepassRealtime({
 
     const triggerAlertForStudent = (log: SecurityGatepassLog) => {
       if (role !== 'student' || !studentId || log.studentId !== studentId) return;
+      if (hasPlayedGuardianVoiceLog(log.id)) return;
+      markGuardianVoiceLogPlayed(log.id);
 
       const targetStudent =
         studentsRef.current.find((s) => s.id === studentId) ||
@@ -146,7 +176,7 @@ export function useGatepassRealtime({
       if (ringClearTimerRef.current) clearTimeout(ringClearTimerRef.current);
       ringClearTimerRef.current = setTimeout(() => {
         setLiveRingingAlert(null);
-      }, 8000);
+      }, 9000);
 
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
@@ -159,20 +189,13 @@ export function useGatepassRealtime({
       if (!isGuardianAudioEnabledPref()) return;
 
       playAlarmChime();
-
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        try {
-          new Notification(`${schoolNameRef.current || 'ডি-লিকন একাডেমী'} • লাইভ গেটপাস`, {
-            body: message,
-            icon: '/pwa-192x192.png',
-          });
-        } catch {
-          // Ignore
-        }
-      }
+      showGuardianSystemNotification(
+        `${schoolNameRef.current || 'ডি-লিকন একাডেমী'} • লাইভ গেটপাস`,
+        message
+      );
 
       speakBengaliSpeech(message, {
-        delayMs: 420,
+        delayMs: 240,
         onBlocked: () => {
           setPendingBlockedSpeech({
             message,
@@ -192,6 +215,7 @@ export function useGatepassRealtime({
       if (serverTime > lastServerTimeRef.current) {
         lastServerTimeRef.current = serverTime;
       }
+      setLastSyncServerTime(Date.now());
 
       if (rawPayload.type === 'gatepass:init') {
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
@@ -202,15 +226,25 @@ export function useGatepassRealtime({
         for (const item of logs) {
           if (!item || !item.id) continue;
           addSecurityLog(item);
-          const alreadySeen = seenGatepassLogIds.has(item.id);
           markGatepassLogSeen(item.id);
-          if (isFirstInit && !alreadySeen && role === 'student' && item.studentId === studentId) {
+          if (
+            isFirstInit &&
+            role === 'student' &&
+            item.studentId === studentId &&
+            !hasPlayedGuardianVoiceLog(item.id)
+          ) {
             const logMs =
               typeof item.serverTimestamp === 'number'
                 ? item.serverTimestamp
                 : new Date(item.timestamp).getTime() || 0;
-            if (!newestRecentUnseen && logMs >= serverTime - 25000 && !item.guardianAcknowledged) {
-              newestRecentUnseen = item;
+            // Play if a fresh scan occurred right before the guardian opened the page (within 45s)
+            if (logMs >= serverTime - 45000 && !item.guardianAcknowledged) {
+              if (!newestRecentUnseen) {
+                newestRecentUnseen = item;
+              }
+            } else {
+              // Historical log on initial load: mark played so opening dashboard doesn't replay yesterday's alerts
+              markGuardianVoiceLogPlayed(item.id);
             }
           }
         }
@@ -223,10 +257,11 @@ export function useGatepassRealtime({
       if (rawPayload.type === 'gatepass:scan' && rawPayload.log && rawPayload.log.id) {
         const incomingLog: SecurityGatepassLog = rawPayload.log;
         addSecurityLog(incomingLog);
-        if (seenGatepassLogIds.has(incomingLog.id)) return;
         markGatepassLogSeen(incomingLog.id);
         hasBaselineRef.current = true;
-        triggerAlertForStudent(incomingLog);
+        if (role === 'student' && incomingLog.studentId === studentId) {
+          triggerAlertForStudent(incomingLog);
+        }
         return;
       }
 
@@ -251,6 +286,11 @@ export function useGatepassRealtime({
         const data = await res.json();
         if (isDisposed || !data || !Array.isArray(data.logs)) return;
 
+        setLastSyncServerTime(Date.now());
+        if (!wsConnected && !sseConnected) {
+          setConnectionTransport('polling');
+        }
+
         const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
 
         if (!hasBaselineRef.current) {
@@ -271,7 +311,9 @@ export function useGatepassRealtime({
         );
         for (const log of sorted) {
           if (log && log.id) {
-            if (!seenGatepassLogIds.has(log.id)) {
+            const isNewGuardianAlert =
+              role === 'student' && log.studentId === studentId && !hasPlayedGuardianVoiceLog(log.id);
+            if (!seenGatepassLogIds.has(log.id) || isNewGuardianAlert) {
               handleIncomingPayload({ type: 'gatepass:scan', log, serverTime: serverNow });
             } else {
               addSecurityLog(log);
@@ -292,6 +334,7 @@ export function useGatepassRealtime({
         sse = new EventSource(`/api/security/stream?${params.toString()}`);
         sse.onopen = () => {
           sseConnected = true;
+          if (!wsConnected) setConnectionTransport('sse');
         };
         sse.addEventListener('gatepass', (ev: MessageEvent) => {
           try {
@@ -302,6 +345,7 @@ export function useGatepassRealtime({
         });
         sse.onerror = () => {
           sseConnected = false;
+          if (!wsConnected) setConnectionTransport('polling');
         };
       } catch {
         sseConnected = false;
@@ -330,7 +374,6 @@ export function useGatepassRealtime({
         const wsUrl = `${proto}//${window.location.host}/ws/gatepass?${params.toString()}`;
         ws = new WebSocket(wsUrl);
 
-        // If WebSocket takes too long behind a restrictive proxy, spin up SSE alongside
         if (sseFallbackTimer) clearTimeout(sseFallbackTimer);
         sseFallbackTimer = setTimeout(() => {
           if (!wsConnected && !isDisposed) {
@@ -341,6 +384,7 @@ export function useGatepassRealtime({
         ws.onopen = () => {
           wsConnected = true;
           wsReconnectAttempts = 0;
+          setConnectionTransport('ws');
           if (sseFallbackTimer) {
             clearTimeout(sseFallbackTimer);
             sseFallbackTimer = null;
@@ -374,6 +418,7 @@ export function useGatepassRealtime({
             wsPingTimer = null;
           }
           if (isDisposed) return;
+          setConnectionTransport(sseConnected ? 'sse' : 'polling');
           startSseFallback();
           const backoffMs = Math.min(10000, 1200 * Math.pow(1.6, wsReconnectAttempts));
           wsReconnectAttempts += 1;
@@ -401,16 +446,15 @@ export function useGatepassRealtime({
       }
     }
 
-    // Connect WebSocket immediately + baseline poll
     connectWebSocket();
     void pollLatestLogs();
 
-    // Adaptive polling: fast 2.5s whenever neither WS nor SSE is open, 12s background reconciliation otherwise
+    // Adaptive polling: fast 2.5s whenever WS/SSE isn't open (and 8s even with WS open so cloud proxies never drop silent updates)
     let lastPollTick = Date.now();
     pollTimer = setInterval(() => {
       const now = Date.now();
       const isPushActive = wsConnected || sseConnected;
-      if (!isPushActive || now - lastPollTick >= 12000) {
+      if (!isPushActive || now - lastPollTick >= 8000) {
         lastPollTick = now;
         void pollLatestLogs();
       }
@@ -452,5 +496,7 @@ export function useGatepassRealtime({
   return {
     liveRingingAlert,
     dismissLiveRingingAlert: () => setLiveRingingAlert(null),
+    connectionTransport,
+    lastSyncServerTime,
   };
 }

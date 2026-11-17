@@ -5,6 +5,12 @@ export interface SchoolDailySchedule {
   dismissalTimeBn: string;
 }
 
+export interface ScannerVoiceSettings {
+  entryMessageTemplate: string;
+  exitMessageTemplate: string;
+  updatedAt?: string;
+}
+
 export interface SchoolInfo {
   name: string;
   address: string;
@@ -15,6 +21,7 @@ export interface SchoolInfo {
   principalSignatureUrl?: string;
   sealUrl?: string;
   dailySchedule?: SchoolDailySchedule;
+  scannerVoiceSettings?: ScannerVoiceSettings;
 }
 
 export interface Student {

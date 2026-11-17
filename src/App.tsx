@@ -46,6 +46,7 @@ import { useGatepassRealtime } from './hooks/useGatepassRealtime';
 import {
   playAlarmChime,
   replayPendingBlockedSpeech,
+  setGuardianLiveWatchActive,
   speakBengaliSpeech,
   subscribePendingBlockedSpeech,
   unlockMobileAudioAndSpeech,
@@ -147,7 +148,7 @@ function MainContent() {
   useEffect(() => {
     if (students.length === 0 || isUnlockUrlRequested) return;
     const lockedId = getLockedStudentIdSync();
-    if (authSession && !lockedId) return;
+    if (authSession && !lockedId && !urlGuardianParam) return;
 
     const savedPairedId =
       typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
@@ -222,6 +223,7 @@ function MainContent() {
   };
 
   const handleUnlockDeviceNow = async () => {
+    setGuardianLiveWatchActive(false);
     await unlockDeviceFromStudent();
     resetStudentAppIcon();
     setIsDeviceLocked(false);
@@ -264,6 +266,7 @@ function MainContent() {
 
   const handleLogout = () => {
     if (isDeviceLocked) return;
+    setGuardianLiveWatchActive(false);
     resetStudentAppIcon();
     setAuthSession(null);
     setCurrentTab('dashboard');

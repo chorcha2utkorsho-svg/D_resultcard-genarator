@@ -222,6 +222,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     verifiedAt: string;
     logPayload?: SecurityGatepassLog;
     syncError?: 'auth_redirect' | 'network_error' | null;
+    isSending?: boolean;
   } | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
   const lastAmbiguousQueryRef = useRef<string>('');
@@ -538,6 +539,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
+    setLastScanDispatchInfo({
+      student,
+      deliveredCount: 0,
+      serverHost: currentServerHost,
+      verifiedAt: nowIso,
+      logPayload: newLogRecord,
+      syncError: null,
+      isSending: true,
+    });
     const dispatchScanToServer = async (attempt = 0): Promise<void> => {
       try {
         const res = await fetch('/api/security/scan', {
@@ -2200,6 +2210,29 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
                   {/* Camera Control Overlays at bottom */}
                   <div className="relative z-20 space-y-2 pt-2">
+                    {lastScanDispatchInfo && (
+                      <div
+                        className={`px-2.5 py-2 rounded-xl border text-[10.5px] font-bold leading-snug shadow-lg backdrop-blur-sm ${
+                          lastScanDispatchInfo.isSending
+                            ? 'bg-slate-900/90 border-indigo-400/70 text-indigo-100'
+                            : lastScanDispatchInfo.syncError
+                            ? 'bg-rose-950/95 border-rose-400 text-rose-100'
+                            : lastScanDispatchInfo.deliveredCount > 0
+                            ? 'bg-emerald-950/95 border-emerald-400 text-emerald-100'
+                            : 'bg-amber-950/95 border-amber-400 text-amber-100'
+                        }`}
+                      >
+                        {lastScanDispatchInfo.isSending
+                          ? `⏳ ${lastScanDispatchInfo.student.nameBn}-এর এলার্ম সার্ভারে পাঠানো হচ্ছে...`
+                          : lastScanDispatchInfo.syncError === 'auth_redirect'
+                          ? `⚠ সেশন ব্লক! পেজ রিলোড করে আবার স্ক্যান করুন।`
+                          : lastScanDispatchInfo.syncError === 'network_error'
+                          ? `⚠ সার্ভার সংযোগ ব্যর্থ — নিচে গিয়ে "পুনরায় সার্ভারে পাঠান" দিন।`
+                          : lastScanDispatchInfo.deliveredCount > 0
+                          ? `✓ ${lastScanDispatchInfo.student.nameBn}-এর ফোনে লাইভ এলার্ম পাঠানো হয়েছে (${toBengaliNumber(lastScanDispatchInfo.deliveredCount)} জন অনলাইন)!`
+                          : `⚠ সার্ভারে সেভ হয়েছে — তবে এই লিংকে (${lastScanDispatchInfo.serverHost}) ${lastScanDispatchInfo.student.nameBn}-এর ফোন অনলাইন নেই!`}
+                      </div>
+                    )}
                     {isCameraActive && (
                       <div className="flex items-center justify-between gap-1.5 bg-slate-950/85 backdrop-blur-sm p-2 rounded-xl border border-slate-800">
                         <button
@@ -2640,7 +2673,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
                       )}
                       <div className="space-y-0.5">
-                        {lastScanDispatchInfo.syncError === 'auth_redirect' ? (
+                        {lastScanDispatchInfo.isSending ? (
+                          <div className="font-bold">
+                            ⏳ {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পাঠানো হচ্ছে...
+                          </div>
+                        ) : lastScanDispatchInfo.syncError === 'auth_redirect' ? (
                           <>
                             <div className="font-bold text-amber-200">
                               ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পৌঁছায়নি (সেশন/ভেরিফিকেশন ব্লক)!

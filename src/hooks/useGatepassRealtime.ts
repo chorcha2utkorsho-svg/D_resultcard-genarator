@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalRole, SecurityGatepassLog } from '../types';
 import { getStudentPortalId } from '../utils/bengali';
+import { parseJsonApiResponse } from '../utils/apiResponse';
 import {
   buildGuardianVoiceMessage,
   playAlarmChime,
@@ -11,6 +12,7 @@ import {
   showGuardianSystemNotification,
   speakRepeatedGuardianAlert,
   stopBengaliSpeech,
+  subscribeMobileAudioUnlock,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 
@@ -97,6 +99,13 @@ interface UseGatepassRealtimeParams {
 }
 
 export type RealtimeTransportMode = 'ws' | 'sse' | 'polling' | 'connecting';
+export type RealtimeSyncHealth =
+  | 'connecting'
+  | 'verified_ws'
+  | 'verified_sse'
+  | 'verified_polling'
+  | 'auth_redirect'
+  | 'unreachable';
 
 export function useGatepassRealtime({
   role,
@@ -119,6 +128,7 @@ export function useGatepassRealtime({
   } | null>(null);
   const [connectionTransport, setConnectionTransport] =
     useState<RealtimeTransportMode>('connecting');
+  const [syncHealth, setSyncHealth] = useState<RealtimeSyncHealth>('connecting');
   const [lastSyncServerTime, setLastSyncServerTime] = useState<number>(0);
   const [serverInstanceId, setServerInstanceId] = useState<string>('');
 
@@ -210,11 +220,11 @@ export function useGatepassRealtime({
       if (ringClearTimerRef.current) clearTimeout(ringClearTimerRef.current);
       ringClearTimerRef.current = setTimeout(() => {
         setLiveRingingAlert(null);
-      }, 30000);
+      }, 65000);
 
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         try {
-          navigator.vibrate([240, 100, 240, 100, 420]);
+          navigator.vibrate([320, 120, 320, 120, 520]);
         } catch {
           // Ignore
         }
@@ -238,8 +248,8 @@ export function useGatepassRealtime({
       );
 
       speakRepeatedGuardianAlert(targetStudent, action, currentSchedule, {
-        repeatCount: 3,
-        delayMs: 180,
+        repeatCount: 6,
+        delayMs: 160,
         onBlocked: () => {
           setPendingBlockedSpeech({
             message,
@@ -259,8 +269,16 @@ export function useGatepassRealtime({
     if (!enabled || role !== 'student' || !resolvedStudent) return;
     const timer = setTimeout(() => {
       void prewarmGuardianVoiceCache(resolvedStudent, schoolInfo.dailySchedule);
-    }, 600);
-    return () => clearTimeout(timer);
+    }, 500);
+    const unsubUnlock = subscribeMobileAudioUnlock((unlocked) => {
+      if (unlocked) {
+        void prewarmGuardianVoiceCache(resolvedStudent, schoolInfo.dailySchedule);
+      }
+    });
+    return () => {
+      clearTimeout(timer);
+      unsubUnlock();
+    };
   }, [enabled, role, resolvedStudent?.id, resolvedStudent?.nameBn, schoolInfo.dailySchedule]);
 
   // Unlock mobile audio strictly on real tap/click activation gestures (never false-positive passive scroll)
@@ -367,12 +385,14 @@ export function useGatepassRealtime({
     hasBaselineRef.current = false;
     lastServerTimeRef.current = 0;
     setConnectionTransport('connecting');
+    setSyncHealth('connecting');
 
     let isDisposed = false;
     let ws: WebSocket | null = null;
     let sse: EventSource | null = null;
     let wsConnected = false;
     let sseConnected = false;
+    let pollVerified = false;
     let wsReconnectAttempts = 0;
     let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let wsPingTimer: ReturnType<typeof setInterval> | null = null;
@@ -406,6 +426,9 @@ export function useGatepassRealtime({
         lastServerTimeRef.current = serverTime;
       }
       setLastSyncServerTime(Date.now());
+      if (typeof rawPayload.serverInstanceId === 'string' && rawPayload.serverInstanceId) {
+        setServerInstanceId(rawPayload.serverInstanceId);
+      }
 
       if (rawPayload.type === 'gatepass:init') {
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
@@ -470,17 +493,37 @@ export function useGatepassRealtime({
             ? Math.max(0, lastServerTimeRef.current - 6000)
             : 0;
         const params = buildStudentQueryParams({ since: String(sinceParam) });
-        const res = await fetch(`/api/security/latest-logs?${params.toString()}`, { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (isDisposed || !data || !Array.isArray(data.logs)) return;
+        const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
+          cache: 'no-store',
+        });
+        const parsed = await parseJsonApiResponse<any>(res);
+        if (isDisposed) return;
 
+        if (parsed.authRedirected) {
+          pollVerified = false;
+          if (!wsConnected && !sseConnected) {
+            setSyncHealth('auth_redirect');
+          }
+          return;
+        }
+
+        if (!parsed.ok || !parsed.data || !Array.isArray(parsed.data.logs)) {
+          pollVerified = false;
+          if (!wsConnected && !sseConnected) {
+            setSyncHealth('unreachable');
+          }
+          return;
+        }
+
+        const data = parsed.data;
+        pollVerified = true;
         setLastSyncServerTime(Date.now());
         if (typeof data.serverInstanceId === 'string' && data.serverInstanceId) {
           setServerInstanceId(data.serverInstanceId);
         }
         if (!wsConnected && !sseConnected) {
           setConnectionTransport('polling');
+          setSyncHealth('verified_polling');
         }
 
         const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
@@ -513,7 +556,10 @@ export function useGatepassRealtime({
           }
         }
       } catch {
-        // Non-fatal network interruption
+        pollVerified = false;
+        if (!wsConnected && !sseConnected) {
+          setSyncHealth((prev) => (prev === 'auth_redirect' ? prev : 'unreachable'));
+        }
       }
     };
 
@@ -524,10 +570,18 @@ export function useGatepassRealtime({
         sse = new EventSource(`/api/security/stream?${params.toString()}`);
         sse.onopen = () => {
           sseConnected = true;
-          if (!wsConnected) setConnectionTransport('sse');
+          if (!wsConnected) {
+            setConnectionTransport('sse');
+            setSyncHealth('verified_sse');
+          }
         };
         sse.addEventListener('gatepass', (ev: MessageEvent) => {
           try {
+            sseConnected = true;
+            if (!wsConnected) {
+              setConnectionTransport('sse');
+              setSyncHealth('verified_sse');
+            }
             handleIncomingPayload(JSON.parse(ev.data));
           } catch {
             // Ignore malformed SSE payload
@@ -535,7 +589,16 @@ export function useGatepassRealtime({
         });
         sse.onerror = () => {
           sseConnected = false;
-          if (!wsConnected) setConnectionTransport('polling');
+          if (!wsConnected) {
+            setConnectionTransport(pollVerified ? 'polling' : 'connecting');
+            setSyncHealth((prev) =>
+              pollVerified
+                ? 'verified_polling'
+                : prev === 'auth_redirect'
+                ? 'auth_redirect'
+                : 'connecting'
+            );
+          }
         };
       } catch {
         sseConnected = false;
@@ -573,6 +636,7 @@ export function useGatepassRealtime({
           wsConnected = true;
           wsReconnectAttempts = 0;
           setConnectionTransport('ws');
+          setSyncHealth('verified_ws');
           if (sseFallbackTimer) {
             clearTimeout(sseFallbackTimer);
             sseFallbackTimer = null;
@@ -606,7 +670,16 @@ export function useGatepassRealtime({
             wsPingTimer = null;
           }
           if (isDisposed) return;
-          setConnectionTransport(sseConnected ? 'sse' : 'polling');
+          setConnectionTransport(sseConnected ? 'sse' : pollVerified ? 'polling' : 'connecting');
+          setSyncHealth((prev) =>
+            sseConnected
+              ? 'verified_sse'
+              : pollVerified
+              ? 'verified_polling'
+              : prev === 'auth_redirect'
+              ? 'auth_redirect'
+              : 'connecting'
+          );
           startSseFallback();
           const backoffMs = Math.min(10000, 1200 * Math.pow(1.6, wsReconnectAttempts));
           wsReconnectAttempts += 1;
@@ -715,9 +788,20 @@ export function useGatepassRealtime({
       const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
         cache: 'no-store',
       });
-      if (!res.ok) return { foundCount: 0, latestLog: null };
-      const data = await res.json();
+      const parsed = await parseJsonApiResponse<any>(res);
+      if (parsed.authRedirected) {
+        setSyncHealth('auth_redirect');
+        return { foundCount: 0, latestLog: null };
+      }
+      if (!parsed.ok || !parsed.data) {
+        setSyncHealth('unreachable');
+        return { foundCount: 0, latestLog: null };
+      }
+      const data = parsed.data;
       setLastSyncServerTime(Date.now());
+      setSyncHealth((prev) =>
+        prev === 'verified_ws' || prev === 'verified_sse' ? prev : 'verified_polling'
+      );
       if (typeof data?.serverInstanceId === 'string' && data.serverInstanceId) {
         setServerInstanceId(data.serverInstanceId);
       }
@@ -753,6 +837,7 @@ export function useGatepassRealtime({
       }
       return { foundCount: matchingCount, latestLog: newestMatching };
     } catch {
+      setSyncHealth('unreachable');
       return { foundCount: 0, latestLog: null };
     }
   }, [
@@ -773,6 +858,7 @@ export function useGatepassRealtime({
       setLiveRingingAlert(null);
     },
     connectionTransport,
+    syncHealth,
     lastSyncServerTime,
     serverInstanceId,
     forceCheckNow,

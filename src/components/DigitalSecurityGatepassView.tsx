@@ -97,9 +97,11 @@ import {
   isGuardianAudioEnabledPref,
   markGatepassLogSeen,
   markGuardianVoiceLogPlayed,
+  RealtimeSyncHealth,
   RealtimeTransportMode,
   setGuardianAudioEnabledPref,
 } from '../hooks/useGatepassRealtime';
+import { parseJsonApiResponse } from '../utils/apiResponse';
 
 interface DigitalSecurityGatepassViewProps {
   initialTab?:
@@ -113,6 +115,7 @@ interface DigitalSecurityGatepassViewProps {
   externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
   onDismissExternalRingingAlert?: () => void;
   realtimeTransport?: RealtimeTransportMode;
+  realtimeSyncHealth?: RealtimeSyncHealth;
   onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
   onRoleLogout?: () => void;
   isDeviceLocked?: boolean;
@@ -128,6 +131,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   externalLiveRingingAlert,
   onDismissExternalRingingAlert,
   realtimeTransport,
+  realtimeSyncHealth,
   onForceCheckRealtime,
   onRoleLogout,
   isDeviceLocked = false,
@@ -216,12 +220,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     deliveredCount: number;
     serverHost: string;
     verifiedAt: string;
+    logPayload?: SecurityGatepassLog;
+    syncError?: 'auth_redirect' | 'network_error' | null;
   } | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
   const lastAmbiguousQueryRef = useRef<string>('');
   const [autoInstantScanGreeting, setAutoInstantScanGreeting] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('dlikon_auto_instant_scan_greeting') === 'true';
+    if (typeof window === 'undefined') return true;
+    return localStorage.getItem('dlikon_auto_instant_scan_greeting') !== 'false';
   });
   const [lastScanEtiquette, setLastScanEtiquette] = useState<{
     logId: string;
@@ -334,9 +340,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: cameraFacingMode },
-          width: { ideal: 1920, min: 720 },
-          height: { ideal: 1080, min: 480 },
-          advanced: [{ focusMode: 'continuous' } as any],
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
         },
         audio: false,
       };
@@ -344,7 +349,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        await videoRef.current.play().catch(() => {});
       }
       setIsCameraActive(true);
 
@@ -352,26 +357,44 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       if (track) {
         const caps = (track.getCapabilities && (track.getCapabilities() as any)) || {};
         setHasTorchSupport(Boolean(caps.torch));
+        if (track.applyConstraints && caps.focusMode?.includes?.('continuous')) {
+          void (track.applyConstraints as any)({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+        }
       }
     } catch (err: any) {
       console.warn('Camera access issue, trying fallback:', err);
       try {
         const fallbackStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: { facingMode: cameraFacingMode },
           audio: false,
-        });
+        }).catch(() =>
+          navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          })
+        );
         mediaStreamRef.current = fallbackStream;
         if (videoRef.current) {
           videoRef.current.srcObject = fallbackStream;
-          await videoRef.current.play();
+          await videoRef.current.play().catch(() => {});
         }
         setIsCameraActive(true);
-      } catch (fErr) {
+      } catch {
         setCameraError('ক্যামেরা চালু করা যায়নি বা অনুমতি দেওয়া হয়নি। আপনি নিচের বারকোড ইনপুট বক্স ব্যবহার করে সরাসরি স্ক্যান করতে পারেন।');
         setIsCameraActive(false);
       }
     }
   };
+
+  // Ensure video element ALWAYS receives active MediaStream even on first mount when isCameraActive transitions false -> true
+  useEffect(() => {
+    if (!isCameraActive || !mediaStreamRef.current || !videoRef.current) return;
+    const videoEl = videoRef.current;
+    if (videoEl.srcObject !== mediaStreamRef.current) {
+      videoEl.srcObject = mediaStreamRef.current;
+    }
+    void videoEl.play().catch(() => {});
+  }, [isCameraActive, activeTab]);
 
   const stopCamera = () => {
     if (scanAnimationFrameRef.current) {
@@ -515,42 +538,76 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
-    try {
-      fetch('/api/security/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        keepalive: true,
-        body: JSON.stringify({ log: newLogRecord }),
-      })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (data?.log) {
-            addSecurityLog(data.log);
-          }
-          if (data?.attendanceRecord) {
-            upsertAttendanceRecordFromServer(data.attendanceRecord);
-          }
-          const delivered =
-            typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
-          setLastScanDispatchInfo({
-            student,
-            deliveredCount: delivered,
-            serverHost: currentServerHost,
-            verifiedAt: nowIso,
-          });
-        })
-        .catch((err) => {
-          console.warn('Gate log sync error:', err);
+    const dispatchScanToServer = async (attempt = 0): Promise<void> => {
+      try {
+        const res = await fetch('/api/security/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: true,
+          cache: 'no-store',
+          body: JSON.stringify({ log: newLogRecord }),
+        });
+        const parsed = await parseJsonApiResponse<any>(res);
+        if (parsed.authRedirected) {
           setLastScanDispatchInfo({
             student,
             deliveredCount: 0,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
+            logPayload: newLogRecord,
+            syncError: 'auth_redirect',
           });
+          return;
+        }
+        if (!parsed.ok || !parsed.data) {
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 650));
+            return dispatchScanToServer(1);
+          }
+          setLastScanDispatchInfo({
+            student,
+            deliveredCount: 0,
+            serverHost: currentServerHost,
+            verifiedAt: nowIso,
+            logPayload: newLogRecord,
+            syncError: 'network_error',
+          });
+          return;
+        }
+        const data = parsed.data;
+        if (data?.log) {
+          addSecurityLog(data.log);
+        }
+        if (data?.attendanceRecord) {
+          upsertAttendanceRecordFromServer(data.attendanceRecord);
+        }
+        const delivered =
+          typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
+        setLastScanDispatchInfo({
+          student,
+          deliveredCount: delivered,
+          serverHost: currentServerHost,
+          verifiedAt: nowIso,
+          logPayload: data?.log || newLogRecord,
+          syncError: null,
         });
-    } catch {
-      // Non-fatal
-    }
+      } catch (err) {
+        console.warn('Gate log sync error:', err);
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 650));
+          return dispatchScanToServer(1);
+        }
+        setLastScanDispatchInfo({
+          student,
+          deliveredCount: 0,
+          serverHost: currentServerHost,
+          verifiedAt: nowIso,
+          logPayload: newLogRecord,
+          syncError: 'network_error',
+        });
+      }
+    };
+    void dispatchScanToServer(0);
 
     setAmbiguousCandidates([]);
     setRecentScannedStudent(student);
@@ -2088,17 +2145,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </span>
                   </div>
 
-                  {/* Camera Video Stream OR Mock Target Viewfinder */}
+                  {/* Camera Video Stream OR Mock Target Viewfinder (Always mount <video> so videoRef never stays null on first click) */}
                   <div className="absolute inset-0 z-0 bg-slate-950 flex items-center justify-center overflow-hidden">
-                    {isCameraActive ? (
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className={isCameraActive ? 'w-full h-full object-cover' : 'hidden'}
+                    />
+                    {!isCameraActive && (
                       <div className="text-center p-6 space-y-3 z-10 text-slate-300">
                         <Camera className="w-12 h-12 mx-auto text-indigo-400 animate-pulse" />
                         <div className="text-xs font-bold text-white">
@@ -2107,6 +2163,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         <p className="text-[11px] text-slate-400 leading-relaxed">
                           মোবাইলের ব্যাক ক্যামেরা চালু করে আইডিকার্ডের বারকোড বা কিউআর কোডের সামনে ধরুন।
                         </p>
+                        {cameraError && (
+                          <div className="text-[11px] bg-rose-950/90 border border-rose-500/60 text-rose-200 p-2 rounded-lg">
+                            {cameraError}
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={startCamera}
@@ -2563,36 +2624,75 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                 {lastScanDispatchInfo && (
                   <div
                     className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                      lastScanDispatchInfo.deliveredCount > 0
+                      lastScanDispatchInfo.syncError
+                        ? 'bg-rose-950 text-white border-rose-500'
+                        : lastScanDispatchInfo.deliveredCount > 0
                         ? 'bg-emerald-900 text-white border-emerald-700'
                         : 'bg-amber-50 text-amber-950 border-amber-300'
                     }`}
                   >
                     <div className="flex items-start sm:items-center gap-2">
-                      {lastScanDispatchInfo.deliveredCount > 0 ? (
+                      {lastScanDispatchInfo.syncError ? (
+                        <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
+                      ) : lastScanDispatchInfo.deliveredCount > 0 ? (
                         <Radio className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5 sm:mt-0 animate-pulse" />
                       ) : (
                         <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
                       )}
                       <div className="space-y-0.5">
-                        {lastScanDispatchInfo.deliveredCount > 0 ? (
+                        {lastScanDispatchInfo.syncError === 'auth_redirect' ? (
+                          <>
+                            <div className="font-bold text-amber-200">
+                              ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পৌঁছায়নি (সেশন/ভেরিফিকেশন ব্লক)!
+                            </div>
+                            <div className="text-[11px] text-rose-100">
+                              এই ব্রাউজারে সেশন যাচাই বাকি থাকায় অভিভাবক ফোনে এলার্ম যায়নি। নিচের "পেজ রিলোড করুন" বাটনে ক্লিক করে আবার স্ক্যান করুন।
+                            </div>
+                          </>
+                        ) : lastScanDispatchInfo.syncError === 'network_error' ? (
+                          <>
+                            <div className="font-bold text-amber-200">
+                              ⚠ সতর্কতা: সার্ভারে স্ক্যান সংরক্ষণ ব্যর্থ হয়েছে ({lastScanDispatchInfo.student.nameBn})
+                            </div>
+                            <div className="text-[11px] text-rose-100">
+                              ইন্টারনেট বা সার্ভার সংযোগ বিচ্ছিন্ন। "পুনরায় সার্ভারে পাঠান" ক্লিক করুন।
+                            </div>
+                          </>
+                        ) : lastScanDispatchInfo.deliveredCount > 0 ? (
                           <div className="font-bold">
-                            ✓ {toBengaliNumber(lastScanDispatchInfo.deliveredCount)}টি সংযুক্ত অভিভাবক ড্যাশবোর্ডে লাইভ পাঠানো হয়েছে
+                            ✓ {toBengaliNumber(lastScanDispatchInfo.deliveredCount)}টি সংযুক্ত অভিভাবক ড্যাশবোর্ডে লাইভ এলার্ম পাঠানো হয়েছে
                           </div>
                         ) : (
                           <>
                             <div className="font-bold">
-                              স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই লিংকে ({lastScanDispatchInfo.serverHost}) {lastScanDispatchInfo.student.nameBn}-এর অভিভাবক ফোন এখন সংযুক্ত নেই
+                              সার্ভারে স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই মুহূর্তে ({lastScanDispatchInfo.serverHost}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
                             </div>
                             <div className="text-[11px] opacity-90">
-                              অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন।
+                              অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "লাইভ সিঙ্ক সক্রিয়" সবুজ দেখুন।
                             </div>
                           </>
                         )}
                       </div>
                     </div>
 
-                    {lastScanDispatchInfo.deliveredCount === 0 && (
+                    {lastScanDispatchInfo.syncError ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleVerifyStudent(lastScanDispatchInfo.student, { skipBeep: true, forceVoice: false })}
+                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer"
+                        >
+                          পুনরায় সার্ভারে পাঠান
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => window.location.reload()}
+                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-amber-300 hover:bg-amber-200 text-slate-950 cursor-pointer"
+                        >
+                          পেজ রিলোড করুন
+                        </button>
+                      </div>
+                    ) : lastScanDispatchInfo.deliveredCount === 0 ? (
                       <button
                         type="button"
                         onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
@@ -2609,7 +2709,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                             : 'এই ছাত্রের অভিভাবক লিংক কপি করুন'}
                         </span>
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 )}
 
@@ -3174,6 +3274,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               externalLiveRingingAlert={externalLiveRingingAlert}
               onDismissExternalRingingAlert={onDismissExternalRingingAlert}
               realtimeTransport={realtimeTransport}
+              realtimeSyncHealth={realtimeSyncHealth}
               onForceCheckRealtime={onForceCheckRealtime}
               ackSuccessFeedback={ackSuccessFeedback}
               isSubmittingAck={isSubmittingAck}
@@ -3188,12 +3289,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               onReplayAlarm={(log) => {
                 setPendingBlockedSpeech(null);
                 unlockMobileAudioAndSpeech(true);
+                setIsGuardianAlarmRinging(true);
                 playAlarmChime();
                 speakRepeatedGuardianAlert(
                   activeSignedInStudent,
                   log.action === 'exit' ? 'exit' : 'entry',
                   activeDailySchedule,
-                  { repeatCount: 3, delayMs: 220 }
+                  { repeatCount: 6, delayMs: 180 }
                 );
               }}
               onAcknowledgeAlarm={handleGuardianAcknowledge}

@@ -376,7 +376,7 @@ async function startServer() {
   >();
 
   const pruneRecentGuardianPolls = () => {
-    const cutoff = Date.now() - 22000;
+    const cutoff = Date.now() - 28000;
     for (const [k, entry] of recentGuardianPolls.entries()) {
       if (entry.lastSeenMs < cutoff) {
         recentGuardianPolls.delete(k);
@@ -562,6 +562,27 @@ async function startServer() {
   // =========================================================================
   // API ROUTES
   // =========================================================================
+
+  // Never cache real-time security gatepass responses across mobile proxies
+  app.use('/api/security', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
+  // Security WebSocket/SSE/Polling diagnostic health endpoint
+  app.get('/api/security/health', (_req, res) => {
+    pruneRecentGuardianPolls();
+    res.json({
+      success: true,
+      serverTime: Date.now(),
+      serverInstanceId: SERVER_INSTANCE_ID,
+      activeWsClients: gatepassWsClients.size,
+      activeSseClients: gatepassSseClients.size,
+      recentPollersCount: recentGuardianPolls.size,
+    });
+  });
 
   // Health check
   app.get('/api/health', (_req, res) => {
@@ -1228,6 +1249,14 @@ async function startServer() {
         (log.portalUserId
           ? studentsList.find(
               (s) => s && computePortalIdQuick(s) === String(log.portalUserId).trim().toUpperCase()
+            )
+          : undefined) ||
+        (log.securityQrCode
+          ? studentsList.find(
+              (s) =>
+                s &&
+                s.securityQrCode &&
+                String(s.securityQrCode).trim().toUpperCase() === String(log.securityQrCode).trim().toUpperCase()
             )
           : undefined) ||
         (log.classId && log.studentRoll !== undefined
@@ -3233,6 +3262,17 @@ export class ErrorOverlay {}
         hmr: isHmrDisabled ? false : { server: httpServer },
       },
       appType: 'spa',
+    });
+    app.use((req, res, next) => {
+      if (
+        req.method === 'GET' &&
+        !req.path.startsWith('/api/') &&
+        !req.path.startsWith('/ws/') &&
+        (req.path === '/' || !req.path.includes('.'))
+      ) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      }
+      next();
     });
     app.use(vite.middlewares);
   } else {

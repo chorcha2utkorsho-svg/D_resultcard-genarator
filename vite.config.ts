@@ -4,7 +4,8 @@ import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const isProd = mode === 'production';
   return {
     plugins: [
       react(),
@@ -52,13 +53,22 @@ export default defineConfig(() => {
         workbox: {
           importScripts: ['/sw-student-icon.js'],
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-          navigateFallbackDenylist: [/^\/api/, /^\/ws/, /^\/@vite/, /^\/sw-student-icon\.js/],
+          globPatterns: isProd ? ['**/*.{js,css,html,ico,png,svg,woff2}'] : [],
+          navigateFallbackDenylist: [
+            /^\/api/,
+            /^\/ws/,
+            /^\/@vite/,
+            /^\/sw-student-icon\.js/,
+            /^\/__cookie_check/,
+          ],
           skipWaiting: true,
           clientsClaim: true,
           runtimeCaching: [
             {
-              urlPattern: ({ url }) => url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/'),
+              urlPattern: ({ url }) =>
+                url.pathname.startsWith('/api/') ||
+                url.pathname.startsWith('/ws/') ||
+                url.pathname.includes('__cookie_check'),
               handler: 'NetworkOnly',
             },
           ],

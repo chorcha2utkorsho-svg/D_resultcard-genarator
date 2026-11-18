@@ -116,6 +116,7 @@ function MainContent() {
     liveRingingAlert,
     dismissLiveRingingAlert,
     connectionTransport,
+    syncHealth,
     forceCheckNow,
   } = useGatepassRealtime({
     role: authSession?.role,
@@ -391,7 +392,7 @@ function MainContent() {
                           matchedStd,
                           liveRingingAlert.log.action === 'exit' ? 'exit' : 'entry',
                           schoolInfo.dailySchedule,
-                          { repeatCount: 3, delayMs: 220 }
+                          { repeatCount: 6, delayMs: 180 }
                         );
                       }
                     }}
@@ -429,6 +430,7 @@ function MainContent() {
                 externalLiveRingingAlert={liveRingingAlert}
                 onDismissExternalRingingAlert={dismissLiveRingingAlert}
                 realtimeTransport={connectionTransport}
+                realtimeSyncHealth={syncHealth}
                 onForceCheckRealtime={forceCheckNow}
                 onRoleLogout={handleLogout}
                 isDeviceLocked={isDeviceLocked}

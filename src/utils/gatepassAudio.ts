@@ -86,7 +86,7 @@ export function buildGuardianRepeatedAlertPhrases(
       : `প্রিয় অভিভাবক, ${studentName} বিদ্যালয় থেকে নিরাপদে প্রস্থান করেছে!`;
 
   const phrases: string[] = [primary];
-  const extraCycles = Math.max(0, Math.min(4, repeatCount - 1));
+  const extraCycles = Math.max(0, Math.min(7, repeatCount - 1));
   for (let i = 0; i < extraCycles; i++) {
     phrases.push(shortRepeat);
   }
@@ -107,9 +107,28 @@ export interface GuardianAudioHardwareStatus {
 }
 
 let sharedAudioCtx: AudioContext | null = null;
+let sharedCompressorNode: DynamicsCompressorNode | null = null;
 let sharedVoiceAudioEl: HTMLAudioElement | null = null;
 let activeBufferSource: AudioBufferSourceNode | null = null;
 let activeObjectUrl: string | null = null;
+
+function getLoudAudioDestination(ctx: AudioContext): AudioNode {
+  try {
+    if (!sharedCompressorNode || sharedCompressorNode.context !== ctx) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.setValueAtTime(-16, ctx.currentTime);
+      comp.knee.setValueAtTime(12, ctx.currentTime);
+      comp.ratio.setValueAtTime(4, ctx.currentTime);
+      comp.attack.setValueAtTime(0.003, ctx.currentTime);
+      comp.release.setValueAtTime(0.2, ctx.currentTime);
+      comp.connect(ctx.destination);
+      sharedCompressorNode = comp;
+    }
+    return sharedCompressorNode;
+  } catch {
+    return ctx.destination;
+  }
+}
 
 // Sub-audible continuous oscillator keeping Android Chrome / iOS Safari AudioContext awake while guardian alarm is armed
 let liveWatchOsc: OscillatorNode | null = null;
@@ -625,7 +644,7 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
         { nameBn: queued.studentNameBn },
         queued.action,
         queued.dailySchedule ?? null,
-        { delayMs: 220, repeatCount: 3 }
+        { delayMs: 220, repeatCount: 6 }
       );
     } else {
       speakBengaliSpeech(queued.message, { delayMs: 220 });
@@ -649,7 +668,7 @@ export function replayPendingBlockedSpeech(): boolean {
       { nameBn: queued.studentNameBn },
       queued.action,
       queued.dailySchedule ?? null,
-      { delayMs: 220, repeatCount: 3 }
+      { delayMs: 220, repeatCount: 6 }
     );
   } else {
     speakBengaliSpeech(queued.message, { delayMs: 220 });
@@ -712,11 +731,11 @@ export function playAlarmChime(): void {
         osc1.frequency.setValueAtTime(n.f1, now + n.start);
         osc2.frequency.setValueAtTime(n.f2, now + n.start);
         gain.gain.setValueAtTime(0.001, now + n.start);
-        gain.gain.linearRampToValueAtTime(0.3, now + n.start + 0.02);
+        gain.gain.linearRampToValueAtTime(0.45, now + n.start + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.001, now + n.start + n.dur);
         osc1.connect(gain);
         osc2.connect(gain);
-        gain.connect(ctx.destination);
+        gain.connect(getLoudAudioDestination(ctx));
         osc1.start(now + n.start);
         osc2.start(now + n.start);
         osc1.stop(now + n.start + n.dur);
@@ -841,8 +860,15 @@ async function fetchSingleChunkTtsBuffer(chunk: string): Promise<ArrayBuffer> {
     if (!resp.ok) {
       throw new Error(`TTS HTTP ${resp.status}`);
     }
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    if (
+      (resp.url || '').includes('__cookie_check') ||
+      (contentType && !contentType.includes('audio') && !contentType.includes('octet-stream'))
+    ) {
+      throw new Error('TTS returned non-audio response (auth/proxy redirect)');
+    }
     const buf = await resp.arrayBuffer();
-    if (!buf || buf.byteLength === 0) {
+    if (!buf || buf.byteLength < 64) {
       throw new Error('Empty TTS audio buffer');
     }
     if (ttsArrayBufferCache.size >= 80) {
@@ -925,9 +951,9 @@ function playSingleDecodedBuffer(
       const source = ctx.createBufferSource();
       const gain = ctx.createGain();
       source.buffer = audioBuffer;
-      gain.gain.setValueAtTime(1.18, ctx.currentTime);
+      gain.gain.setValueAtTime(1.65, ctx.currentTime);
       source.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getLoudAudioDestination(ctx));
 
       activeBufferSource = source;
       let done = false;
@@ -1360,9 +1386,9 @@ async function playPhraseList(
     if (pIdx > 0) {
       await new Promise((r) => setTimeout(r, pauseBetweenMs));
       if (runToken !== currentSpeechRunToken) break;
-      if (chimeBetweenCycles && pIdx === 1) {
+      if (chimeBetweenCycles && pIdx >= 1) {
         playAlarmChime();
-        await new Promise((r) => setTimeout(r, 380));
+        await new Promise((r) => setTimeout(r, 420));
         if (runToken !== currentSpeechRunToken) break;
       }
     }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Award,
   BellRing,
   BookOpen,
@@ -96,7 +97,7 @@ import {
   subscribePendingBlockedSpeech,
   subscribeSpeechPlayback,
 } from '../utils/gatepassAudio';
-import { RealtimeTransportMode } from '../hooks/useGatepassRealtime';
+import { RealtimeSyncHealth, RealtimeTransportMode } from '../hooks/useGatepassRealtime';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -110,6 +111,7 @@ interface StudentPersonalDashboardProps {
   externalLiveRingingAlert?: { log: SecurityGatepassLog; message: string } | null;
   onDismissExternalRingingAlert?: () => void;
   realtimeTransport?: RealtimeTransportMode;
+  realtimeSyncHealth?: RealtimeSyncHealth;
   onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
   ackSuccessFeedback: string | null;
   isSubmittingAck: boolean;
@@ -166,6 +168,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   externalLiveRingingAlert,
   onDismissExternalRingingAlert,
   realtimeTransport,
+  realtimeSyncHealth,
   onForceCheckRealtime,
   ackSuccessFeedback,
   isSubmittingAck,
@@ -1043,16 +1046,59 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   {guardianAudioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   <span>{guardianAudioEnabled ? 'অডিও চালু' : 'মিউট'}</span>
                 </button>
-                <span className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
+                <span
+                  className={`text-xs font-medium flex items-center gap-1.5 ${
+                    realtimeSyncHealth === 'auth_redirect' || realtimeSyncHealth === 'unreachable'
+                      ? 'text-rose-300'
+                      : realtimeSyncHealth === 'connecting' ||
+                        (!realtimeSyncHealth && (!realtimeTransport || realtimeTransport === 'connecting'))
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+                  }`}
+                >
                   <Globe className="w-3.5 h-3.5" />
                   <span>
-                    {realtimeTransport === 'connecting'
+                    {realtimeSyncHealth === 'auth_redirect'
+                      ? 'সেশন যাচাই প্রয়োজন'
+                      : realtimeSyncHealth === 'unreachable'
+                      ? 'সার্ভার সংযোগ বিচ্ছিন্ন'
+                      : realtimeSyncHealth === 'verified_ws'
+                      ? 'লাইভ সিঙ্ক সক্রিয় (WS)'
+                      : realtimeSyncHealth === 'verified_sse'
+                      ? 'লাইভ সিঙ্ক সক্রিয় (SSE)'
+                      : realtimeSyncHealth === 'verified_polling'
+                      ? 'লাইভ সিঙ্ক সক্রিয় (Poll)'
+                      : !realtimeTransport || realtimeTransport === 'connecting'
                       ? 'লাইভ সংযোগ যুক্ত হচ্ছে...'
                       : 'লাইভ সিঙ্ক সক্রিয়'}
                   </span>
                 </span>
               </div>
             </div>
+
+            {(realtimeSyncHealth === 'auth_redirect' || realtimeSyncHealth === 'unreachable') && (
+              <div className="px-3.5 py-2.5 bg-rose-950/90 border border-rose-500/70 text-rose-100 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-start sm:items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
+                  <span>
+                    {realtimeSyncHealth === 'auth_redirect'
+                      ? 'এই ব্রাউজারে সার্ভার সিগন্যাল আটকে আছে (সেশন/গুগল ভেরিফিকেশন প্রয়োজন)। পেজ রিলোড করে পুনরায় সংযোগ দিন, নতুবা গেট স্ক্যানের এলার্ম আসবে না।'
+                      : 'এই মুহূর্তে কেন্দ্রীয় সার্ভারের সাথে সংযোগ পাওয়া যাচ্ছে না। ইন্টারনেট বা একই সার্ভার ঠিকানা যাচাই করুন।'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.location.reload();
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs cursor-pointer shrink-0 self-start sm:self-auto"
+                >
+                  পুনরায় সংযোগ দিন (Reload)
+                </button>
+              </div>
+            )}
 
             {manualCheckStatus && (
               <div className="px-3 py-2 bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 rounded-xl text-xs font-semibold">
@@ -1137,7 +1183,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                       className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                     >
                       <Volume2 className="w-4 h-4 text-amber-300" />
-                      <span>নাম ধরে শুনুন (৩ বার)</span>
+                      <span>নাম ধরে শুনুন (৬ বার)</span>
                     </button>
                   </div>
                 </div>

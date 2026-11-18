@@ -309,9 +309,9 @@ function startSubAudibleKeepAlive(ctx: AudioContext): void {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(20, ctx.currentTime);
+    osc.frequency.setValueAtTime(16, ctx.currentTime);
     // Sub-audible ultra-low gain keeping Android Chrome / iOS Safari AudioContext awake while guardian alarm is armed
-    gain.gain.setValueAtTime(0.00012, ctx.currentTime);
+    gain.gain.setValueAtTime(0.0004, ctx.currentTime);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
@@ -427,8 +427,9 @@ function startHardwareStateWatchdog(): void {
   if (typeof window === 'undefined' || hwWatchdogTimer) return;
   hwWatchdogTimer = setInterval(() => {
     if (!liveWatchDesired) return;
-    syncHardwareStateSnapshot(false);
-  }, 4000);
+    const isVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
+    syncHardwareStateSnapshot(isVisible && audioUnlockedInSession);
+  }, 3500);
 }
 
 function stopHardwareStateWatchdog(): void {

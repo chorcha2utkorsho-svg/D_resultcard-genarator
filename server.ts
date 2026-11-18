@@ -574,6 +574,41 @@ async function startServer() {
   // Security WebSocket/SSE/Polling diagnostic health endpoint
   app.get('/api/security/health', (_req, res) => {
     pruneRecentGuardianPolls();
+    const onlineGuardianMap = new Map<string, { studentId: string; portalId: string; transport: string }>();
+    for (const c of gatepassWsClients) {
+      if (c.ws.readyState === WebSocket.OPEN && c.role === 'student' && (c.studentId || c.portalId)) {
+        const key = c.studentId || c.portalId;
+        onlineGuardianMap.set(key, {
+          studentId: c.studentId,
+          portalId: c.portalId,
+          transport: 'ws',
+        });
+      }
+    }
+    for (const c of gatepassSseClients) {
+      if (c.role === 'student' && (c.studentId || c.portalId)) {
+        const key = c.studentId || c.portalId;
+        if (!onlineGuardianMap.has(key)) {
+          onlineGuardianMap.set(key, {
+            studentId: c.studentId,
+            portalId: c.portalId,
+            transport: 'sse',
+          });
+        }
+      }
+    }
+    for (const p of recentGuardianPolls.values()) {
+      if (p.studentId || p.portalId) {
+        const key = p.studentId || p.portalId;
+        if (!onlineGuardianMap.has(key)) {
+          onlineGuardianMap.set(key, {
+            studentId: p.studentId,
+            portalId: p.portalId,
+            transport: 'poll',
+          });
+        }
+      }
+    }
     res.json({
       success: true,
       serverTime: Date.now(),
@@ -581,6 +616,7 @@ async function startServer() {
       activeWsClients: gatepassWsClients.size,
       activeSseClients: gatepassSseClients.size,
       recentPollersCount: recentGuardianPolls.size,
+      onlineGuardians: Array.from(onlineGuardianMap.values()),
     });
   });
 

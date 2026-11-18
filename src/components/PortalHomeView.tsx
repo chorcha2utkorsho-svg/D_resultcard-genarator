@@ -28,7 +28,7 @@ import {
   safeFetchJson,
   saveLocalStaffAccounts,
 } from '../utils/portalAuthFallback';
-import { unlockMobileAudioAndSpeech } from '../utils/gatepassAudio';
+import { setGuardianLiveWatchActive, unlockMobileAudioAndSpeech } from '../utils/gatepassAudio';
 
 interface PortalHomeViewProps {
   onLoginSuccess: (session: PortalAuthSession, matchedStudent?: Student | null) => void;
@@ -87,8 +87,9 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedPortal === 'student') {
-      // Unlock mobile Chrome / iOS Safari AudioContext + speechSynthesis inside synchronous user gesture
-      unlockMobileAudioAndSpeech(false);
+      // Unlock mobile Chrome / iOS Safari AudioContext & keep-alive inside synchronous user gesture
+      unlockMobileAudioAndSpeech(true);
+      setGuardianLiveWatchActive(true);
     }
     setFeedback(null);
     setIsLoading(true);
@@ -233,7 +234,8 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
 
   const handleStudentSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    unlockMobileAudioAndSpeech(false);
+    unlockMobileAudioAndSpeech(true);
+    setGuardianLiveWatchActive(true);
     setFeedback(null);
     setIsLoading(true);
     try {

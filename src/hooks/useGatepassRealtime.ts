@@ -351,8 +351,8 @@ export function useGatepassRealtime({
           typeof item.serverTimestamp === 'number'
             ? item.serverTimestamp
             : new Date(item.timestamp).getTime() || 0;
-        // Fire alert for any fresh scan arriving within 3 minutes that hasn't been acknowledged
-        if (logMs >= nowMs - 180000 && !item.guardianAcknowledged) {
+        // Post-baseline newly arrived logs: generous 15m window prevents phone-clock skew from silencing live scans
+        if (logMs >= nowMs - 15 * 60 * 1000 && !item.guardianAcknowledged) {
           if (!freshUnplayed) {
             freshUnplayed = item;
           }
@@ -434,6 +434,7 @@ export function useGatepassRealtime({
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
         const isFirstInit = !hasBaselineRef.current;
         hasBaselineRef.current = true;
+        const windowMs = isFirstInit ? 90000 : 180000;
 
         let newestRecentUnseen: SecurityGatepassLog | null = null;
         for (const item of logs) {
@@ -441,7 +442,6 @@ export function useGatepassRealtime({
           addSecurityLog(item);
           markGatepassLogSeen(item.id);
           if (
-            isFirstInit &&
             role === 'student' &&
             isMatchingStudentLog(item) &&
             !hasPlayedGuardianVoiceLog(item.id)
@@ -450,12 +450,12 @@ export function useGatepassRealtime({
               typeof item.serverTimestamp === 'number'
                 ? item.serverTimestamp
                 : new Date(item.timestamp).getTime() || 0;
-            // Play if a fresh scan occurred right before or while the guardian opened the page (within 75s)
-            if (logMs >= serverTime - 75000 && !item.guardianAcknowledged) {
+            // Play if a fresh scan occurred shortly before connect or during a brief WS reconnect
+            if (logMs >= serverTime - windowMs && !item.guardianAcknowledged) {
               if (!newestRecentUnseen) {
                 newestRecentUnseen = item;
               }
-            } else {
+            } else if (isFirstInit) {
               markGuardianVoiceLogPlayed(item.id);
             }
           }

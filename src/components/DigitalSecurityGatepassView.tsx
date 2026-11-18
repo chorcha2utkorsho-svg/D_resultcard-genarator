@@ -55,6 +55,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import jsQR from 'jsqr';
+import QRCode from 'qrcode';
 import { useSchool } from '../context/SchoolContext';
 import {
   Student,
@@ -228,8 +229,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const lastAmbiguousQueryRef = useRef<string>('');
   const [autoInstantScanGreeting, setAutoInstantScanGreeting] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
-    return localStorage.getItem('dlikon_auto_instant_scan_greeting') !== 'false';
+    return localStorage.getItem('dlikon_auto_instant_scan_greeting_v2') !== 'false';
   });
+  const [liveServerHealth, setLiveServerHealth] = useState<{
+    reachable: boolean;
+    authRedirected?: boolean;
+    onlineGuardians: { studentId: string; portalId: string; transport: string }[];
+  }>({ reachable: true, onlineGuardians: [] });
+  const [showGuardianQrBridge, setShowGuardianQrBridge] = useState<boolean>(false);
+  const [bridgeTargetStudentId, setBridgeTargetStudentId] = useState<string>('');
+  const [bridgeQrDataUrl, setBridgeQrDataUrl] = useState<string>('');
   const [lastScanEtiquette, setLastScanEtiquette] = useState<{
     logId: string;
     studentId: string;
@@ -264,11 +273,34 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem(
-        'dlikon_auto_instant_scan_greeting',
+        'dlikon_auto_instant_scan_greeting_v2',
         autoInstantScanGreeting ? 'true' : 'false'
       );
     }
   }, [autoInstantScanGreeting]);
+
+  useEffect(() => {
+    if (!showGuardianQrBridge || typeof window === 'undefined') return;
+    const defaultStd =
+      recentScannedStudent ||
+      students.find((s) => s.classId === 'class_4' && Number(s.roll) === 1) ||
+      students[0];
+    const targetId = bridgeTargetStudentId || defaultStd?.id || '';
+    if (targetId && !bridgeTargetStudentId) {
+      setBridgeTargetStudentId(targetId);
+    }
+    const shareUrl = targetId
+      ? `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(targetId)}`
+      : window.location.origin;
+    QRCode.toDataURL(shareUrl, {
+      width: 240,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#091e42', light: '#ffffff' },
+    })
+      .then(setBridgeQrDataUrl)
+      .catch(() => setBridgeQrDataUrl(''));
+  }, [showGuardianQrBridge, bridgeTargetStudentId, recentScannedStudent, students]);
 
   // QR Scanner Event Audit State
   const [scannerAuditLogs, setScannerAuditLogs] = useState<ScannerAuditEvent[]>([]);
@@ -1714,22 +1746,52 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   }, [activeTab, restrictedMode]);
 
   // Also poll server every 3.5 seconds when school staff is viewing Scanner or Audit Logs
-  // so guardian responses from Saudi Arabia / mobile phones appear and count live!
+  // so guardian responses & live online guardian connection telemetry stay real-time!
   useEffect(() => {
     if (activeTab !== 'barcode_scanner' && activeTab !== 'audit_logs') return;
 
     let isSubscribed = true;
     const syncLogsFromServer = async () => {
       try {
-        const res = await fetch('/api/security/latest-logs');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!isSubscribed || !data || !Array.isArray(data.logs)) return;
-        for (const serverLog of data.logs.slice(0, 50)) {
-          addSecurityLog(serverLog);
+        const res = await fetch('/api/security/latest-logs', { cache: 'no-store' });
+        const parsed = await parseJsonApiResponse<any>(res);
+        if (!isSubscribed) return;
+        if (parsed.authRedirected) {
+          setLiveServerHealth((prev) => ({ ...prev, reachable: false, authRedirected: true }));
+          return;
+        }
+        if (parsed.ok && parsed.data && Array.isArray(parsed.data.logs)) {
+          for (const serverLog of parsed.data.logs.slice(0, 50)) {
+            addSecurityLog(serverLog);
+          }
         }
       } catch {
         // Non-fatal
+      }
+
+      if (activeTab === 'barcode_scanner') {
+        try {
+          const hRes = await fetch('/api/security/health', { cache: 'no-store' });
+          const hParsed = await parseJsonApiResponse<any>(hRes);
+          if (!isSubscribed) return;
+          if (hParsed.authRedirected) {
+            setLiveServerHealth({ reachable: false, authRedirected: true, onlineGuardians: [] });
+          } else if (hParsed.ok && hParsed.data) {
+            setLiveServerHealth({
+              reachable: true,
+              authRedirected: false,
+              onlineGuardians: Array.isArray(hParsed.data.onlineGuardians)
+                ? hParsed.data.onlineGuardians
+                : [],
+            });
+          } else {
+            setLiveServerHealth((prev) => ({ ...prev, reachable: false }));
+          }
+        } catch {
+          if (isSubscribed) {
+            setLiveServerHealth((prev) => ({ ...prev, reachable: false }));
+          }
+        }
       }
     };
 
@@ -2283,6 +2345,58 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
             {/* Right Column (7/12): Scanner Console, Sound, Voice & Barcode Inputs */}
             <div className="lg:col-span-7 space-y-5">
+              {/* Live Server & Connected Guardian Smartphone Telemetry Strip */}
+              <div
+                className={`rounded-2xl border p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                  liveServerHealth.authRedirected || !liveServerHealth.reachable
+                    ? 'bg-rose-950 text-white border-rose-500'
+                    : liveServerHealth.onlineGuardians.length > 0
+                    ? 'bg-emerald-950 text-white border-emerald-500/70'
+                    : 'bg-slate-900 text-slate-100 border-slate-700'
+                }`}
+              >
+                <div className="space-y-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 font-bold">
+                    <Wifi
+                      className={`w-4 h-4 shrink-0 ${
+                        liveServerHealth.authRedirected || !liveServerHealth.reachable
+                          ? 'text-rose-400'
+                          : liveServerHealth.onlineGuardians.length > 0
+                          ? 'text-emerald-400 animate-pulse'
+                          : 'text-amber-300'
+                      }`}
+                    />
+                    <span>
+                      {liveServerHealth.authRedirected
+                        ? 'সার্ভার সেশন ব্লক! পেজ রিলোড করে পুনরায় সংযোগ দিন'
+                        : !liveServerHealth.reachable
+                        ? 'সার্ভার সংযোগ পাওয়া যাচ্ছে না'
+                        : liveServerHealth.onlineGuardians.length > 0
+                        ? `✓ ${toBengaliNumber(liveServerHealth.onlineGuardians.length)}টি অভিভাবক ফোন এই সার্ভারে লাইভ অনলাইন (${liveServerHealth.onlineGuardians
+                            .slice(0, 3)
+                            .map((g) => g.portalId || g.studentId)
+                            .join(', ')})`
+                        : 'এই সার্ভারে এখনো কোনো অভিভাবক ফোন যুক্ত নেই (স্ট্যান্ডবাই)'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 font-mono truncate">
+                    সার্ভার ঠিকানা: <strong className="text-amber-300">{typeof window !== 'undefined' ? window.location.host : ''}</strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowGuardianQrBridge(true)}
+                    className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                    title="দ্বিতীয় ফোনে ঠিক এই সার্ভারের অভিভাবক ড্যাশবোর্ড খুলতে QR কোড দেখুন"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>অভিভাবক ফোনে খোলার QR</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Action Bar (Entry vs Exit + Audio Controls) */}
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
@@ -5135,6 +5249,109 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </span>
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Same-Server Guardian Phone Direct Pairing QR Modal */}
+      {showGuardianQrBridge && (() => {
+        const selectedStd =
+          students.find((s) => s.id === bridgeTargetStudentId) ||
+          recentScannedStudent ||
+          students.find((s) => s.classId === 'class_4' && Number(s.roll) === 1) ||
+          students[0];
+        const shareUrl =
+          typeof window !== 'undefined' && selectedStd
+            ? `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(selectedStd.id)}`
+            : '';
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={() => setShowGuardianQrBridge(false)}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="bg-[#091e42] text-white px-5 py-4 flex items-center justify-between border-b-2 border-amber-400">
+                <div className="flex items-center gap-2.5">
+                  <QrCode className="w-5 h-5 text-amber-400 shrink-0" />
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold font-serif">
+                      অভিভাবক ফোনে ঠিক এই সার্ভার খুলুন
+                    </h3>
+                    <p className="text-[11px] text-slate-300">
+                      দুই ফোনে একই ঠিকানা থাকলে ১ সেকেন্ডে ভয়েস বাজবে
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowGuardianQrBridge(false)}
+                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    যে শিক্ষার্থীর ড্যাশবোর্ড অভিভাবক ফোনে খুলবেন:
+                  </label>
+                  <select
+                    value={selectedStd?.id || ''}
+                    onChange={(e) => setBridgeTargetStudentId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white text-slate-900 font-bold"
+                  >
+                    {students.slice(0, 200).map((s) => {
+                      const clsName = classes.find((c) => c.id === s.classId)?.nameBn || s.classId;
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {clsName} • রোল {toBengaliRoll(s.roll)} • {s.nameBn} ({getStudentPortalId(s)})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {bridgeQrDataUrl && (
+                  <div className="flex flex-col items-center bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
+                    <img
+                      src={bridgeQrDataUrl}
+                      alt="Guardian Direct Link QR"
+                      className="w-48 h-48 rounded-lg border border-slate-300 bg-white"
+                    />
+                    <p className="text-[11px] text-slate-600 text-center">
+                      অভিভাবকের স্মার্টফোন ক্যামেরা দিয়ে এই QR কোড স্ক্যান করুন অথবা নিচের লিংক কপি করে পাঠান
+                    </p>
+                  </div>
+                )}
+
+                {shareUrl && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={shareUrl}
+                      className="flex-1 px-2.5 py-2 border border-slate-300 rounded-lg font-mono text-[11px] text-slate-700 bg-slate-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedStd) handleCopyGuardianLink(selectedStd);
+                      }}
+                      className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>
+                        {selectedStd && copiedGuardianLinkId === selectedStd.id ? 'কপি হয়েছে ✓' : 'কপি'}
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

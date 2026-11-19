@@ -1153,7 +1153,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 </button>
                 <span
                   className={`text-xs font-medium flex items-center gap-1.5 ${
-                    realtimeSyncHealth === 'auth_redirect' || realtimeSyncHealth === 'unreachable'
+                    realtimeSyncHealth === 'static_host' ||
+                    realtimeSyncHealth === 'auth_redirect' ||
+                    realtimeSyncHealth === 'unreachable'
                       ? 'text-rose-300'
                       : realtimeSyncHealth === 'connecting' ||
                         (!realtimeSyncHealth && (!realtimeTransport || realtimeTransport === 'connecting'))
@@ -1163,7 +1165,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 >
                   <Globe className="w-3.5 h-3.5" />
                   <span>
-                    {realtimeSyncHealth === 'auth_redirect'
+                    {realtimeSyncHealth === 'static_host'
+                      ? 'ব্যাকএন্ড সার্ভার নেই (Static)'
+                      : realtimeSyncHealth === 'auth_redirect'
                       ? 'সেশন যাচাই প্রয়োজন'
                       : realtimeSyncHealth === 'unreachable'
                       ? 'সার্ভার সংযোগ বিচ্ছিন্ন'
@@ -1181,12 +1185,16 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             </div>
 
-            {(realtimeSyncHealth === 'auth_redirect' || realtimeSyncHealth === 'unreachable') && (
+            {(realtimeSyncHealth === 'static_host' ||
+              realtimeSyncHealth === 'auth_redirect' ||
+              realtimeSyncHealth === 'unreachable') && (
               <div className="px-3.5 py-2.5 bg-rose-950/90 border border-rose-500/70 text-rose-100 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                 <div className="flex items-start sm:items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
                   <span>
-                    {realtimeSyncHealth === 'auth_redirect'
+                    {realtimeSyncHealth === 'static_host'
+                      ? 'সতর্কতা: এই হোস্টিং ডোমেইনে Node ব্যাকএন্ড সার্ভার (server.ts) চালু নেই, কেবল স্ট্যাটিক HTML ফাইল চলছে। তাই অন্য ফোনে স্ক্যান করলে এলার্ম এখানে আসবে না।'
+                      : realtimeSyncHealth === 'auth_redirect'
                       ? 'এই ব্রাউজারে সার্ভার সিগন্যাল আটকে আছে (সেশন/গুগল ভেরিফিকেশন প্রয়োজন)। পেজ রিলোড করে পুনরায় সংযোগ দিন, নতুবা গেট স্ক্যানের এলার্ম আসবে না।'
                       : 'এই মুহূর্তে কেন্দ্রীয় সার্ভারের সাথে সংযোগ পাওয়া যাচ্ছে না। ইন্টারনেট বা একই সার্ভার ঠিকানা যাচাই করুন।'}
                   </span>
@@ -2408,7 +2416,19 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             )}
 
             {/* Automated Plain-Language Root-Cause Callout */}
-            {realtimeSyncHealth === 'auth_redirect' ? (
+            {realtimeSyncHealth === 'static_host' ? (
+              <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-sm">কারণ শনাক্ত: এই হোস্টিংয়ে ব্যাকএন্ড সার্ভার (server.ts) চালু নেই</div>
+                    <p className="leading-relaxed">
+                      <span className="font-mono">/api/security/*</span> কল করলে সার্ভারের বদলে স্ট্যাটিক HTML পেজ পাওয়া যাচ্ছে। Vercel/Netlify/GitHub Pages-এর মতো স্ট্যাটিক হোস্টিংয়ে কেবল ফ্রন্টএন্ড চলে, ক্রস-ডিভাইস সিগন্যাল যায় না — অনুগ্রহ করে ফুল-স্ট্যাক Node সার্ভারে (Render / Railway / Cloud Run / VPS) হোস্ট করুন।
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : realtimeSyncHealth === 'auth_redirect' ? (
               <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
                 <div className="flex items-start gap-2.5">
                   <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />

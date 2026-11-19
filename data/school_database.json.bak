@@ -7042,6 +7042,20 @@
         }
       },
       "updatedAt": "2026-11-18T16:45:41.702Z"
+    },
+    "class_4_ক_2026-11-19": {
+      "id": "class_4_ক_2026-11-19",
+      "date": "2026-11-19",
+      "academicYear": "২০২৬",
+      "classId": "class_4",
+      "section": "ক",
+      "records": {
+        "std_1794323092397_0_svik": {
+          "status": "present",
+          "remarks": "ডিজিটাল গেটপাস স্ক্যান • ০৭:৪৬ PM"
+        }
+      },
+      "updatedAt": "2026-11-19T13:46:24.075Z"
     }
   },
   "calendarEvents": [
@@ -7524,7 +7538,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,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",
       "motherAvatarUrl": "data:image/jpeg;base64,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",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_1_o14a": {
       "studentId": "std_1794322963381_1_o14a",
@@ -7536,7 +7550,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_2_sze1": {
       "studentId": "std_1794322963381_2_sze1",
@@ -7548,7 +7562,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_3_yq3t": {
       "studentId": "std_1794322963381_3_yq3t",
@@ -7560,7 +7574,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_4_6ecp": {
       "studentId": "std_1794322963381_4_6ecp",
@@ -7572,7 +7586,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_5_2cgu": {
       "studentId": "std_1794322963381_5_2cgu",
@@ -7584,7 +7598,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_6_etdu": {
       "studentId": "std_1794322963381_6_etdu",
@@ -7596,7 +7610,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_7_fth0": {
       "studentId": "std_1794322963381_7_fth0",
@@ -7608,7 +7622,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_8_sbjr": {
       "studentId": "std_1794322963381_8_sbjr",
@@ -7620,7 +7634,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_9_r70g": {
       "studentId": "std_1794322963381_9_r70g",
@@ -7632,7 +7646,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_10_znbo": {
       "studentId": "std_1794322963381_10_znbo",
@@ -7644,7 +7658,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_11_ou0w": {
       "studentId": "std_1794322963381_11_ou0w",
@@ -7656,7 +7670,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_12_uwkb": {
       "studentId": "std_1794322963381_12_uwkb",
@@ -7668,7 +7682,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_13_h3xo": {
       "studentId": "std_1794322963381_13_h3xo",
@@ -7680,7 +7694,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_14_goxb": {
       "studentId": "std_1794322963381_14_goxb",
@@ -7692,7 +7706,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_15_hyg7": {
       "studentId": "std_1794322963381_15_hyg7",
@@ -7704,7 +7718,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_16_0dj2": {
       "studentId": "std_1794322963381_16_0dj2",
@@ -7716,7 +7730,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_17_mi0t": {
       "studentId": "std_1794322963381_17_mi0t",
@@ -7728,7 +7742,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_18_ojyc": {
       "studentId": "std_1794322963381_18_ojyc",
@@ -7740,7 +7754,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_19_vffz": {
       "studentId": "std_1794322963381_19_vffz",
@@ -7752,7 +7766,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_20_7ctx": {
       "studentId": "std_1794322963381_20_7ctx",
@@ -7764,7 +7778,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794322963381_21_iubr": {
       "studentId": "std_1794322963381_21_iubr",
@@ -7776,7 +7790,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_0_oqvt": {
       "studentId": "std_1794323003111_0_oqvt",
@@ -7788,7 +7802,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_1_kmtu": {
       "studentId": "std_1794323003111_1_kmtu",
@@ -7800,7 +7814,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_2_ni86": {
       "studentId": "std_1794323003111_2_ni86",
@@ -7812,7 +7826,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_3_5gv9": {
       "studentId": "std_1794323003111_3_5gv9",
@@ -7824,7 +7838,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_4_3mc6": {
       "studentId": "std_1794323003111_4_3mc6",
@@ -7836,7 +7850,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_5_7647": {
       "studentId": "std_1794323003111_5_7647",
@@ -7848,7 +7862,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_6_7x73": {
       "studentId": "std_1794323003111_6_7x73",
@@ -7860,7 +7874,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_7_rnzz": {
       "studentId": "std_1794323003111_7_rnzz",
@@ -7872,7 +7886,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_8_qwd9": {
       "studentId": "std_1794323003111_8_qwd9",
@@ -7884,7 +7898,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_9_g9sm": {
       "studentId": "std_1794323003111_9_g9sm",
@@ -7896,7 +7910,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_10_ctok": {
       "studentId": "std_1794323003111_10_ctok",
@@ -7908,7 +7922,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_11_qlp1": {
       "studentId": "std_1794323003111_11_qlp1",
@@ -7920,7 +7934,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_12_fokc": {
       "studentId": "std_1794323003111_12_fokc",
@@ -7932,7 +7946,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_13_tm15": {
       "studentId": "std_1794323003111_13_tm15",
@@ -7944,7 +7958,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_14_l2yj": {
       "studentId": "std_1794323003111_14_l2yj",
@@ -7956,7 +7970,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_15_3boo": {
       "studentId": "std_1794323003111_15_3boo",
@@ -7968,7 +7982,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_16_1g5q": {
       "studentId": "std_1794323003111_16_1g5q",
@@ -7980,7 +7994,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_17_jcrf": {
       "studentId": "std_1794323003111_17_jcrf",
@@ -7992,7 +8006,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_18_gkdp": {
       "studentId": "std_1794323003111_18_gkdp",
@@ -8004,7 +8018,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_19_a3q5": {
       "studentId": "std_1794323003111_19_a3q5",
@@ -8016,7 +8030,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_20_0ies": {
       "studentId": "std_1794323003111_20_0ies",
@@ -8028,7 +8042,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_21_1mhr": {
       "studentId": "std_1794323003111_21_1mhr",
@@ -8040,7 +8054,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_22_dkq1": {
       "studentId": "std_1794323003111_22_dkq1",
@@ -8052,7 +8066,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_23_uzz0": {
       "studentId": "std_1794323003111_23_uzz0",
@@ -8064,7 +8078,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_24_kyjz": {
       "studentId": "std_1794323003111_24_kyjz",
@@ -8076,7 +8090,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_25_il0p": {
       "studentId": "std_1794323003111_25_il0p",
@@ -8088,7 +8102,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_26_dvbe": {
       "studentId": "std_1794323003111_26_dvbe",
@@ -8100,7 +8114,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_27_8z72": {
       "studentId": "std_1794323003111_27_8z72",
@@ -8112,7 +8126,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_28_z7md": {
       "studentId": "std_1794323003111_28_z7md",
@@ -8124,7 +8138,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_29_k4pz": {
       "studentId": "std_1794323003111_29_k4pz",
@@ -8136,7 +8150,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_30_q59p": {
       "studentId": "std_1794323003111_30_q59p",
@@ -8148,7 +8162,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_31_lssi": {
       "studentId": "std_1794323003111_31_lssi",
@@ -8160,7 +8174,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_32_nh84": {
       "studentId": "std_1794323003111_32_nh84",
@@ -8172,7 +8186,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323003111_33_1poq": {
       "studentId": "std_1794323003111_33_1poq",
@@ -8184,7 +8198,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_0_g1zi": {
       "studentId": "std_1794323023893_0_g1zi",
@@ -8196,7 +8210,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:21:05.352Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_1_icmv": {
       "studentId": "std_1794323023893_1_icmv",
@@ -8208,7 +8222,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:33:11.714Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_2_uoys": {
       "studentId": "std_1794323023893_2_uoys",
@@ -8220,7 +8234,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:33:29.322Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_3_s65k": {
       "studentId": "std_1794323023893_3_s65k",
@@ -8232,7 +8246,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:34:23.425Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_4_zufw": {
       "studentId": "std_1794323023893_4_zufw",
@@ -8244,7 +8258,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:34:36.218Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_5_309s": {
       "studentId": "std_1794323023893_5_309s",
@@ -8256,7 +8270,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:34:47.264Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_6_54wz": {
       "studentId": "std_1794323023893_6_54wz",
@@ -8268,7 +8282,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:35:05.216Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_7_bfsa": {
       "studentId": "std_1794323023893_7_bfsa",
@@ -8280,7 +8294,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:35:14.441Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_8_ub4t": {
       "studentId": "std_1794323023893_8_ub4t",
@@ -8292,7 +8306,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:35:34.969Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_9_kwta": {
       "studentId": "std_1794323023893_9_kwta",
@@ -8304,7 +8318,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:36:18.392Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_10_zmlp": {
       "studentId": "std_1794323023893_10_zmlp",
@@ -8316,7 +8330,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:36:30.616Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_11_cge1": {
       "studentId": "std_1794323023893_11_cge1",
@@ -8328,7 +8342,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:36:54.128Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_12_aiuc": {
       "studentId": "std_1794323023893_12_aiuc",
@@ -8340,7 +8354,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:37:15.631Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_13_k2h6": {
       "studentId": "std_1794323023893_13_k2h6",
@@ -8352,7 +8366,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:37:41.076Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_14_f3w4": {
       "studentId": "std_1794323023893_14_f3w4",
@@ -8364,7 +8378,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:37:57.710Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_15_jt5a": {
       "studentId": "std_1794323023893_15_jt5a",
@@ -8376,7 +8390,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:38:47.047Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_16_3aot": {
       "studentId": "std_1794323023893_16_3aot",
@@ -8388,7 +8402,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:39:15.718Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_17_85bd": {
       "studentId": "std_1794323023893_17_85bd",
@@ -8400,7 +8414,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:39:46.925Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_18_u47x": {
       "studentId": "std_1794323023893_18_u47x",
@@ -8412,7 +8426,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:39:57.085Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_19_pxhx": {
       "studentId": "std_1794323023893_19_pxhx",
@@ -8424,7 +8438,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:40:39.509Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_20_dtye": {
       "studentId": "std_1794323023893_20_dtye",
@@ -8436,7 +8450,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:41:14.349Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323023893_21_0zce": {
       "studentId": "std_1794323023893_21_0zce",
@@ -8448,7 +8462,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:41:25.445Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_0_32ge": {
       "studentId": "std_1794323046828_0_32ge",
@@ -8460,7 +8474,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:48:02.260Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_1_chgi": {
       "studentId": "std_1794323046828_1_chgi",
@@ -8472,7 +8486,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:43:14.692Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_2_06yl": {
       "studentId": "std_1794323046828_2_06yl",
@@ -8484,7 +8498,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:43:32.220Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_3_ox4w": {
       "studentId": "std_1794323046828_3_ox4w",
@@ -8496,7 +8510,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:43:50.091Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_4_zld2": {
       "studentId": "std_1794323046828_4_zld2",
@@ -8508,7 +8522,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:44:43.835Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_5_dt1v": {
       "studentId": "std_1794323046828_5_dt1v",
@@ -8520,7 +8534,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:50:54.406Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_6_uj5s": {
       "studentId": "std_1794323046828_6_uj5s",
@@ -8532,7 +8546,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:51:15.798Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_7_aq31": {
       "studentId": "std_1794323046828_7_aq31",
@@ -8544,7 +8558,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:51:34.366Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_8_207o": {
       "studentId": "std_1794323046828_8_207o",
@@ -8556,7 +8570,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:52:16.037Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_9_kvz8": {
       "studentId": "std_1794323046828_9_kvz8",
@@ -8568,7 +8582,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:52:35.566Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_10_gp02": {
       "studentId": "std_1794323046828_10_gp02",
@@ -8580,7 +8594,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:52:53.429Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_11_kfia": {
       "studentId": "std_1794323046828_11_kfia",
@@ -8592,7 +8606,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:53:20.757Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_12_xxkl": {
       "studentId": "std_1794323046828_12_xxkl",
@@ -8604,7 +8618,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:53:45.604Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_13_lr0c": {
       "studentId": "std_1794323046828_13_lr0c",
@@ -8616,7 +8630,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:54:05.172Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_14_b8dl": {
       "studentId": "std_1794323046828_14_b8dl",
@@ -8628,7 +8642,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:54:16.532Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_15_4njh": {
       "studentId": "std_1794323046828_15_4njh",
@@ -8640,7 +8654,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:54:47.636Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_16_1njz": {
       "studentId": "std_1794323046828_16_1njz",
@@ -8652,7 +8666,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:55:04.324Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_17_c2p5": {
       "studentId": "std_1794323046828_17_c2p5",
@@ -8664,7 +8678,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:55:35.132Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_18_df8w": {
       "studentId": "std_1794323046828_18_df8w",
@@ -8676,7 +8690,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:55:44.260Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_19_ha4z": {
       "studentId": "std_1794323046828_19_ha4z",
@@ -8688,7 +8702,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:55:53.987Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_20_avyd": {
       "studentId": "std_1794323046828_20_avyd",
@@ -8700,7 +8714,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:56:13.027Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_21_9gfw": {
       "studentId": "std_1794323046828_21_9gfw",
@@ -8712,7 +8726,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:56:33.435Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323046828_22_57xu": {
       "studentId": "std_1794323046828_22_57xu",
@@ -8724,7 +8738,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:57:19.339Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_0_qxiu": {
       "studentId": "std_1794323061828_0_qxiu",
@@ -8736,7 +8750,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:48:58.139Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_1_geu3": {
       "studentId": "std_1794323092397_1_geu3",
@@ -8748,7 +8762,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_1_jqzz": {
       "studentId": "std_1794323061828_1_jqzz",
@@ -8760,7 +8774,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_2_mhfi": {
       "studentId": "std_1794323061828_2_mhfi",
@@ -8772,7 +8786,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_3_oze3": {
       "studentId": "std_1794323061828_3_oze3",
@@ -8784,7 +8798,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_4_jf2p": {
       "studentId": "std_1794323061828_4_jf2p",
@@ -8796,7 +8810,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_5_wbb3": {
       "studentId": "std_1794323061828_5_wbb3",
@@ -8808,7 +8822,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_6_wtru": {
       "studentId": "std_1794323061828_6_wtru",
@@ -8820,7 +8834,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_7_1meo": {
       "studentId": "std_1794323061828_7_1meo",
@@ -8832,7 +8846,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_8_i5hy": {
       "studentId": "std_1794323061828_8_i5hy",
@@ -8844,7 +8858,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_9_9eft": {
       "studentId": "std_1794323061828_9_9eft",
@@ -8856,7 +8870,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_10_3924": {
       "studentId": "std_1794323061828_10_3924",
@@ -8868,7 +8882,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_11_l4un": {
       "studentId": "std_1794323061828_11_l4un",
@@ -8880,7 +8894,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_12_zyoq": {
       "studentId": "std_1794323061828_12_zyoq",
@@ -8892,7 +8906,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_13_1ld9": {
       "studentId": "std_1794323061828_13_1ld9",
@@ -8904,7 +8918,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_14_3qwj": {
       "studentId": "std_1794323061828_14_3qwj",
@@ -8916,7 +8930,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_15_c7gq": {
       "studentId": "std_1794323061828_15_c7gq",
@@ -8928,7 +8942,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_16_j8ug": {
       "studentId": "std_1794323061828_16_j8ug",
@@ -8940,7 +8954,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_17_a6ol": {
       "studentId": "std_1794323061828_17_a6ol",
@@ -8952,7 +8966,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_18_ejph": {
       "studentId": "std_1794323061828_18_ejph",
@@ -8964,7 +8978,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323061828_19_ydni": {
       "studentId": "std_1794323061828_19_ydni",
@@ -8976,7 +8990,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_0_svik": {
       "studentId": "std_1794323092397_0_svik",
@@ -8988,7 +9002,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:19:47.560Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_2_mvcq": {
       "studentId": "std_1794323092397_2_mvcq",
@@ -9000,7 +9014,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:20:00.161Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_3_9i02": {
       "studentId": "std_1794323092397_3_9i02",
@@ -9012,7 +9026,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_4_fw1l": {
       "studentId": "std_1794323092397_4_fw1l",
@@ -9024,7 +9038,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:20:50.063Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_5_5h76": {
       "studentId": "std_1794323092397_5_5h76",
@@ -9036,7 +9050,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:20:28.887Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_6_6n2x": {
       "studentId": "std_1794323092397_6_6n2x",
@@ -9048,7 +9062,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:21:10.439Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_7_vov4": {
       "studentId": "std_1794323092397_7_vov4",
@@ -9060,7 +9074,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:21:26.383Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_8_yrpo": {
       "studentId": "std_1794323092397_8_yrpo",
@@ -9072,7 +9086,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_9_ch46": {
       "studentId": "std_1794323092397_9_ch46",
@@ -9084,7 +9098,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:21:41.071Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_10_6rm0": {
       "studentId": "std_1794323092397_10_6rm0",
@@ -9096,7 +9110,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323092397_11_2jef": {
       "studentId": "std_1794323092397_11_2jef",
@@ -9108,7 +9122,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-17T04:32:29.896Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_0_c8hi": {
       "studentId": "std_1794323115698_0_c8hi",
@@ -9120,7 +9134,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_1_jvyt": {
       "studentId": "std_1794323115698_1_jvyt",
@@ -9132,7 +9146,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_2_hw7i": {
       "studentId": "std_1794323115698_2_hw7i",
@@ -9144,7 +9158,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_3_rzp5": {
       "studentId": "std_1794323115698_3_rzp5",
@@ -9156,7 +9170,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_4_9a6q": {
       "studentId": "std_1794323115698_4_9a6q",
@@ -9168,7 +9182,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_5_0xra": {
       "studentId": "std_1794323115698_5_0xra",
@@ -9180,7 +9194,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_6_k06j": {
       "studentId": "std_1794323115698_6_k06j",
@@ -9192,7 +9206,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_7_cd4l": {
       "studentId": "std_1794323115698_7_cd4l",
@@ -9204,7 +9218,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_8_qye7": {
       "studentId": "std_1794323115698_8_qye7",
@@ -9216,7 +9230,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_9_uyvq": {
       "studentId": "std_1794323115698_9_uyvq",
@@ -9228,7 +9242,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_10_4e42": {
       "studentId": "std_1794323115698_10_4e42",
@@ -9240,7 +9254,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_11_d0wv": {
       "studentId": "std_1794323115698_11_d0wv",
@@ -9252,7 +9266,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_12_lz71": {
       "studentId": "std_1794323115698_12_lz71",
@@ -9264,7 +9278,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_13_r6en": {
       "studentId": "std_1794323115698_13_r6en",
@@ -9276,7 +9290,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_14_cyok": {
       "studentId": "std_1794323115698_14_cyok",
@@ -9288,7 +9302,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_15_5sig": {
       "studentId": "std_1794323115698_15_5sig",
@@ -9300,7 +9314,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_16_0kxm": {
       "studentId": "std_1794323115698_16_0kxm",
@@ -9312,7 +9326,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_17_2j53": {
       "studentId": "std_1794323115698_17_2j53",
@@ -9324,7 +9338,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_18_xk8s": {
       "studentId": "std_1794323115698_18_xk8s",
@@ -9336,7 +9350,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_19_vafx": {
       "studentId": "std_1794323115698_19_vafx",
@@ -9348,7 +9362,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_20_c2ne": {
       "studentId": "std_1794323115698_20_c2ne",
@@ -9360,7 +9374,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323115698_21_pxb3": {
       "studentId": "std_1794323115698_21_pxb3",
@@ -9372,7 +9386,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_0_hxs7": {
       "studentId": "std_1794323132329_0_hxs7",
@@ -9384,7 +9398,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:50:30.962Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_1_b8kl": {
       "studentId": "std_1794323132329_1_b8kl",
@@ -9396,7 +9410,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_2_bhxc": {
       "studentId": "std_1794323132329_2_bhxc",
@@ -9408,7 +9422,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_3_xofc": {
       "studentId": "std_1794323132329_3_xofc",
@@ -9420,7 +9434,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_4_jowh": {
       "studentId": "std_1794323132329_4_jowh",
@@ -9432,7 +9446,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_5_inh3": {
       "studentId": "std_1794323132329_5_inh3",
@@ -9444,7 +9458,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_6_bvrg": {
       "studentId": "std_1794323132329_6_bvrg",
@@ -9456,7 +9470,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_7_g1bu": {
       "studentId": "std_1794323132329_7_g1bu",
@@ -9468,7 +9482,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323132329_8_jk9s": {
       "studentId": "std_1794323132329_8_jk9s",
@@ -9480,7 +9494,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_0_tyu4": {
       "studentId": "std_1794323147788_0_tyu4",
@@ -9492,7 +9506,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:54:30.489Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_1_8tej": {
       "studentId": "std_1794323147788_1_8tej",
@@ -9504,7 +9518,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_2_vus6": {
       "studentId": "std_1794323147788_2_vus6",
@@ -9516,7 +9530,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_3_yu9a": {
       "studentId": "std_1794323147788_3_yu9a",
@@ -9528,7 +9542,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_4_be1k": {
       "studentId": "std_1794323147788_4_be1k",
@@ -9540,7 +9554,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_5_d655": {
       "studentId": "std_1794323147788_5_d655",
@@ -9552,7 +9566,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_6_g1ns": {
       "studentId": "std_1794323147788_6_g1ns",
@@ -9564,7 +9578,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323147788_7_nunt": {
       "studentId": "std_1794323147788_7_nunt",
@@ -9576,7 +9590,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323167681_0_j449": {
       "studentId": "std_1794323167681_0_j449",
@@ -9588,7 +9602,7 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T13:55:03.988Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323167681_1_occ1": {
       "studentId": "std_1794323167681_1_occ1",
@@ -9600,7 +9614,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323167681_2_d7tg": {
       "studentId": "std_1794323167681_2_d7tg",
@@ -9612,7 +9626,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     },
     "std_1794323167681_3_ugja": {
       "studentId": "std_1794323167681_3_ugja",
@@ -9624,7 +9638,7 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
-      "updatedAt": "2026-11-18T23:49:50.487Z"
+      "updatedAt": "2026-11-19T13:46:12.068Z"
     }
   },
   "scannerAuditLogs": [],
@@ -9668,5 +9682,20 @@
   ],
   "staffAttendance": [],
   "admissionRequests": [],
-  "_lastUpdated": "2026-11-18T23:49:50.488Z"
+  "_lastUpdated": "2026-11-19T13:46:24.075Z",
+  "_lastSecurityEvent": {
+    "id": "sec_e2e_verify_1795021700960",
+    "studentId": "std_1794323092397_0_svik",
+    "portalUserId": "DL-C4-01",
+    "classId": "class_4",
+    "section": "ক",
+    "studentNameBn": "জিসান আহমেদ",
+    "studentRoll": 1,
+    "classNameBn": "চতুর্থ শ্রেণি",
+    "action": "entry",
+    "timestamp": "2026-11-18T17:08:20.960Z",
+    "status": "verified",
+    "serverTimestamp": 1795021700967,
+    "guardianAcknowledged": false
+  }
 }

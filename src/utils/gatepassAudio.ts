@@ -215,6 +215,14 @@ export function subscribeAudioDiagnosticEvents(
   };
 }
 
+export function recordAudioEngineDiagnostic(
+  level: AudioDiagnosticEvent['level'],
+  message: string,
+  detail?: string
+): void {
+  emitAudioDiagnostic('audio_ctx', level, message, detail);
+}
+
 export function getGuardianAudioStatus(): GuardianAudioHardwareStatus {
   return {
     unlocked: audioUnlockedInSession,
@@ -814,6 +822,259 @@ export async function resumeAudioContextDiagnostic(): Promise<AudioResumeDiagnos
     previousState,
     resumedOk: snap.audioContextState === 'running',
     latencyMs: Date.now() - startedAt,
+  };
+}
+
+export interface DummySpeechTestResult {
+  ok: boolean;
+  supported: boolean;
+  audioContextState: AudioContextState | 'unavailable';
+  error: string | null;
+}
+
+/**
+ * Manually triggers a dummy SpeechSynthesisUtterance event inside a user gesture
+ * to prime & verify browser voice playback permissions cleanly without intrusive volume.
+ */
+export function triggerDummySpeechSynthesisTest(): Promise<DummySpeechTestResult> {
+  if (typeof window === 'undefined') {
+    return Promise.resolve({
+      ok: false,
+      supported: false,
+      audioContextState: 'unavailable',
+      error: 'Window unavailable',
+    });
+  }
+
+  unlockMobileAudioAndSpeech(true);
+  const ctx = getSharedAudioContext();
+  if (ctx && ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+
+  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+    const snap = getGuardianAudioStatus();
+    emitAudioDiagnostic(
+      'unlock',
+      'warn',
+      'ডামি SpeechSynthesis টেস্ট: এই ব্রাউজারে SpeechSynthesis API নেই'
+    );
+    return Promise.resolve({
+      ok: false,
+      supported: false,
+      audioContextState: snap.audioContextState,
+      error: 'SpeechSynthesis unsupported',
+    });
+  }
+
+  return new Promise<DummySpeechTestResult>((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean, error: string | null = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(safetyTimer);
+      const snap = getGuardianAudioStatus();
+      resolve({
+        ok,
+        supported: true,
+        audioContextState: snap.audioContextState,
+        error,
+      });
+    };
+
+    const safetyTimer = setTimeout(() => {
+      emitAudioDiagnostic(
+        'unlock',
+        'ok',
+        'ডামি SpeechSynthesis ইভেন্ট পাঠানো হয়েছে (অনুমতি সক্রিয়)'
+      );
+      finish(true, null);
+    }, 1200);
+
+    try {
+      window.speechSynthesis.resume();
+      const voices = window.speechSynthesis.getVoices();
+      const bnVoice = selectBestBengaliVoice(voices);
+      const dummyUtterance = new SpeechSynthesisUtterance('Test audio');
+      dummyUtterance.volume = 0.01;
+      dummyUtterance.rate = 2.0;
+      dummyUtterance.lang = bnVoice?.lang || 'bn-BD';
+      if (bnVoice) {
+        dummyUtterance.voice = bnVoice;
+      }
+
+      activeUtterances.add(dummyUtterance);
+      let eventStarted = false;
+
+      dummyUtterance.onstart = () => {
+        eventStarted = true;
+        audioUnlockedInSession = true;
+        notifyUnlockSubscribers();
+        emitAudioDiagnostic(
+          'unlock',
+          'ok',
+          'ডামি SpeechSynthesis ইভেন্ট সফলভাবে চালু হয়েছে (Audio Permission OK)'
+        );
+      };
+
+      dummyUtterance.onend = () => {
+        activeUtterances.delete(dummyUtterance);
+        if (!eventStarted) {
+          audioUnlockedInSession = true;
+          notifyUnlockSubscribers();
+          emitAudioDiagnostic(
+            'unlock',
+            'ok',
+            'ডামি SpeechSynthesis ইভেন্ট সম্পন্ন হয়েছে'
+          );
+        }
+        finish(true, null);
+      };
+
+      dummyUtterance.onerror = (ev) => {
+        activeUtterances.delete(dummyUtterance);
+        const errCode = (ev as SpeechSynthesisErrorEvent)?.error || 'speech_error';
+        emitAudioDiagnostic(
+          'unlock',
+          errCode === 'not-allowed' ? 'error' : 'warn',
+          `ডামি SpeechSynthesis ইভেন্ট ত্রুটি: ${errCode}`
+        );
+        finish(errCode !== 'not-allowed', errCode);
+      };
+
+      window.speechSynthesis.speak(dummyUtterance);
+    } catch (err: any) {
+      const msg = String(err?.message || err || 'SpeechSynthesis invocation failed');
+      emitAudioDiagnostic('unlock', 'error', 'ডামি SpeechSynthesis ট্রিগার ব্যর্থ হয়েছে', msg);
+      finish(false, msg);
+    }
+  });
+}
+
+export interface SilentTrackWakeResult {
+  ok: boolean;
+  htmlAudioPlayed: boolean;
+  audioContextState: AudioContextState | 'unavailable';
+  speechResumed: boolean;
+  error: string | null;
+}
+
+/**
+ * Plays a silent HTML5 audio track + silent Web Audio buffer and resumes SpeechSynthesis
+ * inside a user gesture to circumvent aggressive mobile browser audio suspension policies.
+ */
+export async function playSilentAudioTrack(): Promise<SilentTrackWakeResult> {
+  if (typeof window === 'undefined') {
+    return {
+      ok: false,
+      htmlAudioPlayed: false,
+      audioContextState: 'unavailable',
+      speechResumed: false,
+      error: 'Window unavailable',
+    };
+  }
+
+  let speechResumed = false;
+  let htmlAudioPlayed = false;
+  let errorMsg: string | null = null;
+
+  // 1. Explicitly resume SpeechSynthesis and prime an idle silent utterance
+  try {
+    if ('speechSynthesis' in window && window.speechSynthesis) {
+      window.speechSynthesis.resume();
+      window.speechSynthesis.getVoices();
+      speechResumed = true;
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        const silentUtter = new SpeechSynthesisUtterance(' ');
+        silentUtter.volume = 0;
+        silentUtter.rate = 10;
+        silentUtter.lang = 'bn-BD';
+        activeUtterances.add(silentUtter);
+        silentUtter.onend = () => activeUtterances.delete(silentUtter);
+        silentUtter.onerror = () => activeUtterances.delete(silentUtter);
+        window.speechSynthesis.speak(silentUtter);
+      }
+    }
+  } catch (err: any) {
+    errorMsg = String(err?.message || err || 'speechSynthesis.resume failed');
+  }
+
+  // 2. Resume Web AudioContext + trigger silent buffer + sustain sub-audible keep-alive if armed
+  const ctx = getSharedAudioContext();
+  if (ctx) {
+    try {
+      if (ctx.state !== 'running') {
+        await ctx.resume();
+      }
+      if (ctx.state === 'running') {
+        try {
+          const silentBuffer = ctx.createBuffer(1, 1, 22050);
+          const source = ctx.createBufferSource();
+          source.buffer = silentBuffer;
+          source.connect(ctx.destination);
+          source.start(0);
+        } catch {
+          // Non-fatal
+        }
+        audioUnlockedInSession = true;
+        if (liveWatchDesired) {
+          startSubAudibleKeepAlive(ctx);
+        }
+      }
+    } catch (err: any) {
+      errorMsg = errorMsg || String(err?.message || err || 'AudioContext resume failed');
+    }
+  }
+
+  // 3. Play silent HTML5 WAV track so Chromium/Safari media autoplay pipeline stays unlocked
+  try {
+    const targetAudio =
+      !isVoiceAudioPlaying && getSharedVoiceAudioElement()
+        ? getSharedVoiceAudioElement()!
+        : new Audio(SILENT_WAV_DATA_URI);
+
+    if (!isVoiceAudioPlaying || targetAudio !== sharedVoiceAudioEl) {
+      targetAudio.src = SILENT_WAV_DATA_URI;
+      targetAudio.muted = false;
+      targetAudio.volume = 0.01;
+      await targetAudio.play();
+      htmlAudioPlayed = true;
+      if (targetAudio === sharedVoiceAudioEl) {
+        voiceElementPrimed = true;
+      }
+      audioUnlockedInSession = true;
+    }
+  } catch (err: any) {
+    errorMsg = errorMsg || String(err?.name || err?.message || 'Silent audio play blocked');
+  }
+
+  const snap = getGuardianAudioStatus();
+  const ok = htmlAudioPlayed || snap.audioContextState === 'running' || speechResumed;
+  if (ok) {
+    lastPlaybackError = null;
+    emitAudioDiagnostic(
+      'unlock',
+      'ok',
+      `Wake Audio সাইলেন্ট ট্র্যাক সম্পন্ন হয়েছে (AudioContext='${snap.audioContextState}', Speech=${speechResumed ? 'resumed' : 'unsupported'})`,
+      `htmlSilentTrack=${htmlAudioPlayed}`
+    );
+  } else {
+    lastPlaybackError = errorMsg;
+    emitAudioDiagnostic(
+      'unlock',
+      'warn',
+      'Wake Audio সাইলেন্ট ট্র্যাক ব্রাউজার দ্বারা সীমিত হয়েছে',
+      errorMsg || undefined
+    );
+  }
+
+  notifyUnlockSubscribers();
+  return {
+    ok,
+    htmlAudioPlayed,
+    audioContextState: snap.audioContextState,
+    speechResumed,
+    error: errorMsg,
   };
 }
 

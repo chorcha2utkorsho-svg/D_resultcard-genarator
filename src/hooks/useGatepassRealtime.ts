@@ -108,6 +108,7 @@ export type RealtimeSyncHealth =
   | 'verified_sse'
   | 'verified_polling'
   | 'auth_redirect'
+  | 'static_host'
   | 'unreachable';
 
 export type WebSocketReadyStateLabel =
@@ -476,7 +477,7 @@ export function useGatepassRealtime({
     if (!enabled || role !== 'student') return;
     if (!effectiveStudentId && !effectivePortalId && !(effectiveClassId && effectiveRoll)) return;
 
-    const nowMs = Date.now();
+    const nowMs = Date.now() + (clockOffsetRef.current ?? 0);
     const matchingLogs = securityLogs.filter((l) => isMatchingStudentLog(l));
 
     if (!hasContextLogsBaselineRef.current) {
@@ -490,7 +491,7 @@ export function useGatepassRealtime({
             typeof item.serverTimestamp === 'number'
               ? item.serverTimestamp
               : new Date(item.timestamp).getTime() || 0;
-          if (logMs >= nowMs - 75000 && !item.guardianAcknowledged) {
+          if (logMs >= nowMs - 90000 && !item.guardianAcknowledged) {
             if (!newestRecentUnseen) {
               newestRecentUnseen = item;
             }
@@ -650,7 +651,7 @@ export function useGatepassRealtime({
         let newestRecentUnseen: SecurityGatepassLog | null = null;
         for (const item of logs) {
           if (!item || !item.id) continue;
-          addSecurityLog(item);
+          addSecurityLog(item, { suppressAutoPush: true });
           markGatepassLogSeen(item.id);
           if (
             role === 'student' &&
@@ -709,11 +710,11 @@ export function useGatepassRealtime({
           }
         );
 
-        addSecurityLog(incomingLog);
+        addSecurityLog(incomingLog, { suppressAutoPush: true });
         markGatepassLogSeen(incomingLog.id);
         hasBaselineRef.current = true;
         if (rawPayload.attendanceRecord) {
-          upsertAttendanceRecordFromServer(rawPayload.attendanceRecord);
+          upsertAttendanceRecordFromServer(rawPayload.attendanceRecord, { suppressAutoPush: true });
         }
         if (role === 'student' && matched) {
           triggerAlertForStudent(incomingLog, viaTransport);
@@ -722,7 +723,7 @@ export function useGatepassRealtime({
       }
 
       if (rawPayload.type === 'gatepass:acknowledge' && rawPayload.log && rawPayload.log.id) {
-        addSecurityLog(rawPayload.log);
+        addSecurityLog(rawPayload.log, { suppressAutoPush: true });
       }
     };
 
@@ -732,7 +733,7 @@ export function useGatepassRealtime({
       try {
         const sinceParam =
           hasBaselineRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 6000)
+            ? Math.max(0, lastServerTimeRef.current - 15000)
             : 0;
         const params = buildStudentQueryParams({ since: String(sinceParam) });
         const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
@@ -740,6 +741,20 @@ export function useGatepassRealtime({
         });
         const parsed = await parseJsonApiResponse<any>(res);
         if (isDisposed) return;
+
+        if (parsed.staticHostNoBackend) {
+          pollVerified = false;
+          if (!wsConnected && !sseConnected) {
+            setSyncHealth('static_host');
+          }
+          appendDiagnosticLog(
+            'POLL',
+            'error',
+            'ব্যাকএন্ড সার্ভার (server.ts) পাওয়া যায়নি — স্ট্যাটিক HTML রেসপন্স আসছে',
+            { detail: 'এই হোস্টিং URL-এ কেবল ফ্রন্টএন্ড ফাইল চলছে, Node সার্ভার/WebSocket চালু নেই' }
+          );
+          return;
+        }
 
         if (parsed.authRedirected) {
           pollVerified = false;
@@ -750,7 +765,7 @@ export function useGatepassRealtime({
             'POLL',
             'error',
             'পোলিং অনুরোধ অথেনটিকেশন রিডাইরেক্টে আটকে গেছে',
-            { detail: 'অফিশিয়াল ও অভিভাবক একই ব্রাউজার সেশনে থাকায় সার্ভার রিডাইরেক্ট হচ্ছে' }
+            { detail: 'সেশন ভেরিফিকেশন রিডাইরেক্ট হচ্ছে — পেজ রিলোড প্রয়োজন' }
           );
           return;
         }
@@ -758,7 +773,7 @@ export function useGatepassRealtime({
         if (!parsed.ok || !parsed.data || !Array.isArray(parsed.data.logs)) {
           pollVerified = false;
           if (!wsConnected && !sseConnected) {
-            setSyncHealth('unreachable');
+            setSyncHealth((prev) => (prev === 'static_host' || prev === 'auth_redirect' ? prev : 'unreachable'));
           }
           appendDiagnosticLog('POLL', 'warn', 'HTTP পোলিং রেসপন্স পাওয়া যায়নি', {
             detail: `status=${parsed.status || 'network_err'}`,
@@ -817,14 +832,16 @@ export function useGatepassRealtime({
             if (!seenGatepassLogIds.has(log.id) || isNewGuardianAlert) {
               handleIncomingPayload({ type: 'gatepass:scan', log, serverTime: serverNow }, 'polling');
             } else {
-              addSecurityLog(log);
+              addSecurityLog(log, { suppressAutoPush: true });
             }
           }
         }
       } catch (err: any) {
         pollVerified = false;
         if (!wsConnected && !sseConnected) {
-          setSyncHealth((prev) => (prev === 'auth_redirect' ? prev : 'unreachable'));
+          setSyncHealth((prev) =>
+            prev === 'auth_redirect' || prev === 'static_host' ? prev : 'unreachable'
+          );
         }
         appendDiagnosticLog('POLL', 'error', 'HTTP পোলিং নেটওয়ার্ক ত্রুটি', {
           detail: String(err?.message || 'Fetch failed'),
@@ -871,8 +888,8 @@ export function useGatepassRealtime({
             setSyncHealth((prev) =>
               pollVerified
                 ? 'verified_polling'
-                : prev === 'auth_redirect'
-                ? 'auth_redirect'
+                : prev === 'auth_redirect' || prev === 'static_host'
+                ? prev
                 : 'connecting'
             );
           }
@@ -991,8 +1008,8 @@ export function useGatepassRealtime({
               ? 'verified_sse'
               : pollVerified
               ? 'verified_polling'
-              : prev === 'auth_redirect'
-              ? 'auth_redirect'
+              : prev === 'auth_redirect' || prev === 'static_host'
+              ? prev
               : 'connecting'
           );
           startSseFallback();
@@ -1114,6 +1131,10 @@ export function useGatepassRealtime({
         cache: 'no-store',
       });
       const parsed = await parseJsonApiResponse<any>(res);
+      if (parsed.staticHostNoBackend) {
+        setSyncHealth('static_host');
+        return { foundCount: 0, latestLog: null };
+      }
       if (parsed.authRedirected) {
         setSyncHealth('auth_redirect');
         return { foundCount: 0, latestLog: null };
@@ -1138,7 +1159,7 @@ export function useGatepassRealtime({
 
       for (const item of serverLogs) {
         if (!item || !item.id) continue;
-        addSecurityLog(item);
+        addSecurityLog(item, { suppressAutoPush: true });
         markGatepassLogSeen(item.id);
         if (role === 'student' && isMatchingStudentLog(item)) {
           matchingCount += 1;
@@ -1213,7 +1234,11 @@ export function useGatepassRealtime({
         return httpRtt;
       }
       appendDiagnosticLog('POLL', 'warn', 'সার্ভার হেলথ পিং অসম্পূর্ণ', {
-        detail: parsed.authRedirected ? 'Auth Redirect' : `HTTP ${parsed.status}`,
+        detail: parsed.staticHostNoBackend
+          ? 'Static Host (server.ts অনুপস্থিত)'
+          : parsed.authRedirected
+          ? 'Auth Redirect'
+          : `HTTP ${parsed.status}`,
       });
       return null;
     } catch (err: any) {

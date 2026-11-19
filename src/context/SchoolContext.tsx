@@ -234,7 +234,10 @@ interface SchoolContextType {
     action: 'entry' | 'exit',
     timestampIso?: string
   ) => { date: string; classId: string; section: string };
-  upsertAttendanceRecordFromServer: (record: DailyAttendanceRecord) => void;
+  upsertAttendanceRecordFromServer: (
+    record: DailyAttendanceRecord,
+    options?: { suppressAutoPush?: boolean }
+  ) => void;
   getDailyAttendance: (classId: string, section: string, date: string) => DailyAttendanceRecord | undefined;
   getMonthlyAttendance: (
     classId: string,
@@ -316,7 +319,8 @@ interface SchoolContextType {
   // Digital Security & Gatepass Module
   securityLogs: SecurityGatepassLog[];
   addSecurityLog: (
-    log: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
+    log: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string },
+    options?: { suppressAutoPush?: boolean }
   ) => SecurityGatepassLog;
   updateSecurityLogEtiquette: (logId: string, replyText: string) => Promise<void>;
   acknowledgeSecurityLog: (
@@ -1595,18 +1599,30 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Immediately sync with central server once on mount
     fetchFromServer({ force: true });
 
-    // Auto-poll server every 15s or on window focus (skip when photo upload is active)
+    // Auto-poll server every 15s for staff (or 120s for guardian devices, which get instant gatepass logs via WS/SSE/latest-logs)
+    const isGuardianSession = () => {
+      try {
+        return localStorage.getItem('dlikon_pwa_guardian_mode') === 'true';
+      } catch {
+        return false;
+      }
+    };
+
     const handleFocus = () => {
+      const focusCooldownMs = isGuardianSession() ? 45000 : 6000;
       if (
         inFlightPhotoSyncCountRef.current === 0 &&
         Date.now() - lastLocalPhotoMutationTimeRef.current > 6000 &&
-        Date.now() - lastSyncTimestampRef.current > 6000
+        Date.now() - lastSyncTimestampRef.current > focusCooldownMs
       ) {
         fetchFromServer();
       }
     };
     window.addEventListener('focus', handleFocus);
     const interval = setInterval(() => {
+      if (isGuardianSession() && Date.now() - lastSyncTimestampRef.current < 120000) {
+        return;
+      }
       fetchFromServer();
     }, 15000);
 
@@ -2260,13 +2276,17 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const addSecurityLog = useCallback(
     (
-      logData: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string }
+      logData: Omit<SecurityGatepassLog, 'id' | 'timestamp'> & { id?: string; timestamp?: string },
+      options?: { suppressAutoPush?: boolean }
     ): SecurityGatepassLog => {
       const newLog: SecurityGatepassLog = {
         ...logData,
         id: logData.id || `seclog_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         timestamp: logData.timestamp || new Date().toISOString(),
       };
+      if (options?.suppressAutoPush) {
+        suppressNextAutoPushRef.current = true;
+      }
       setSecurityLogs((prev) => {
         const existingIdx = prev.findIndex((l) => l.id === newLog.id);
         if (existingIdx >= 0) {
@@ -2776,23 +2796,29 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }));
   };
 
-  const upsertAttendanceRecordFromServer = useCallback((incoming: DailyAttendanceRecord) => {
-    if (!incoming || !incoming.id || !incoming.records) return;
-    setAttendanceRecords((prev) => {
-      const existing = prev[incoming.id];
-      return {
-        ...prev,
-        [incoming.id]: {
-          ...existing,
-          ...incoming,
-          records: {
-            ...(existing?.records || {}),
-            ...incoming.records,
+  const upsertAttendanceRecordFromServer = useCallback(
+    (incoming: DailyAttendanceRecord, options?: { suppressAutoPush?: boolean }) => {
+      if (!incoming || !incoming.id || !incoming.records) return;
+      if (options?.suppressAutoPush) {
+        suppressNextAutoPushRef.current = true;
+      }
+      setAttendanceRecords((prev) => {
+        const existing = prev[incoming.id];
+        return {
+          ...prev,
+          [incoming.id]: {
+            ...existing,
+            ...incoming,
+            records: {
+              ...(existing?.records || {}),
+              ...incoming.records,
+            },
           },
-        },
-      };
-    });
-  }, []);
+        };
+      });
+    },
+    []
+  );
 
   const markStudentAttendanceFromScan = useCallback(
     (

@@ -78,10 +78,14 @@ import {
   buildScannerVoiceMessage,
   DEFAULT_DAILY_SCHEDULE,
   DEFAULT_SCANNER_VOICE_SETTINGS,
+  getGuardianAudioStatus,
   getPendingBlockedSpeech,
+  getSharedAudioContext,
   playAlarmChime,
   playScannerBeep,
+  playSilentAudioTrack,
   prewarmGuardianVoiceCache,
+  recordAudioEngineDiagnostic,
   replayPendingBlockedSpeech,
   requestGuardianNotificationPermission,
   setGuardianLiveWatchActive,
@@ -90,6 +94,8 @@ import {
   speakBengaliSpeech,
   speakRepeatedGuardianAlert,
   stopBengaliSpeech,
+  subscribeGuardianAudioStatus,
+  triggerDummySpeechSynthesisTest,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 import {
@@ -232,7 +238,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     serverHost: string;
     verifiedAt: string;
     logPayload?: SecurityGatepassLog;
-    syncError?: 'auth_redirect' | 'network_error' | null;
+    syncError?: 'auth_redirect' | 'static_host' | 'network_error' | null;
     isSending?: boolean;
   } | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
@@ -244,7 +250,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [liveServerHealth, setLiveServerHealth] = useState<{
     reachable: boolean;
     authRedirected?: boolean;
-    onlineGuardians: { studentId: string; portalId: string; transport: string }[];
+    staticHostNoBackend?: boolean;
+    onlineGuardians: {
+      studentId: string;
+      portalId: string;
+      classId?: string;
+      roll?: number | null;
+      transport: string;
+    }[];
   }>({ reachable: true, onlineGuardians: [] });
   const [showGuardianQrBridge, setShowGuardianQrBridge] = useState<boolean>(false);
   const [bridgeTargetStudentId, setBridgeTargetStudentId] = useState<string>('');
@@ -600,6 +613,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           body: JSON.stringify({ log: newLogRecord }),
         });
         const parsed = await parseJsonApiResponse<any>(res);
+        if (parsed.staticHostNoBackend) {
+          setLastScanDispatchInfo({
+            student,
+            deliveredCount: 0,
+            serverHost: currentServerHost,
+            verifiedAt: nowIso,
+            logPayload: newLogRecord,
+            syncError: 'static_host',
+          });
+          return;
+        }
         if (parsed.authRedirected) {
           setLastScanDispatchInfo({
             student,
@@ -628,10 +652,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         }
         const data = parsed.data;
         if (data?.log) {
-          addSecurityLog(data.log);
+          addSecurityLog(data.log, { suppressAutoPush: true });
         }
         if (data?.attendanceRecord) {
-          upsertAttendanceRecordFromServer(data.attendanceRecord);
+          upsertAttendanceRecordFromServer(data.attendanceRecord, { suppressAutoPush: true });
         }
         const delivered =
           typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
@@ -1420,10 +1444,124 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   };
   const [guardianAudioTested, setGuardianAudioTested] = useState<boolean>(false);
   const [isGuardianAlarmRinging, setIsGuardianAlarmRinging] = useState<boolean>(false);
+  const [audioHardwareStatus, setAudioHardwareStatus] = useState(() => getGuardianAudioStatus());
+  const [wakeAudioFeedback, setWakeAudioFeedback] = useState<'idle' | 'waking' | 'awake'>('idle');
   const lastServerTimeRef = useRef<number>(0);
   const hasBaselinePollRef = useRef<boolean>(false);
 
+  useEffect(() => {
+    return subscribeGuardianAudioStatus(setAudioHardwareStatus);
+  }, []);
+
+  const handleWakeAudio = async () => {
+    setWakeAudioFeedback('waking');
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        // Non-fatal
+      }
+    }
+    if (activeTab === 'guardian_portal' || restrictedMode === 'student_only') {
+      setGuardianLiveWatchActive(true);
+    }
+    const result = await playSilentAudioTrack();
+    logGuardianAudioEngineDiagnostics('persistent_wake_audio_button');
+    if (getPendingBlockedSpeech()) {
+      replayPendingBlockedSpeech();
+    }
+    setWakeAudioFeedback(result.ok ? 'awake' : 'idle');
+    setTimeout(() => {
+      setWakeAudioFeedback((prev) => (prev === 'awake' ? 'idle' : prev));
+    }, 3500);
+  };
+
+  const logGuardianAudioEngineDiagnostics = (triggerSource: string) => {
+    if (typeof window === 'undefined') return null;
+
+    const AudioCtxCtor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const sharedCtx = getSharedAudioContext();
+    const hwStatus = getGuardianAudioStatus();
+
+    const speechSupported = 'speechSynthesis' in window && Boolean(window.speechSynthesis);
+    const voices = speechSupported ? window.speechSynthesis.getVoices() : [];
+    const bengaliVoices = voices.filter((v) =>
+      /^(bn|ben)/i.test(v.lang) || /bengali|bangla|বাংলা/i.test(`${v.name} ${v.lang}`)
+    );
+
+    const userActivation = (navigator as Navigator & {
+      userActivation?: { isActive?: boolean; hasBeenActive?: boolean };
+    }).userActivation;
+
+    const diagnosticSnapshot = {
+      timestamp: new Date().toISOString(),
+      triggerSource,
+      studentId: activeSignedInStudent?.id || loggedInGuardianStudent?.id || null,
+      audioContext: {
+        constructorSupported: Boolean(AudioCtxCtor),
+        sharedInstanceState: sharedCtx ? sharedCtx.state : 'unavailable',
+        sampleRate: sharedCtx?.sampleRate ?? null,
+        baseLatency: sharedCtx && 'baseLatency' in sharedCtx ? sharedCtx.baseLatency : null,
+      },
+      speechSynthesis: {
+        supported: speechSupported,
+        speaking: speechSupported ? window.speechSynthesis.speaking : false,
+        pending: speechSupported ? window.speechSynthesis.pending : false,
+        paused: speechSupported ? window.speechSynthesis.paused : false,
+        totalVoices: voices.length,
+        bengaliVoicesCount: bengaliVoices.length,
+        bengaliVoices: bengaliVoices.map((v) => ({
+          name: v.name,
+          lang: v.lang,
+          localService: v.localService,
+          default: v.default,
+        })),
+        sampleVoices: voices.slice(0, 12).map((v) => ({
+          name: v.name,
+          lang: v.lang,
+          localService: v.localService,
+        })),
+      },
+      guardianAudioHardware: {
+        ...hwStatus,
+        guardianAudioEnabled,
+      },
+      environment: {
+        visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'unknown',
+        onLine: typeof navigator !== 'undefined' ? navigator.onLine : true,
+        notificationPermission:
+          typeof window !== 'undefined' && 'Notification' in window
+            ? Notification.permission
+            : 'unsupported',
+        userActivationIsActive: userActivation?.isActive ?? null,
+        userActivationHasBeenActive: userActivation?.hasBeenActive ?? null,
+      },
+    };
+
+    console.info('[GuardianAudioDiagnostic]', diagnosticSnapshot);
+
+    const diagLevel =
+      !sharedCtx || sharedCtx.state !== 'running'
+        ? 'warn'
+        : voices.length === 0 || bengaliVoices.length === 0
+        ? 'warn'
+        : 'ok';
+
+    recordAudioEngineDiagnostic(
+      diagLevel,
+      `Audio Engine Snapshot (${triggerSource}): AudioContext='${diagnosticSnapshot.audioContext.sharedInstanceState}', Voices=${voices.length} (bn=${bengaliVoices.length})`,
+      `speechSpeaking=${diagnosticSnapshot.speechSynthesis.speaking}, paused=${diagnosticSnapshot.speechSynthesis.paused}, unlocked=${hwStatus.unlocked}, engine=${hwStatus.lastEngineUsed}, err=${hwStatus.lastPlaybackError || 'none'}`
+    );
+
+    return diagnosticSnapshot;
+  };
+
   const handleTestGuardianAudio = (playDemo: boolean = false) => {
+    logGuardianAudioEngineDiagnostics(
+      playDemo ? 'guardian_demo_test_button' : 'guardian_activate_audio_button'
+    );
     const existingPending = getPendingBlockedSpeech();
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
 
@@ -1554,16 +1692,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       try {
         const sinceParam =
           hasBaselinePollRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 6000)
+            ? Math.max(0, lastServerTimeRef.current - 15000)
             : 0;
         const pid = getStudentPortalId(signedStudent);
         const res = await fetch(
-          `/api/security/latest-logs?since=${sinceParam}&studentId=${encodeURIComponent(signedStudent.id)}&portalId=${encodeURIComponent(pid)}`,
+          `/api/security/latest-logs?since=${sinceParam}&role=student&studentId=${encodeURIComponent(signedStudent.id)}&portalId=${encodeURIComponent(pid)}&classId=${encodeURIComponent(signedStudent.classId || '')}&roll=${encodeURIComponent(String(signedStudent.roll ?? ''))}`,
           { cache: 'no-store' }
         );
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!isSubscribed || !data) return;
+        const parsed = await parseJsonApiResponse<any>(res);
+        if (!isSubscribed || !parsed.ok || !parsed.data) return;
+        const data = parsed.data;
 
         const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
         const serverLogs: any[] = Array.isArray(data.logs) ? data.logs : [];
@@ -1575,14 +1713,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           let newestLogToAlert: any = null;
           for (const log of serverLogs) {
             if (matchesSignedStudent(log, signedStudent)) {
-              addSecurityLog(log);
+              addSecurityLog(log, { suppressAutoPush: true });
               markGatepassLogSeen(log.id);
               const alreadyPlayed = hasPlayedGuardianVoiceLog(log.id);
               const sTime =
                 typeof log.serverTimestamp === 'number'
                   ? log.serverTimestamp
                   : new Date(log.timestamp).getTime() || 0;
-              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 75000 && !log.guardianAcknowledged) {
+              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 90000 && !log.guardianAcknowledged) {
                 newestLogToAlert = log;
               } else if (!alreadyPlayed) {
                 markGuardianVoiceLogPlayed(log.id);
@@ -1600,7 +1738,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
         for (const log of serverLogs) {
           if (matchesSignedStudent(log, signedStudent)) {
-            addSecurityLog(log);
+            addSecurityLog(log, { suppressAutoPush: true });
             markGatepassLogSeen(log.id);
             const sTime =
               typeof log.serverTimestamp === 'number'
@@ -1784,13 +1922,27 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         const res = await fetch('/api/security/latest-logs', { cache: 'no-store' });
         const parsed = await parseJsonApiResponse<any>(res);
         if (!isSubscribed) return;
+        if (parsed.staticHostNoBackend) {
+          setLiveServerHealth((prev) => ({
+            ...prev,
+            reachable: false,
+            authRedirected: false,
+            staticHostNoBackend: true,
+          }));
+          return;
+        }
         if (parsed.authRedirected) {
-          setLiveServerHealth((prev) => ({ ...prev, reachable: false, authRedirected: true }));
+          setLiveServerHealth((prev) => ({
+            ...prev,
+            reachable: false,
+            authRedirected: true,
+            staticHostNoBackend: false,
+          }));
           return;
         }
         if (parsed.ok && parsed.data && Array.isArray(parsed.data.logs)) {
           for (const serverLog of parsed.data.logs.slice(0, 50)) {
-            addSecurityLog(serverLog);
+            addSecurityLog(serverLog, { suppressAutoPush: true });
           }
         }
       } catch {
@@ -1802,12 +1954,25 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           const hRes = await fetch('/api/security/health', { cache: 'no-store' });
           const hParsed = await parseJsonApiResponse<any>(hRes);
           if (!isSubscribed) return;
-          if (hParsed.authRedirected) {
-            setLiveServerHealth({ reachable: false, authRedirected: true, onlineGuardians: [] });
+          if (hParsed.staticHostNoBackend) {
+            setLiveServerHealth({
+              reachable: false,
+              authRedirected: false,
+              staticHostNoBackend: true,
+              onlineGuardians: [],
+            });
+          } else if (hParsed.authRedirected) {
+            setLiveServerHealth({
+              reachable: false,
+              authRedirected: true,
+              staticHostNoBackend: false,
+              onlineGuardians: [],
+            });
           } else if (hParsed.ok && hParsed.data) {
             setLiveServerHealth({
               reachable: true,
               authRedirected: false,
+              staticHostNoBackend: false,
               onlineGuardians: Array.isArray(hParsed.data.onlineGuardians)
                 ? hParsed.data.onlineGuardians
                 : [],
@@ -2376,7 +2541,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               {/* Live Server & Connected Guardian Smartphone Telemetry Strip */}
               <div
                 className={`rounded-2xl border p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                  liveServerHealth.authRedirected || !liveServerHealth.reachable
+                  liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
                     ? 'bg-rose-950 text-white border-rose-500'
                     : liveServerHealth.onlineGuardians.length > 0
                     ? 'bg-emerald-950 text-white border-emerald-500/70'
@@ -2387,7 +2552,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   <div className="flex flex-wrap items-center gap-2 font-bold">
                     <Wifi
                       className={`w-4 h-4 shrink-0 ${
-                        liveServerHealth.authRedirected || !liveServerHealth.reachable
+                        liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
                           ? 'text-rose-400'
                           : liveServerHealth.onlineGuardians.length > 0
                           ? 'text-emerald-400 animate-pulse'
@@ -2395,7 +2560,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       }`}
                     />
                     <span>
-                      {liveServerHealth.authRedirected
+                      {liveServerHealth.staticHostNoBackend
+                        ? 'সতর্কতা: এই হোস্টিংয়ে ব্যাকএন্ড সার্ভার (server.ts) চালু নেই! অভিভাবক ফোনে এলার্ম যাবে না'
+                        : liveServerHealth.authRedirected
                         ? 'সার্ভার সেশন ব্লক! পেজ রিলোড করে পুনরায় সংযোগ দিন'
                         : !liveServerHealth.reachable
                         ? 'সার্ভার সংযোগ পাওয়া যাচ্ছে না'
@@ -2819,6 +2986,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                           <div className="font-bold">
                             ⏳ {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পাঠানো হচ্ছে...
                           </div>
+                        ) : lastScanDispatchInfo.syncError === 'static_host' ? (
+                          <>
+                            <div className="font-bold text-amber-200">
+                              ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর এলার্ম অভিভাবক ফোনে যায়নি (ব্যাকএন্ড সার্ভার অনুপস্থিত)!
+                            </div>
+                            <div className="text-[11px] text-rose-100">
+                              এই ডোমেইনটি ({lastScanDispatchInfo.serverHost}) কেবল স্ট্যাটিক HTML চালাচ্ছে — Node সার্ভার (server.ts / WebSocket) চালু না থাকায় স্ক্যান তথ্য অন্য ফোনে পৌঁছাতে পারছে না। Render/Railway বা full-stack Node সার্ভারে চালু করুন।
+                            </div>
+                          </>
                         ) : lastScanDispatchInfo.syncError === 'auth_redirect' ? (
                           <>
                             <div className="font-bold text-amber-200">
@@ -3252,6 +3428,20 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       {/* ========================================================================= */}
       {activeTab === 'guardian_portal' && (
         <div className="space-y-6">
+          <button
+            type="button"
+            onClick={() => {
+              logGuardianAudioEngineDiagnostics('hidden_test_audio_button');
+              void triggerDummySpeechSynthesisTest().then(() => {
+                logGuardianAudioEngineDiagnostics('hidden_test_audio_post_speech');
+              });
+            }}
+            aria-label="Test Audio"
+            data-testid="guardian-hidden-test-audio"
+            className="sr-only"
+          >
+            Test Audio
+          </button>
           {!activeSignedInStudent ? (
             /* STUDENT & GUARDIAN LOGIN SCREEN */
             <div className="space-y-6">
@@ -5257,6 +5447,60 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   </p>
                 </div>
 
+                {/* Live Target Guardian Online Status Inside Confirmation Modal */}
+                {(() => {
+                  const targetPortalId = getStudentPortalId(pendingStd).trim().toUpperCase();
+                  const matchedGuardian = liveServerHealth.onlineGuardians.find(
+                    (g) =>
+                      (g.studentId && g.studentId === pendingStd.id) ||
+                      (g.portalId && g.portalId.toUpperCase() === targetPortalId) ||
+                      (g.classId &&
+                        g.roll &&
+                        g.classId === pendingStd.classId &&
+                        Number(g.roll) === Number(pendingStd.roll))
+                  );
+                  if (liveServerHealth.staticHostNoBackend) {
+                    return (
+                      <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-[11px] font-bold flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <span>
+                          সতর্কতা: এই হোস্টিংয়ে ব্যাকএন্ড সার্ভার (server.ts) নেই! নিশ্চিত করলে কেবল এই ডিভাইসে অডিও বাজবে — অভিভাবকের ফোনে যাবে না।
+                        </span>
+                      </div>
+                    );
+                  }
+                  if (liveServerHealth.authRedirected || !liveServerHealth.reachable) {
+                    return (
+                      <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-[11px] font-bold flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <span>
+                          {liveServerHealth.authRedirected
+                            ? 'সতর্কতা: সার্ভার সেশন ব্লক — পেজ রিলোড না করলে অভিভাবক ফোনে এলার্ম যাবে না!'
+                            : 'সতর্কতা: কেন্দ্রীয় সার্ভারের সাথে সংযোগ বিচ্ছিন্ন! অভিভাবক ফোনে সিগন্যাল পাঠাতে সমস্যা হতে পারে।'}
+                        </span>
+                      </div>
+                    );
+                  }
+                  if (matchedGuardian) {
+                    return (
+                      <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-[11px] font-bold flex items-center gap-2">
+                        <Radio className="w-4 h-4 text-emerald-600 shrink-0 animate-pulse" />
+                        <span>
+                          ✓ {pendingStd.nameBn}-এর অভিভাবক ফোন এই সার্ভারে লাইভ যুক্ত আছে ({matchedGuardian.transport.toUpperCase()}) — নিশ্চিত করলেই বেজে উঠবে!
+                        </span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-medium flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        এই মুহূর্তে {pendingStd.nameBn}-এর অভিভাবক ফোন ({targetPortalId}) এই সার্ভারে লাইভ দেখাচ্ছে না। অভিভাবকের ফোন একই লিংকে লগইন করা আছে কিনা দেখুন।
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 {/* Action Buttons */}
                 <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 pt-1">
                   <button
@@ -5389,6 +5633,44 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           </div>
         );
       })()}
+
+      {/* Persistent Wake Audio Control to circumvent mobile browser audio suspension */}
+      <div className="print:hidden fixed bottom-4 right-4 z-40">
+        <button
+          type="button"
+          onClick={() => {
+            void handleWakeAudio();
+          }}
+          data-testid="persistent-wake-audio-btn"
+          aria-label="Wake Audio"
+          title="মোবাইল ব্রাউজারের অডিও সাসপেনশন বন্ধ করে স্পিচ ও সাউন্ড সজাগ রাখুন"
+          className={`min-h-[44px] px-4 py-2.5 rounded-xl shadow-lg border text-xs font-bold transition flex items-center gap-2 cursor-pointer backdrop-blur-sm ${
+            wakeAudioFeedback === 'awake' ||
+            (audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running')
+              ? 'bg-emerald-950/95 hover:bg-emerald-900 text-emerald-100 border-emerald-500/70'
+              : 'bg-slate-950/95 hover:bg-slate-900 text-amber-300 border-amber-400/70'
+          }`}
+        >
+          <Volume2
+            className={`w-4 h-4 shrink-0 ${
+              wakeAudioFeedback === 'waking'
+                ? 'animate-pulse text-amber-300'
+                : audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running'
+                ? 'text-emerald-400'
+                : 'text-amber-400'
+            }`}
+          />
+          <span>
+            {wakeAudioFeedback === 'waking'
+              ? 'Wake Audio...'
+              : wakeAudioFeedback === 'awake'
+              ? 'Wake Audio · সজাগ ✓'
+              : audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running'
+              ? 'Wake Audio · সক্রিয়'
+              : 'Wake Audio'}
+          </span>
+        </button>
+      </div>
     </div>
   );
 };

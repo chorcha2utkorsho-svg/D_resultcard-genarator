@@ -3,7 +3,6 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -534,6 +533,7 @@ async function startServer() {
       type: eventType,
       log,
       serverTime: Date.now(),
+      serverInstanceId: SERVER_INSTANCE_ID,
       ...extra,
     };
     const serialized = JSON.stringify(payloadObj);
@@ -574,39 +574,44 @@ async function startServer() {
   // Security WebSocket/SSE/Polling diagnostic health endpoint
   app.get('/api/security/health', (_req, res) => {
     pruneRecentGuardianPolls();
-    const onlineGuardianMap = new Map<string, { studentId: string; portalId: string; transport: string }>();
+    const onlineGuardianMap = new Map<string, { studentId: string; portalId: string; classId?: string; roll?: number | null; transport: string }>();
+    const makeGuardianKey = (c: { studentId?: string; portalId?: string; classId?: string; roll?: number | null }) =>
+      c.studentId || c.portalId || (c.classId && c.roll ? `${c.classId}::${c.roll}` : '');
+
     for (const c of gatepassWsClients) {
-      if (c.ws.readyState === WebSocket.OPEN && c.role === 'student' && (c.studentId || c.portalId)) {
-        const key = c.studentId || c.portalId;
+      const key = makeGuardianKey(c);
+      if (c.ws.readyState === WebSocket.OPEN && c.role === 'student' && key) {
         onlineGuardianMap.set(key, {
           studentId: c.studentId,
           portalId: c.portalId,
+          classId: c.classId,
+          roll: c.roll,
           transport: 'ws',
         });
       }
     }
     for (const c of gatepassSseClients) {
-      if (c.role === 'student' && (c.studentId || c.portalId)) {
-        const key = c.studentId || c.portalId;
-        if (!onlineGuardianMap.has(key)) {
-          onlineGuardianMap.set(key, {
-            studentId: c.studentId,
-            portalId: c.portalId,
-            transport: 'sse',
-          });
-        }
+      const key = makeGuardianKey(c);
+      if (c.role === 'student' && key && !onlineGuardianMap.has(key)) {
+        onlineGuardianMap.set(key, {
+          studentId: c.studentId,
+          portalId: c.portalId,
+          classId: c.classId,
+          roll: c.roll,
+          transport: 'sse',
+        });
       }
     }
     for (const p of recentGuardianPolls.values()) {
-      if (p.studentId || p.portalId) {
-        const key = p.studentId || p.portalId;
-        if (!onlineGuardianMap.has(key)) {
-          onlineGuardianMap.set(key, {
-            studentId: p.studentId,
-            portalId: p.portalId,
-            transport: 'poll',
-          });
-        }
+      const key = makeGuardianKey(p);
+      if (key && !onlineGuardianMap.has(key)) {
+        onlineGuardianMap.set(key, {
+          studentId: p.studentId,
+          portalId: p.portalId,
+          classId: p.classId,
+          roll: p.roll,
+          transport: 'poll',
+        });
       }
     }
     res.json({
@@ -1309,11 +1314,19 @@ async function startServer() {
         log.portalUserId ||
         (matchedStudent ? computePortalIdQuick(matchedStudent) : computePortalIdQuick(log));
 
+      const resolvedRollNum =
+        matchedStudent?.roll !== undefined
+          ? Number(matchedStudent.roll)
+          : log.studentRoll !== undefined && log.studentRoll !== null
+          ? Number(log.studentRoll)
+          : log.studentRoll;
+
       const scanIso = log.timestamp || new Date().toISOString();
       const savedLog = {
         ...log,
         studentId: resolvedStudentId,
         portalUserId: resolvedPortalId,
+        ...(Number.isFinite(resolvedRollNum) ? { studentRoll: resolvedRollNum } : {}),
         ...(resolvedClassId ? { classId: resolvedClassId } : {}),
         ...(resolvedSection ? { section: resolvedSection } : {}),
         serverTimestamp: Date.now(),
@@ -3151,6 +3164,7 @@ async function startServer() {
     });
 
     ws.on('message', (rawMsg) => {
+      clientEntry.isAlive = true;
       try {
         const parsed = JSON.parse(String(rawMsg));
         if (parsed && parsed.type === 'subscribe') {
@@ -3241,7 +3255,21 @@ async function startServer() {
   // =========================================================================
   // VITE DEV MIDDLEWARE / STATIC PROD SERVING
   // =========================================================================
-  if (!IS_PROD) {
+  const distPath = path.join(__dirname, 'dist');
+  const hasDistBuild = fs.existsSync(path.join(distPath, 'index.html'));
+  let useViteDev = !IS_PROD;
+  let viteCreateServer: ((opts: any) => Promise<any>) | null = null;
+
+  if (useViteDev) {
+    try {
+      const vitePkg = await import('vite');
+      viteCreateServer = vitePkg.createServer;
+    } catch {
+      useViteDev = false;
+    }
+  }
+
+  if (useViteDev && viteCreateServer) {
     const isHmrDisabled = process.env.DISABLE_HMR === 'true' || process.env.ENABLE_HMR !== 'true';
 
     // When HMR is disabled, Vite still injects /@vite/client which attempts a WebSocket handshake
@@ -3299,7 +3327,7 @@ export class ErrorOverlay {}
       });
     }
 
-    const vite = await createViteServer({
+    const vite = await viteCreateServer({
       server: {
         middlewareMode: true,
         hmr: isHmrDisabled ? false : { server: httpServer },
@@ -3319,7 +3347,9 @@ export class ErrorOverlay {}
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    if (!hasDistBuild) {
+      console.warn('[Server] Warning: dist/index.html not found in production/static mode.');
+    }
     app.use(
       express.static(distPath, {
         setHeaders: (res, filePath) => {

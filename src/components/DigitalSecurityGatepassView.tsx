@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
+  Activity,
   ShieldCheck,
   QrCode,
   Volume2,
@@ -72,7 +73,7 @@ import { compressImageBase64 } from '../utils/imageCompressor';
 import { openIdCardsInNewTab, downloadIdCardsHtml } from '../utils/idCardExport';
 import { PWAInstallButton } from './PWAInstallButton';
 import { StudentPersonalDashboard } from './StudentPersonalDashboard';
-import { isDeviceExplicitlyUnlockedSync } from '../utils/deviceLock';
+import { clearExplicitUnlockFlag } from '../utils/deviceLock';
 import {
   buildGuardianVoiceMessage as buildGuardianVoiceMsgShared,
   buildScannerVoiceMessage,
@@ -95,6 +96,7 @@ import {
   speakRepeatedGuardianAlert,
   stopBengaliSpeech,
   subscribeGuardianAudioStatus,
+  subscribeSpeechPlayback,
   triggerDummySpeechSynthesisTest,
   unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
@@ -251,6 +253,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     reachable: boolean;
     authRedirected?: boolean;
     staticHostNoBackend?: boolean;
+    serverInstanceId?: string;
     onlineGuardians: {
       studentId: string;
       portalId: string;
@@ -258,7 +261,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       roll?: number | null;
       transport: string;
     }[];
-  }>({ reachable: true, onlineGuardians: [] });
+  }>({ reachable: true, serverInstanceId: '', onlineGuardians: [] });
   const [showGuardianQrBridge, setShowGuardianQrBridge] = useState<boolean>(false);
   const [bridgeTargetStudentId, setBridgeTargetStudentId] = useState<string>('');
   const [bridgeQrDataUrl, setBridgeQrDataUrl] = useState<string>('');
@@ -312,9 +315,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (targetId && !bridgeTargetStudentId) {
       setBridgeTargetStudentId(targetId);
     }
-    const shareUrl = targetId
-      ? `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(targetId)}`
+    const bridgeOrigin = window.location.origin.includes('://ais-dev-')
+      ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
       : window.location.origin;
+    const shareUrl = targetId
+      ? `${bridgeOrigin}/?tab=security&guardian=${encodeURIComponent(targetId)}`
+      : bridgeOrigin;
     QRCode.toDataURL(shareUrl, {
       width: 240,
       margin: 2,
@@ -1213,7 +1219,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (restrictedMode === 'employee_scanner') return;
 
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    const urlGuardian = !isDeviceExplicitlyUnlockedSync() ? params?.get('guardian') : null;
+    const urlGuardian = params?.get('unlock') !== '1' ? params?.get('guardian') : null;
     const isGuardianView =
       restrictedMode === 'student_only' || activeTab === 'guardian_portal' || Boolean(forcedStudentId || urlGuardian);
     if (!isGuardianView) return;
@@ -1222,13 +1228,16 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       typeof window !== 'undefined' ? localStorage.getItem('dlikon_guardian_paired_student_id') : null;
     const targetId = forcedStudentId || urlGuardian || savedPairedId;
 
-    if (targetId && (!loggedInGuardianStudent || (forcedStudentId && loggedInGuardianStudent.id !== forcedStudentId))) {
+    if (targetId && (!loggedInGuardianStudent || (forcedStudentId && loggedInGuardianStudent.id !== forcedStudentId) || (urlGuardian && loggedInGuardianStudent.id !== urlGuardian))) {
       const found = students.find(
         (s) =>
           s.id === targetId ||
           (s.securityQrCode && s.securityQrCode.toLowerCase() === targetId.toLowerCase())
       );
       if (found) {
+        if (urlGuardian) {
+          clearExplicitUnlockFlag();
+        }
         setLoggedInGuardianStudent(found);
         setGuardianLoginClassId(found.classId);
         setGuardianLoginIdentifier(String(found.roll));
@@ -1377,10 +1386,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     playAlarmChime();
   };
 
-  // Build Personal Guardian Direct Pairing URL
+  // Build Personal Guardian Direct Pairing URL (convert ais-dev preview URL to shared ais-pre URL for external phones)
   const getGuardianDirectUrl = (student: Student) => {
     if (typeof window === 'undefined') return '';
-    return `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(student.id)}`;
+    const origin = window.location.origin.includes('://ais-dev-')
+      ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+      : window.location.origin;
+    return `${origin}/?tab=security&guardian=${encodeURIComponent(student.id)}`;
   };
 
   const handleCopyGuardianLink = (student: Student) => {
@@ -1444,6 +1456,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   };
   const [guardianAudioTested, setGuardianAudioTested] = useState<boolean>(false);
   const [isGuardianAlarmRinging, setIsGuardianAlarmRinging] = useState<boolean>(false);
+  const [isSpeechStreamActive, setIsSpeechStreamActive] = useState<boolean>(false);
   const [audioHardwareStatus, setAudioHardwareStatus] = useState(() => getGuardianAudioStatus());
   const [wakeAudioFeedback, setWakeAudioFeedback] = useState<'idle' | 'waking' | 'awake'>('idle');
   const lastServerTimeRef = useRef<number>(0);
@@ -1451,6 +1464,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
   useEffect(() => {
     return subscribeGuardianAudioStatus(setAudioHardwareStatus);
+  }, []);
+
+  useEffect(() => {
+    return subscribeSpeechPlayback(setIsSpeechStreamActive);
   }, []);
 
   const handleWakeAudio = async () => {
@@ -1959,6 +1976,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               reachable: false,
               authRedirected: false,
               staticHostNoBackend: true,
+              serverInstanceId: '',
               onlineGuardians: [],
             });
           } else if (hParsed.authRedirected) {
@@ -1966,6 +1984,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               reachable: false,
               authRedirected: true,
               staticHostNoBackend: false,
+              serverInstanceId: '',
               onlineGuardians: [],
             });
           } else if (hParsed.ok && hParsed.data) {
@@ -1973,6 +1992,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               reachable: true,
               authRedirected: false,
               staticHostNoBackend: false,
+              serverInstanceId:
+                typeof hParsed.data.serverInstanceId === 'string' ? hParsed.data.serverInstanceId : '',
               onlineGuardians: Array.isArray(hParsed.data.onlineGuardians)
                 ? hParsed.data.onlineGuardians
                 : [],
@@ -2465,29 +2486,41 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
                   {/* Camera Control Overlays at bottom */}
                   <div className="relative z-20 space-y-2 pt-2">
-                    {lastScanDispatchInfo && (
-                      <div
-                        className={`px-2.5 py-2 rounded-xl border text-[10.5px] font-bold leading-snug shadow-lg backdrop-blur-sm ${
-                          lastScanDispatchInfo.isSending
-                            ? 'bg-slate-900/90 border-indigo-400/70 text-indigo-100'
-                            : lastScanDispatchInfo.syncError
-                            ? 'bg-rose-950/95 border-rose-400 text-rose-100'
+                    {lastScanDispatchInfo && (() => {
+                      const liveLog = lastScanDispatchInfo.logPayload
+                        ? securityLogs.find((l) => l.id === lastScanDispatchInfo.logPayload?.id) ||
+                          lastScanDispatchInfo.logPayload
+                        : null;
+                      return (
+                        <div
+                          className={`px-2.5 py-2 rounded-xl border text-[10.5px] font-bold leading-snug shadow-lg backdrop-blur-sm ${
+                            lastScanDispatchInfo.isSending
+                              ? 'bg-slate-900/90 border-indigo-400/70 text-indigo-100'
+                              : lastScanDispatchInfo.syncError
+                              ? 'bg-rose-950/95 border-rose-400 text-rose-100'
+                              : liveLog?.guardianAcknowledged
+                              ? 'bg-emerald-900/95 border-emerald-300 text-white'
+                              : lastScanDispatchInfo.deliveredCount > 0
+                              ? 'bg-emerald-950/95 border-emerald-400 text-emerald-100'
+                              : 'bg-amber-950/95 border-amber-400 text-amber-100'
+                          }`}
+                        >
+                          {lastScanDispatchInfo.isSending
+                            ? `⏳ ${lastScanDispatchInfo.student.nameBn}-এর এলার্ম সার্ভারে পাঠানো হচ্ছে...`
+                            : lastScanDispatchInfo.syncError === 'static_host'
+                            ? `⚠ ব্যাকএন্ড সার্ভার নেই — এই হোস্টিংয়ে কেবল ফ্রন্টএন্ড ফাইল চলছে, অন্য ফোনে এলার্ম যাবে না!`
+                            : lastScanDispatchInfo.syncError === 'auth_redirect'
+                            ? `⚠ সেশন ব্লক! পেজ রিলোড করে আবার স্ক্যান করুন।`
+                            : lastScanDispatchInfo.syncError === 'network_error'
+                            ? `⚠ সার্ভার সংযোগ ব্যর্থ — নিচে গিয়ে "পুনরায় সার্ভারে পাঠান" দিন।`
+                            : liveLog?.guardianAcknowledged
+                            ? `✓ অভিভাবকের উত্তর এসেছে (${liveLog.acknowledgedBy || 'অভিভাবক'}): "${liveLog.guardianResponse || 'নিশ্চিত'}"`
                             : lastScanDispatchInfo.deliveredCount > 0
-                            ? 'bg-emerald-950/95 border-emerald-400 text-emerald-100'
-                            : 'bg-amber-950/95 border-amber-400 text-amber-100'
-                        }`}
-                      >
-                        {lastScanDispatchInfo.isSending
-                          ? `⏳ ${lastScanDispatchInfo.student.nameBn}-এর এলার্ম সার্ভারে পাঠানো হচ্ছে...`
-                          : lastScanDispatchInfo.syncError === 'auth_redirect'
-                          ? `⚠ সেশন ব্লক! পেজ রিলোড করে আবার স্ক্যান করুন।`
-                          : lastScanDispatchInfo.syncError === 'network_error'
-                          ? `⚠ সার্ভার সংযোগ ব্যর্থ — নিচে গিয়ে "পুনরায় সার্ভারে পাঠান" দিন।`
-                          : lastScanDispatchInfo.deliveredCount > 0
-                          ? `✓ ${lastScanDispatchInfo.student.nameBn}-এর ফোনে লাইভ এলার্ম পাঠানো হয়েছে (${toBengaliNumber(lastScanDispatchInfo.deliveredCount)} জন অনলাইন)!`
-                          : `⚠ সার্ভারে সেভ হয়েছে — তবে এই লিংকে (${lastScanDispatchInfo.serverHost}) ${lastScanDispatchInfo.student.nameBn}-এর ফোন অনলাইন নেই!`}
-                      </div>
-                    )}
+                            ? `✓ ${lastScanDispatchInfo.student.nameBn}-এর ফোনে লাইভ এলার্ম পাঠানো হয়েছে (${toBengaliNumber(lastScanDispatchInfo.deliveredCount)} জন অনলাইন)!`
+                            : `⚠ সার্ভারে সেভ হয়েছে — তবে এই সার্ভারে ${lastScanDispatchInfo.student.nameBn}-এর ফোন অনলাইন নেই!`}
+                        </div>
+                      );
+                    })()}
                     {isCameraActive && (
                       <div className="flex items-center justify-between gap-1.5 bg-slate-950/85 backdrop-blur-sm p-2 rounded-xl border border-slate-800">
                         <button
@@ -2539,56 +2572,75 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             {/* Right Column (7/12): Scanner Console, Sound, Voice & Barcode Inputs */}
             <div className="lg:col-span-7 space-y-5">
               {/* Live Server & Connected Guardian Smartphone Telemetry Strip */}
-              <div
-                className={`rounded-2xl border p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                  liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
-                    ? 'bg-rose-950 text-white border-rose-500'
-                    : liveServerHealth.onlineGuardians.length > 0
-                    ? 'bg-emerald-950 text-white border-emerald-500/70'
-                    : 'bg-slate-900 text-slate-100 border-slate-700'
-                }`}
-              >
-                <div className="space-y-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 font-bold">
-                    <Wifi
-                      className={`w-4 h-4 shrink-0 ${
-                        liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
-                          ? 'text-rose-400'
+              <div className="space-y-2">
+                {typeof window !== 'undefined' && window.location.host.startsWith('ais-dev-') && (
+                  <div className="rounded-xl border border-amber-400 bg-amber-50 text-amber-950 p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong>সতর্কতা (ডেভ প্রিভিউ URL — ais-dev):</strong> আপনি এখন ডেভেলপার-এডিটর লিংকে আছেন, যা{' '}
+                        <code className="font-mono font-bold">ais-pre-</code> (Shared App URL) থেকে সম্পূর্ণ আলাদা সার্ভারে চলে! দুটি ফোনের মধ্যে লাইভ এলার্ম ও রেসপন্স আদান-প্রদানের জন্য দুটি ফোনেই Shared App URL (
+                        <code className="font-mono font-bold">ais-pre-...</code>) খুলুন।
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div
+                  className={`rounded-2xl border p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                    liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
+                      ? 'bg-rose-950 text-white border-rose-500'
+                      : liveServerHealth.onlineGuardians.length > 0
+                      ? 'bg-emerald-950 text-white border-emerald-500/70'
+                      : 'bg-slate-900 text-slate-100 border-slate-700'
+                  }`}
+                >
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 font-bold">
+                      <Wifi
+                        className={`w-4 h-4 shrink-0 ${
+                          liveServerHealth.staticHostNoBackend || liveServerHealth.authRedirected || !liveServerHealth.reachable
+                            ? 'text-rose-400'
+                            : liveServerHealth.onlineGuardians.length > 0
+                            ? 'text-emerald-400 animate-pulse'
+                            : 'text-amber-300'
+                        }`}
+                      />
+                      <span>
+                        {liveServerHealth.staticHostNoBackend
+                          ? 'সতর্কতা: এই হোস্টিংয়ে ব্যাকএন্ড সার্ভার (server.ts) চালু নেই! অভিভাবক ফোনে এলার্ম যাবে না'
+                          : liveServerHealth.authRedirected
+                          ? 'সার্ভার সেশন ব্লক! পেজ রিলোড করে পুনরায় সংযোগ দিন'
+                          : !liveServerHealth.reachable
+                          ? 'সার্ভার সংযোগ পাওয়া যাচ্ছে না'
                           : liveServerHealth.onlineGuardians.length > 0
-                          ? 'text-emerald-400 animate-pulse'
-                          : 'text-amber-300'
-                      }`}
-                    />
-                    <span>
-                      {liveServerHealth.staticHostNoBackend
-                        ? 'সতর্কতা: এই হোস্টিংয়ে ব্যাকএন্ড সার্ভার (server.ts) চালু নেই! অভিভাবক ফোনে এলার্ম যাবে না'
-                        : liveServerHealth.authRedirected
-                        ? 'সার্ভার সেশন ব্লক! পেজ রিলোড করে পুনরায় সংযোগ দিন'
-                        : !liveServerHealth.reachable
-                        ? 'সার্ভার সংযোগ পাওয়া যাচ্ছে না'
-                        : liveServerHealth.onlineGuardians.length > 0
-                        ? `✓ ${toBengaliNumber(liveServerHealth.onlineGuardians.length)}টি অভিভাবক ফোন এই সার্ভারে লাইভ অনলাইন (${liveServerHealth.onlineGuardians
-                            .slice(0, 3)
-                            .map((g) => g.portalId || g.studentId)
-                            .join(', ')})`
-                        : 'এই সার্ভারে এখনো কোনো অভিভাবক ফোন যুক্ত নেই (স্ট্যান্ডবাই)'}
-                    </span>
+                          ? `✓ ${toBengaliNumber(liveServerHealth.onlineGuardians.length)}টি অভিভাবক ফোন এই সার্ভারে লাইভ অনলাইন (${liveServerHealth.onlineGuardians
+                              .slice(0, 3)
+                              .map((g) => g.portalId || g.studentId)
+                              .join(', ')})`
+                          : 'এই সার্ভারে এখনো কোনো অভিভাবক ফোন যুক্ত নেই (স্ট্যান্ডবাই)'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 font-mono truncate">
+                      সার্ভার ঠিকানা: <strong className="text-amber-300">{typeof window !== 'undefined' ? window.location.host : ''}</strong>
+                      {liveServerHealth.serverInstanceId ? (
+                        <>
+                          {' '}· ইনস্ট্যান্স: <strong className="text-emerald-300">{liveServerHealth.serverInstanceId}</strong>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-300 font-mono truncate">
-                    সার্ভার ঠিকানা: <strong className="text-amber-300">{typeof window !== 'undefined' ? window.location.host : ''}</strong>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setShowGuardianQrBridge(true)}
-                    className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
-                    title="দ্বিতীয় ফোনে ঠিক এই সার্ভারের অভিভাবক ড্যাশবোর্ড খুলতে QR কোড দেখুন"
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>অভিভাবক ফোনে খোলার QR</span>
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowGuardianQrBridge(true)}
+                      className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                      title="দ্বিতীয় ফোনে ঠিক এই সার্ভারের অভিভাবক ড্যাশবোর্ড খুলতে QR কোড দেখুন"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>অভিভাবক ফোনে খোলার QR</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -2660,6 +2712,40 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       )}
                       <span>বাংলা ভয়েস {voiceEnabled ? 'চালু' : 'বন্ধ'}</span>
                     </button>
+
+                    {/* Scanner Audio Activity Indicator */}
+                    <div
+                      data-testid="scanner-audio-activity-indicator"
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-2 transition ${
+                        isSpeechStreamActive || isSpeaking
+                          ? 'bg-emerald-950 text-emerald-100 border-emerald-400 shadow-sm'
+                          : 'bg-slate-50 text-slate-500 border-slate-200'
+                      }`}
+                      title="ব্রাউজার স্পিচ ও অডিও স্ট্রিমের রিয়েল-টাইম অ্যাক্টিভিটি"
+                    >
+                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                        {(isSpeechStreamActive || isSpeaking) && (
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-80" />
+                        )}
+                        <span
+                          className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                            isSpeechStreamActive || isSpeaking ? 'bg-emerald-400' : 'bg-slate-300'
+                          }`}
+                        />
+                      </span>
+                      <Activity
+                        className={`w-3.5 h-3.5 shrink-0 ${
+                          isSpeechStreamActive || isSpeaking
+                            ? 'text-emerald-300 animate-pulse'
+                            : 'text-slate-400'
+                        }`}
+                      />
+                      <span>
+                        {isSpeechStreamActive || isSpeaking
+                          ? 'Audio Activity · স্পিচ চলছে'
+                          : 'Audio Activity · প্রস্তুত'}
+                      </span>
+                    </div>
 
                     <button
                       type="button"
@@ -2963,110 +3049,129 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                 )}
 
                 {/* Truthful Live Dispatch Confirmation to Guardian Phone */}
-                {lastScanDispatchInfo && (
-                  <div
-                    className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                      lastScanDispatchInfo.syncError
-                        ? 'bg-rose-950 text-white border-rose-500'
-                        : lastScanDispatchInfo.deliveredCount > 0
-                        ? 'bg-emerald-900 text-white border-emerald-700'
-                        : 'bg-amber-50 text-amber-950 border-amber-300'
-                    }`}
-                  >
-                    <div className="flex items-start sm:items-center gap-2">
-                      {lastScanDispatchInfo.syncError ? (
-                        <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
-                      ) : lastScanDispatchInfo.deliveredCount > 0 ? (
-                        <Radio className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5 sm:mt-0 animate-pulse" />
-                      ) : (
-                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
-                      )}
-                      <div className="space-y-0.5">
-                        {lastScanDispatchInfo.isSending ? (
-                          <div className="font-bold">
-                            ⏳ {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পাঠানো হচ্ছে...
-                          </div>
-                        ) : lastScanDispatchInfo.syncError === 'static_host' ? (
-                          <>
-                            <div className="font-bold text-amber-200">
-                              ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর এলার্ম অভিভাবক ফোনে যায়নি (ব্যাকএন্ড সার্ভার অনুপস্থিত)!
-                            </div>
-                            <div className="text-[11px] text-rose-100">
-                              এই ডোমেইনটি ({lastScanDispatchInfo.serverHost}) কেবল স্ট্যাটিক HTML চালাচ্ছে — Node সার্ভার (server.ts / WebSocket) চালু না থাকায় স্ক্যান তথ্য অন্য ফোনে পৌঁছাতে পারছে না। Render/Railway বা full-stack Node সার্ভারে চালু করুন।
-                            </div>
-                          </>
-                        ) : lastScanDispatchInfo.syncError === 'auth_redirect' ? (
-                          <>
-                            <div className="font-bold text-amber-200">
-                              ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পৌঁছায়নি (সেশন/ভেরিফিকেশন ব্লক)!
-                            </div>
-                            <div className="text-[11px] text-rose-100">
-                              এই ব্রাউজারে সেশন যাচাই বাকি থাকায় অভিভাবক ফোনে এলার্ম যায়নি। নিচের "পেজ রিলোড করুন" বাটনে ক্লিক করে আবার স্ক্যান করুন।
-                            </div>
-                          </>
-                        ) : lastScanDispatchInfo.syncError === 'network_error' ? (
-                          <>
-                            <div className="font-bold text-amber-200">
-                              ⚠ সতর্কতা: সার্ভারে স্ক্যান সংরক্ষণ ব্যর্থ হয়েছে ({lastScanDispatchInfo.student.nameBn})
-                            </div>
-                            <div className="text-[11px] text-rose-100">
-                              ইন্টারনেট বা সার্ভার সংযোগ বিচ্ছিন্ন। "পুনরায় সার্ভারে পাঠান" ক্লিক করুন।
-                            </div>
-                          </>
+                {lastScanDispatchInfo && (() => {
+                  const liveMatchedLog = lastScanDispatchInfo.logPayload
+                    ? securityLogs.find((l) => l.id === lastScanDispatchInfo.logPayload?.id) ||
+                      lastScanDispatchInfo.logPayload
+                    : null;
+                  const isAcked = Boolean(liveMatchedLog?.guardianAcknowledged);
+                  return (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                        lastScanDispatchInfo.syncError
+                          ? 'bg-rose-950 text-white border-rose-500'
+                          : isAcked || lastScanDispatchInfo.deliveredCount > 0
+                          ? 'bg-emerald-900 text-white border-emerald-700'
+                          : 'bg-amber-50 text-amber-950 border-amber-300'
+                      }`}
+                    >
+                      <div className="flex items-start sm:items-center gap-2">
+                        {lastScanDispatchInfo.syncError ? (
+                          <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
+                        ) : isAcked ? (
+                          <CheckCheck className="w-4 h-4 text-amber-300 shrink-0 mt-0.5 sm:mt-0" />
                         ) : lastScanDispatchInfo.deliveredCount > 0 ? (
-                          <div className="font-bold">
-                            ✓ {toBengaliNumber(lastScanDispatchInfo.deliveredCount)}টি সংযুক্ত অভিভাবক ড্যাশবোর্ডে লাইভ এলার্ম পাঠানো হয়েছে
-                          </div>
+                          <Radio className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5 sm:mt-0 animate-pulse" />
                         ) : (
-                          <>
-                            <div className="font-bold">
-                              সার্ভারে স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই মুহূর্তে ({lastScanDispatchInfo.serverHost}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
-                            </div>
-                            <div className="text-[11px] opacity-90">
-                              অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "লাইভ সিঙ্ক সক্রিয়" সবুজ দেখুন।
-                            </div>
-                          </>
+                          <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
                         )}
+                        <div className="space-y-0.5">
+                          {lastScanDispatchInfo.isSending ? (
+                            <div className="font-bold">
+                              ⏳ {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পাঠানো হচ্ছে...
+                            </div>
+                          ) : lastScanDispatchInfo.syncError === 'static_host' ? (
+                            <>
+                              <div className="font-bold text-amber-200">
+                                ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর এলার্ম অভিভাবক ফোনে যায়নি (ব্যাকএন্ড সার্ভার অনুপস্থিত)!
+                              </div>
+                              <div className="text-[11px] text-rose-100">
+                                এই ডোমেইনটি ({lastScanDispatchInfo.serverHost}) কেবল স্ট্যাটিক HTML চালাচ্ছে — Node সার্ভার (server.ts / WebSocket) চালু না থাকায় স্ক্যান তথ্য অন্য ফোনে পৌঁছাতে পারছে না। Render/Railway বা full-stack Node সার্ভারে চালু করুন।
+                              </div>
+                            </>
+                          ) : lastScanDispatchInfo.syncError === 'auth_redirect' ? (
+                            <>
+                              <div className="font-bold text-amber-200">
+                                ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান কেন্দ্রীয় সার্ভারে পৌঁছায়নি (সেশন/ভেরিফিকেশন ব্লক)!
+                              </div>
+                              <div className="text-[11px] text-rose-100">
+                                এই ব্রাউজারে সেশন যাচাই বাকি থাকায় অভিভাবক ফোনে এলার্ম যায়নি। নিচের "পেজ রিলোড করুন" বাটনে ক্লিক করে আবার স্ক্যান করুন।
+                              </div>
+                            </>
+                          ) : lastScanDispatchInfo.syncError === 'network_error' ? (
+                            <>
+                              <div className="font-bold text-amber-200">
+                                ⚠ সতর্কতা: সার্ভারে স্ক্যান সংরক্ষণ ব্যর্থ হয়েছে ({lastScanDispatchInfo.student.nameBn})
+                              </div>
+                              <div className="text-[11px] text-rose-100">
+                                ইন্টারনেট বা সার্ভার সংযোগ বিচ্ছিন্ন। "পুনরায় সার্ভারে পাঠান" ক্লিক করুন।
+                              </div>
+                            </>
+                          ) : isAcked ? (
+                            <>
+                              <div className="font-bold text-amber-200">
+                                ✓ অভিভাবকের লাইভ রেসপন্স এসেছে ({liveMatchedLog?.acknowledgedBy || 'অভিভাবক'}):
+                              </div>
+                              <div className="text-xs text-white font-medium">
+                                "{liveMatchedLog?.guardianResponse || 'মেসেজ শুনেছি ও নিশ্চিত করলাম'}"
+                              </div>
+                            </>
+                          ) : lastScanDispatchInfo.deliveredCount > 0 ? (
+                            <div className="font-bold">
+                              ✓ {toBengaliNumber(lastScanDispatchInfo.deliveredCount)}টি সংযুক্ত অভিভাবক ড্যাশবোর্ডে লাইভ এলার্ম পাঠানো হয়েছে — অভিভাবকের উত্তরের অপেক্ষায়...
+                            </div>
+                          ) : (
+                            <>
+                              <div className="font-bold">
+                                সার্ভারে স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই সার্ভারে ({lastScanDispatchInfo.serverHost}
+                                {liveServerHealth.serverInstanceId ? ` • ${liveServerHealth.serverInstanceId}` : ''}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
+                              </div>
+                              <div className="text-[11px] opacity-90">
+                                অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost.startsWith('ais-dev-') ? 'Shared App URL / ais-pre-...' : lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "সংযোগ ও অডিও ডায়াগনস্টিক" ট্যাবে একই ইনস্ট্যান্স আইডি মিলিয়ে নিন।
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {lastScanDispatchInfo.syncError ? (
-                      <div className="flex items-center gap-2 shrink-0">
+                      {lastScanDispatchInfo.syncError ? (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleVerifyStudent(lastScanDispatchInfo.student, { skipBeep: true, forceVoice: false })}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer"
+                          >
+                            পুনরায় সার্ভারে পাঠান
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => window.location.reload()}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-amber-300 hover:bg-amber-200 text-slate-950 cursor-pointer"
+                          >
+                            পেজ রিলোড করুন
+                          </button>
+                        </div>
+                      ) : !isAcked && lastScanDispatchInfo.deliveredCount === 0 ? (
                         <button
                           type="button"
-                          onClick={() => handleVerifyStudent(lastScanDispatchInfo.student, { skipBeep: true, forceVoice: false })}
-                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer"
+                          onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer transition ${
+                            copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                          }`}
                         >
-                          পুনরায় সার্ভারে পাঠান
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>
+                            {copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                              ? 'লিংক কপি হয়েছে ✓'
+                              : 'এই ছাত্রের অভিভাবক লিংক কপি করুন'}
+                          </span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => window.location.reload()}
-                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-amber-300 hover:bg-amber-200 text-slate-950 cursor-pointer"
-                        >
-                          পেজ রিলোড করুন
-                        </button>
-                      </div>
-                    ) : lastScanDispatchInfo.deliveredCount === 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
-                        className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer transition ${
-                          copiedGuardianLinkId === lastScanDispatchInfo.student.id
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
-                        }`}
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>
-                          {copiedGuardianLinkId === lastScanDispatchInfo.student.id
-                            ? 'লিংক কপি হয়েছে ✓'
-                            : 'এই ছাত্রের অভিভাবক লিংক কপি করুন'}
-                        </span>
-                      </button>
-                    ) : null}
-                  </div>
-                )}
+                      ) : null}
+                    </div>
+                  );
+                })()}
 
                 {/* Disambiguation Candidate Selector (prevents loading wrong student on duplicate name/roll/phone) */}
                 {ambiguousCandidates.length > 0 && (
@@ -5495,7 +5600,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] font-medium flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <span>
-                        এই মুহূর্তে {pendingStd.nameBn}-এর অভিভাবক ফোন ({targetPortalId}) এই সার্ভারে লাইভ দেখাচ্ছে না। অভিভাবকের ফোন একই লিংকে লগইন করা আছে কিনা দেখুন।
+                        এই মুহূর্তে {pendingStd.nameBn}-এর অভিভাবক ফোন ({targetPortalId}) এই সার্ভারে
+                        {liveServerHealth.serverInstanceId ? ` (${liveServerHealth.serverInstanceId})` : ''} লাইভ দেখাচ্ছে না। অভিভাবকের ফোন একই লিংকে
+                        {typeof window !== 'undefined' && window.location.host.startsWith('ais-dev-')
+                          ? ' (দুই ফোনেই Shared App URL অর্থাৎ ais-pre-...)'
+                          : ''}{' '}
+                        খোলা আছে কিনা দেখুন।
                       </span>
                     </div>
                   );
@@ -5538,9 +5648,17 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           recentScannedStudent ||
           students.find((s) => s.classId === 'class_4' && Number(s.roll) === 1) ||
           students[0];
+        const isDevHost =
+          typeof window !== 'undefined' && window.location.origin.includes('://ais-dev-');
+        const bridgeOrigin =
+          typeof window !== 'undefined'
+            ? isDevHost
+              ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+              : window.location.origin
+            : '';
         const shareUrl =
-          typeof window !== 'undefined' && selectedStd
-            ? `${window.location.origin}/?tab=security&guardian=${encodeURIComponent(selectedStd.id)}`
+          bridgeOrigin && selectedStd
+            ? `${bridgeOrigin}/?tab=security&guardian=${encodeURIComponent(selectedStd.id)}`
             : '';
         return (
           <div
@@ -5573,6 +5691,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               </div>
 
               <div className="p-5 space-y-4 text-xs">
+                {isDevHost && (
+                  <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl p-3 text-[11px] leading-relaxed">
+                    <strong>গুরুত্বপূর্ণ:</strong> আপনি এখন <code className="font-mono font-bold">ais-dev-</code> লিংকে আছেন, তাই নিচের QR কোডে স্বয়ংক্রিয়ভাবে পাবলিক <code className="font-mono font-bold">ais-pre-</code> Shared App URL যুক্ত করা হয়েছে। দুটি ফোনের মধ্যে যোগাযোগের জন্য স্ক্যানার ফোনেও <code className="font-mono font-bold">ais-pre-</code> লিংকটি ব্যবহার করুন।
+                  </div>
+                )}
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
                     যে শিক্ষার্থীর ড্যাশবোর্ড অভিভাবক ফোনে খুলবেন:
@@ -5634,8 +5757,92 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         );
       })()}
 
-      {/* Persistent Wake Audio Control to circumvent mobile browser audio suspension */}
-      <div className="print:hidden fixed bottom-4 right-4 z-40">
+      {/* Persistent Audio Activity Indicator & Wake Audio Control */}
+      <div className="print:hidden fixed bottom-4 right-4 z-40 flex flex-wrap items-center justify-end gap-2">
+        {/* Visual Audio Activity Indicator (pulses whenever active speech synthesis / TTS audio stream is detected) */}
+        <div
+          data-testid="audio-activity-indicator"
+          role="status"
+          aria-live="polite"
+          aria-label={
+            isSpeechStreamActive || isSpeaking
+              ? 'Audio Activity: Speech stream active'
+              : 'Audio Activity: Standby'
+          }
+          title={
+            isSpeechStreamActive || isSpeaking
+              ? 'সফল স্পিচ/অডিও স্ট্রিম চলছে'
+              : 'বর্তমানে কোনো স্পিচ স্ট্রিম চলছে না (স্ট্যান্ডবাই)'
+          }
+          className={`min-h-[44px] px-3.5 py-2 rounded-xl shadow-lg border text-xs font-bold transition flex items-center gap-2.5 backdrop-blur-sm ${
+            isSpeechStreamActive || isSpeaking
+              ? 'bg-emerald-950/95 text-emerald-100 border-emerald-400 ring-2 ring-emerald-400/40'
+              : 'bg-slate-950/90 text-slate-300 border-slate-700/80'
+          }`}
+        >
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            {(isSpeechStreamActive || isSpeaking) && (
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-85" />
+            )}
+            <span
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                isSpeechStreamActive || isSpeaking ? 'bg-emerald-400' : 'bg-slate-500'
+              }`}
+            />
+          </span>
+
+          {/* Pulsing Audio Equalizer Bars */}
+          <span className="flex items-end gap-0.5 h-3.5 shrink-0" aria-hidden="true">
+            <span
+              className={`w-1 rounded-xs transition-all ${
+                isSpeechStreamActive || isSpeaking
+                  ? 'h-3.5 bg-emerald-400 animate-pulse'
+                  : 'h-1.5 bg-slate-600'
+              }`}
+            />
+            <span
+              className={`w-1 rounded-xs transition-all ${
+                isSpeechStreamActive || isSpeaking
+                  ? 'h-2 bg-emerald-300 animate-bounce'
+                  : 'h-2.5 bg-slate-600'
+              }`}
+            />
+            <span
+              className={`w-1 rounded-xs transition-all ${
+                isSpeechStreamActive || isSpeaking
+                  ? 'h-3.5 bg-emerald-400 animate-pulse'
+                  : 'h-1.5 bg-slate-600'
+              }`}
+            />
+          </span>
+
+          <div className="leading-tight">
+            <div className="flex items-center gap-1.5">
+              <span>Audio Activity</span>
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                  isSpeechStreamActive || isSpeaking
+                    ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/40'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {isSpeechStreamActive || isSpeaking ? 'ACTIVE' : 'IDLE'}
+              </span>
+            </div>
+            {(isSpeechStreamActive || isSpeaking) && (
+              <div className="text-[10px] text-emerald-300 font-medium">
+                স্পিচ স্ট্রিম চলছে ({audioHardwareStatus.lastEngineUsed === 'web_speech'
+                  ? 'Web Speech'
+                  : audioHardwareStatus.lastEngineUsed === 'webaudio'
+                  ? 'Web Audio'
+                  : audioHardwareStatus.lastEngineUsed === 'html_audio'
+                  ? 'HTML Audio'
+                  : 'Audio'})
+              </div>
+            )}
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={() => {

@@ -873,6 +873,7 @@ export function triggerDummySpeechSynthesisTest(): Promise<DummySpeechTestResult
       if (settled) return;
       settled = true;
       clearTimeout(safetyTimer);
+      setVoicePlayingState(false);
       const snap = getGuardianAudioStatus();
       resolve({
         ok,
@@ -909,6 +910,8 @@ export function triggerDummySpeechSynthesisTest(): Promise<DummySpeechTestResult
       dummyUtterance.onstart = () => {
         eventStarted = true;
         audioUnlockedInSession = true;
+        lastEngineUsed = 'web_speech';
+        setVoicePlayingState(true);
         notifyUnlockSubscribers();
         emitAudioDiagnostic(
           'unlock',
@@ -921,6 +924,7 @@ export function triggerDummySpeechSynthesisTest(): Promise<DummySpeechTestResult
         activeUtterances.delete(dummyUtterance);
         if (!eventStarted) {
           audioUnlockedInSession = true;
+          lastEngineUsed = 'web_speech';
           notifyUnlockSubscribers();
           emitAudioDiagnostic(
             'unlock',

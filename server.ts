@@ -1450,6 +1450,7 @@ async function startServer() {
           updatedTarget = {
             ...l,
             studentEtiquetteReply: reply,
+            updatedServerTimestamp: Date.now(),
           };
           return updatedTarget;
         }
@@ -1483,7 +1484,8 @@ async function startServer() {
 
       const existingLogs: any[] = Array.isArray(memoryDb?.securityLogs) ? memoryDb.securityLogs : [];
       let updatedTarget: any = null;
-      const ackTime = new Date().toISOString();
+      const ackNowMs = Date.now();
+      const ackTime = new Date(ackNowMs).toISOString();
       const responseText = (guardianResponse && String(guardianResponse).trim()) || 'মেসেজ শুনেছি ও নিশ্চিত করলাম';
 
       const updatedLogs = existingLogs.map((l) => {
@@ -1494,6 +1496,7 @@ async function startServer() {
             acknowledgedAt: ackTime,
             guardianResponse: responseText,
             acknowledgedBy: acknowledgedBy || 'অভিভাবক',
+            updatedServerTimestamp: ackNowMs,
           };
           return updatedTarget;
         }
@@ -1520,6 +1523,7 @@ async function startServer() {
         message: 'Guardian response recorded in school database',
         log: updatedTarget,
         totalAcknowledgedCount,
+        serverInstanceId: SERVER_INSTANCE_ID,
       });
     } catch (err: any) {
       console.error('[Server API] Security acknowledge error:', err);
@@ -1620,7 +1624,9 @@ async function startServer() {
             : typeof l.timestamp === 'number'
             ? l.timestamp
             : new Date(l.timestamp).getTime() || 0;
-        const matchesTime = since > 0 ? logTime > since : true;
+        const updatedTime = typeof l.updatedServerTimestamp === 'number' ? l.updatedServerTimestamp : 0;
+        const effectiveTime = Math.max(logTime, updatedTime);
+        const matchesTime = since > 0 ? effectiveTime > since : true;
         const matchesStudent =
           studentId || portalId || (classId && roll)
             ? logMatchesTargetStudent(l, studentId, portalId, classId, roll)

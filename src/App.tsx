@@ -32,7 +32,6 @@ import {
   clearExplicitUnlockFlag,
   getLockedStudentIdSync,
   getLockedStudentSnapshotSync,
-  isDeviceExplicitlyUnlockedSync,
   loadLockedStudentFromStorage,
   lockDeviceToStudent,
   unlockDeviceFromStudent,
@@ -67,10 +66,7 @@ function MainContent() {
 
   const { schoolInfo, students, classes } = useSchool();
   const isUnlockUrlRequested = urlParams.get('unlock') === '1';
-  const urlGuardianParam =
-    !isUnlockUrlRequested && !isDeviceExplicitlyUnlockedSync()
-      ? urlParams.get('guardian') || ''
-      : '';
+  const urlGuardianParam = !isUnlockUrlRequested ? urlParams.get('guardian') || '' : '';
   const isSavedGuardianMode =
     typeof window !== 'undefined' &&
     !isUnlockUrlRequested &&
@@ -198,6 +194,9 @@ function MainContent() {
           subLabel: `${clsName} • রোল ${matched.roll}`,
           staffCode: getStudentPortalId(matched),
         };
+        if (urlGuardianParam) {
+          clearExplicitUnlockFlag();
+        }
         if (
           !authSession ||
           authSession.role !== 'student' ||

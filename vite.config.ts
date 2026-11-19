@@ -63,6 +63,7 @@ export default defineConfig(({ mode }) => {
           ],
           skipWaiting: true,
           clientsClaim: true,
+          cleanupOutdatedCaches: true,
           runtimeCaching: [
             {
               urlPattern: ({ url }) =>

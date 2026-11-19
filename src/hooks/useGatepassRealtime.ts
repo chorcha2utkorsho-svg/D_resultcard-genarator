@@ -723,7 +723,34 @@ export function useGatepassRealtime({
       }
 
       if (rawPayload.type === 'gatepass:acknowledge' && rawPayload.log && rawPayload.log.id) {
-        addSecurityLog(rawPayload.log, { suppressAutoPush: true });
+        const ackLog: SecurityGatepassLog & { updatedServerTimestamp?: number } = rawPayload.log;
+        const originMs =
+          typeof ackLog.updatedServerTimestamp === 'number'
+            ? ackLog.updatedServerTimestamp
+            : typeof rawPayload.serverTime === 'number'
+            ? rawPayload.serverTime
+            : null;
+        const ackLatency =
+          originMs !== null
+            ? Math.max(0, Math.round(clientNow + (clockOffsetRef.current ?? 0) - originMs))
+            : null;
+
+        setLastSignalLatencyMs(ackLatency);
+        setLastSignalType('gatepass:acknowledge');
+        setLastSignalAt(clientNow);
+        setLastSignalTransport(viaTransport);
+
+        appendDiagnosticLog(
+          'SIGNAL',
+          'ok',
+          `অভিভাবকের নিশ্চিতকরণ উত্তর পাওয়া গেছে (${viaTransport.toUpperCase()}): ${ackLog.studentNameBn || ackLog.studentId}`,
+          {
+            latencyMs: ackLatency,
+            detail: `${ackLog.acknowledgedBy || 'অভিভাবক'}: ${ackLog.guardianResponse || ''}`,
+          }
+        );
+
+        addSecurityLog(ackLog, { suppressAutoPush: true });
       }
     };
 
@@ -828,7 +855,10 @@ export function useGatepassRealtime({
         for (const log of sorted) {
           if (log && log.id) {
             const isNewGuardianAlert =
-              role === 'student' && isMatchingStudentLog(log) && !hasPlayedGuardianVoiceLog(log.id);
+              role === 'student' &&
+              isMatchingStudentLog(log) &&
+              !hasPlayedGuardianVoiceLog(log.id) &&
+              !log.guardianAcknowledged;
             if (!seenGatepassLogIds.has(log.id) || isNewGuardianAlert) {
               handleIncomingPayload({ type: 'gatepass:scan', log, serverTime: serverNow }, 'polling');
             } else {

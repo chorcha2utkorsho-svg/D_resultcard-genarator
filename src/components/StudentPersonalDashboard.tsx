@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   Award,
   BellRing,
@@ -27,6 +28,7 @@ import {
   Maximize2,
   MessageSquare,
   Plus,
+  Radio,
   RefreshCw,
   Rocket,
   Save,
@@ -34,6 +36,7 @@ import {
   ShieldCheck,
   Smartphone,
   Target,
+  Terminal,
   Trash2,
   TrendingUp,
   Trophy,
@@ -41,6 +44,7 @@ import {
   User,
   Volume2,
   VolumeX,
+  Wifi,
   X,
 } from 'lucide-react';
 import {
@@ -87,17 +91,24 @@ import {
 } from '../utils/studentAppIcon';
 import {
   getGuardianAudioStatus,
+  getSharedAudioContext,
   GuardianAudioHardwareStatus,
   isMobileAudioUnlocked,
   PendingBlockedSpeechAlert,
   replayPendingBlockedSpeech,
+  resumeAudioContextDiagnostic,
+  setGuardianLiveWatchActive,
   stopBengaliSpeech,
   subscribeGuardianAudioStatus,
   subscribeMobileAudioUnlock,
   subscribePendingBlockedSpeech,
   subscribeSpeechPlayback,
 } from '../utils/gatepassAudio';
-import { RealtimeSyncHealth, RealtimeTransportMode } from '../hooks/useGatepassRealtime';
+import {
+  GatepassRealtimeDiagnostics,
+  RealtimeSyncHealth,
+  RealtimeTransportMode,
+} from '../hooks/useGatepassRealtime';
 
 interface StudentPersonalDashboardProps {
   student: Student;
@@ -113,6 +124,10 @@ interface StudentPersonalDashboardProps {
   realtimeTransport?: RealtimeTransportMode;
   realtimeSyncHealth?: RealtimeSyncHealth;
   onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
+  realtimeDiagnostics?: GatepassRealtimeDiagnostics;
+  onSendDiagnosticPing?: () => Promise<number | null>;
+  onReconnectRealtime?: () => void;
+  onClearDiagnosticLogs?: () => void;
   ackSuccessFeedback: string | null;
   isSubmittingAck: boolean;
   guardianReplyText: string;
@@ -170,6 +185,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   realtimeTransport,
   realtimeSyncHealth,
   onForceCheckRealtime,
+  realtimeDiagnostics,
+  onSendDiagnosticPing,
+  onReconnectRealtime,
+  onClearDiagnosticLogs,
   ackSuccessFeedback,
   isSubmittingAck,
   guardianReplyText,
@@ -244,6 +263,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   };
 
   useEffect(() => {
+    getSharedAudioContext();
+    setAudioHardwareStatus(getGuardianAudioStatus());
     const unsubUnlock = subscribeMobileAudioUnlock(setMobileAudioUnlocked);
     const unsubHw = subscribeGuardianAudioStatus(setAudioHardwareStatus);
     const unsubPending = subscribePendingBlockedSpeech(setPendingBlockedAlert);
@@ -261,8 +282,80 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     (guardianAudioTested || mobileAudioUnlocked) &&
     audioHardwareStatus.audioContextState === 'running';
 
+  const [diagnosticFilter, setDiagnosticFilter] = useState<
+    'all' | 'network' | 'signal' | 'audio' | 'issues'
+  >('all');
+  const [isDiagnosticPinging, setIsDiagnosticPinging] = useState<boolean>(false);
+  const [isResumingAudioCtx, setIsResumingAudioCtx] = useState<boolean>(false);
+  const [audioResumeFeedback, setAudioResumeFeedback] = useState<string | null>(null);
+  const [copiedDiagnosticReport, setCopiedDiagnosticReport] = useState<boolean>(false);
+
+  const handleDiagnosticPingClick = async () => {
+    if (!onSendDiagnosticPing) return;
+    setIsDiagnosticPinging(true);
+    try {
+      await onSendDiagnosticPing();
+    } finally {
+      setIsDiagnosticPinging(false);
+    }
+  };
+
+  const handleDiagnosticResumeAudio = async () => {
+    setIsResumingAudioCtx(true);
+    setAudioResumeFeedback(null);
+    try {
+      if (!guardianAudioEnabled) {
+        setGuardianAudioEnabled(true);
+      }
+      setGuardianLiveWatchActive(true);
+      const result = await resumeAudioContextDiagnostic();
+      setAudioHardwareStatus(result);
+      onTestAudio(false);
+      if (result.resumedOk) {
+        setAudioResumeFeedback(
+          `✓ '${result.previousState}' → 'running' (${result.latencyMs}ms)`
+        );
+      } else {
+        setAudioResumeFeedback(
+          `অবস্থা: '${result.audioContextState}'${result.lastPlaybackError ? ` (${result.lastPlaybackError})` : ''}`
+        );
+      }
+    } finally {
+      setIsResumingAudioCtx(false);
+    }
+  };
+
+  const handleCopyDiagnosticReport = () => {
+    if (typeof window === 'undefined' || !navigator.clipboard) return;
+    const report = {
+      capturedAt: new Date().toISOString(),
+      studentNameBn: student.nameBn,
+      portalId,
+      host: window.location.host,
+      wsReadyState: realtimeDiagnostics?.wsReadyState ?? 'UNINITIALIZED',
+      realtimeTransport: realtimeTransport ?? 'connecting',
+      realtimeSyncHealth: realtimeSyncHealth ?? 'connecting',
+      lastSignalLatencyMs: realtimeDiagnostics?.lastSignalLatencyMs ?? null,
+      lastScanLatencyMs: realtimeDiagnostics?.lastScanLatencyMs ?? null,
+      lastPingRttMs: realtimeDiagnostics?.lastPingRttMs ?? null,
+      clockOffsetMs: realtimeDiagnostics?.clockOffsetMs ?? null,
+      audioContextState: audioHardwareStatus.audioContextState,
+      audioUnlockedInSession: audioHardwareStatus.unlocked,
+      liveWatchActive: audioHardwareStatus.liveWatchActive,
+      wakeLockActive: audioHardwareStatus.wakeLockActive,
+      lastEngineUsed: audioHardwareStatus.lastEngineUsed,
+      lastPlaybackError: audioHardwareStatus.lastPlaybackError,
+      notificationPermission: realtimeDiagnostics?.notificationPermission ?? 'unsupported',
+      recentLogs: (realtimeDiagnostics?.logs || []).slice(0, 30),
+    };
+    navigator.clipboard.writeText(JSON.stringify(report, null, 2)).catch(() => {});
+    setCopiedDiagnosticReport(true);
+    setTimeout(() => setCopiedDiagnosticReport(false), 2500);
+  };
+
   const [dashboardSection, setDashboardSection] = useState<
     | 'overview'
+    | 'diagnostics'
     | 'digital_library'
     | 'academic_roadmap'
     | 'moner_bari'
@@ -272,6 +365,13 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     | 'achievements'
     | 'id_and_contact'
   >('overview');
+
+  useEffect(() => {
+    if (dashboardSection === 'diagnostics') {
+      getSharedAudioContext();
+      setAudioHardwareStatus(getGuardianAudioStatus());
+    }
+  }, [dashboardSection]);
 
   const classLibraryCount = useMemo(
     () => libraryMaterials.filter((m) => m.classId === 'all' || m.classId === student.classId).length,
@@ -817,6 +917,11 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           {[
             { id: 'overview' as const, label: 'পড়াশোনা ও প্রগ্রেস', icon: TrendingUp },
             {
+              id: 'diagnostics' as const,
+              label: 'সংযোগ ও অডিও ডায়াগনস্টিক',
+              icon: Activity,
+            },
+            {
               id: 'digital_library' as const,
               label: `ডিজিটাল লাইব্রেরি (${toBengaliNumber(classLibraryCount)})`,
               icon: Library,
@@ -1106,16 +1211,27 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             )}
 
-            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span>
-                  স্পিকার অবস্থা:{' '}
-                  <strong className={isHardwareAudioTrulyActive ? 'text-emerald-300' : 'text-amber-300'}>
-                    {isHardwareAudioTrulyActive
-                      ? 'সক্রিয় (Web Audio প্রস্তুত)'
-                      : 'অনুমতি প্রয়োজন — উপরের "ভয়েস এলার্ম চালু করুন" ট্যাপ করুন'}
+            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="inline-flex items-center gap-1.5 font-mono">
+                  <span className="text-slate-400">audioContext.state:</span>
+                  <strong
+                    className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
+                      audioHardwareStatus.audioContextState === 'running'
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                        : audioHardwareStatus.audioContextState === 'suspended'
+                        ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
+                        : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                    }`}
+                  >
+                    '{audioHardwareStatus.audioContextState}'
                   </strong>
                 </span>
+                {audioResumeFeedback && (
+                  <span className="font-mono text-[10.5px] text-emerald-300">
+                    {audioResumeFeedback}
+                  </span>
+                )}
                 {currentServerHost && (
                   <span className="text-slate-400 font-mono truncate max-w-xs sm:max-w-sm">
                     সার্ভার: <strong className="text-slate-200">{currentServerHost}</strong>
@@ -1124,6 +1240,34 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={isResumingAudioCtx}
+                  onClick={handleDiagnosticResumeAudio}
+                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold font-mono flex items-center gap-1 cursor-pointer transition border ${
+                    audioHardwareStatus.audioContextState === 'running'
+                      ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border-emerald-500/60'
+                      : 'bg-amber-400 hover:bg-amber-300 text-slate-950 border-amber-300'
+                  }`}
+                  title="AudioContext.resume() সরাসরি কল করে অডিও আনলক যাচাই করুন"
+                >
+                  <Volume2 className="w-3 h-3" />
+                  <span>
+                    {isResumingAudioCtx
+                      ? 'Resuming...'
+                      : audioHardwareStatus.audioContextState === 'running'
+                      ? 'AudioContext.resume() ✓'
+                      : 'Force-Unlock: AudioContext.resume()'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDashboardSection('diagnostics')}
+                  className="px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700"
+                >
+                  <Activity className="w-3 h-3" />
+                  <span>ডায়াগনস্টিক লগ</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleCopySameServerLink}
@@ -2146,6 +2290,576 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           onOpenTimeManagement={() => setDashboardSection('time_management')}
         />
       )}
+
+      {/* =================================================================== */}
+      {/* SECTION 9: REAL-TIME DIAGNOSTIC LOG PAGE                            */}
+      {/* =================================================================== */}
+      {dashboardSection === 'diagnostics' && (() => {
+        const wsState = realtimeDiagnostics?.wsReadyState ?? 'UNINITIALIZED';
+        const audioCtxState = audioHardwareStatus.audioContextState;
+        const latencyMs = realtimeDiagnostics?.lastSignalLatencyMs ?? null;
+        const allLogs = realtimeDiagnostics?.logs || [];
+
+        const filteredLogs = allLogs.filter((entry) => {
+          if (diagnosticFilter === 'network') {
+            return entry.source === 'WS' || entry.source === 'SSE' || entry.source === 'POLL';
+          }
+          if (diagnosticFilter === 'signal') {
+            return entry.source === 'SIGNAL' || entry.source === 'TRIGGER' || entry.source === 'BC';
+          }
+          if (diagnosticFilter === 'audio') {
+            return entry.source === 'AUDIO';
+          }
+          if (diagnosticFilter === 'issues') {
+            return entry.level === 'warn' || entry.level === 'error';
+          }
+          return true;
+        });
+
+        const wsStatusHealthy = wsState === 'OPEN';
+        const fallbackActive =
+          !wsStatusHealthy &&
+          (realtimeSyncHealth === 'verified_sse' || realtimeSyncHealth === 'verified_polling');
+        const audioCtxRunning = audioCtxState === 'running';
+        const isLatencySlow = typeof latencyMs === 'number' && latencyMs > 1500;
+
+        const formatPreciseTime = (ms: number | null | undefined) => {
+          if (!ms) return '—';
+          const d = new Date(ms);
+          const hh = String(d.getHours()).padStart(2, '0');
+          const mm = String(d.getMinutes()).padStart(2, '0');
+          const ss = String(d.getSeconds()).padStart(2, '0');
+          const millis = String(d.getMilliseconds()).padStart(3, '0');
+          return `${hh}:${mm}:${ss}.${millis}`;
+        };
+
+        return (
+          <div className="space-y-5">
+            {/* Top Diagnostic Header Bar */}
+            <div className="bg-slate-900 text-white rounded-2xl border border-slate-800 p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-sky-300 font-medium">
+                  <Terminal className="w-4 h-4 shrink-0" />
+                  <span>অভিভাবক ডিভাইস রিয়েল-টাইম ডায়াগনস্টিক</span>
+                  <span aria-hidden="true" className="text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-300">
+                    আইডি: {portalId}
+                  </span>
+                </div>
+                <h3 className="text-lg sm:text-xl font-bold font-serif text-white">
+                  সংযোগ অবস্থা, সিগন্যাল ল্যাটেন্সি ও অডিও ডায়াগনস্টিক লগ
+                </h3>
+                <p className="text-xs text-slate-300">
+                  স্ক্যান করার পর ভয়েস এলার্ম না বাজলে নিচের ৩টি লাইভ মিটার ও ইভেন্ট লগ থেকে তাৎক্ষণিক কারণ শনাক্ত করুন।
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={isResumingAudioCtx}
+                  onClick={handleDiagnosticResumeAudio}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold font-mono transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                    audioCtxRunning
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                      : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                  }`}
+                >
+                  <Volume2 className="w-4 h-4" />
+                  <span>
+                    {isResumingAudioCtx
+                      ? 'Running AudioContext.resume()...'
+                      : audioCtxRunning
+                      ? "AudioContext.resume() ('running') ✓"
+                      : "Force-Unlock: AudioContext.resume()"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDiagnosticPinging || !onSendDiagnosticPing}
+                  onClick={handleDiagnosticPingClick}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isDiagnosticPinging ? 'animate-spin' : ''}`} />
+                  <span>{isDiagnosticPinging ? 'পিং চলছে...' : 'পিং ও ল্যাটেন্সি টেস্ট'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyDiagnosticReport}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  {copiedDiagnosticReport ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5 text-slate-300" />
+                  )}
+                  <span>{copiedDiagnosticReport ? 'রিপোর্ট কপি ✓' : 'রিপোর্ট কপি'}</span>
+                </button>
+              </div>
+            </div>
+
+            {audioResumeFeedback && (
+              <div className="px-4 py-2.5 bg-slate-900 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-mono flex items-center justify-between gap-2">
+                <span>AudioContext.resume() ফলাফল: {audioResumeFeedback}</span>
+                <span className="text-slate-300">audioContext.state = '{audioCtxState}'</span>
+              </div>
+            )}
+
+            {/* Automated Plain-Language Root-Cause Callout */}
+            {realtimeSyncHealth === 'auth_redirect' ? (
+              <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-sm">কারণ শনাক্ত: সার্ভার সিগন্যাল লগইন রিডাইরেক্টে আটকে আছে</div>
+                    <p className="leading-relaxed">
+                      এই ব্রাউজার থেকে API/WebSocket অনুরোধ অথেনটিকেশন পেজে রিডাইরেক্ট হচ্ছে। পেজটি একবার রিলোড করুন অথবা অফিসিয়াল স্ক্যানারের একই লিংকে খুলুন।
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') window.location.reload();
+                  }}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shrink-0 cursor-pointer"
+                >
+                  রিলোড করুন
+                </button>
+              </div>
+            ) : !audioCtxRunning ? (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-sm">
+                      কারণ শনাক্ত: AudioContext বর্তমানে <span className="font-mono">'{audioCtxState}'</span> অবস্থায় আছে
+                    </div>
+                    <p className="leading-relaxed">
+                      মোবাইল ব্রাউজার (Chrome / Safari) নিরাপত্তা নীতির কারণে স্পিকার স্থগিত (suspended) রেখেছে। এই অবস্থায় গেটপাস সিগন্যাল এলেও ব্যাকগ্রাউন্ডে ভয়েস বাজবে না — পাশের বাটনে ট্যাপ করে <span className="font-mono font-bold">'running'</span> করুন।
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDiagnosticResumeAudio}
+                  className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg shrink-0 cursor-pointer"
+                >
+                  এখনই 'running' করুন
+                </button>
+              </div>
+            ) : !wsStatusHealthy && !fallbackActive ? (
+              <div className="bg-rose-50 border border-rose-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-950">
+                <div className="flex items-start gap-2.5">
+                  <Wifi className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-sm">
+                      সতর্কতা: WebSocket সংযোগ বিচ্ছিন্ন ({wsState})
+                    </div>
+                    <p className="leading-relaxed">
+                      সার্ভারের সাথে রিয়েল-টাইম চ্যানেল এখনো স্থাপিত হয়নি। ফোনের ইন্টারনেট পরীক্ষা করুন এবং পুনরায় সংযুক্ত করুন।
+                    </p>
+                  </div>
+                </div>
+                {onReconnectRealtime && (
+                  <button
+                    type="button"
+                    onClick={onReconnectRealtime}
+                    className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg shrink-0 cursor-pointer"
+                  >
+                    পুনরায় সংযুক্ত করুন
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex items-start sm:items-center gap-2.5 text-xs text-emerald-950">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <span className="font-bold">সিস্টেম সম্পূর্ণ প্রস্তুত:</span>{' '}
+                  WebSocket অবস্থা <span className="font-mono font-bold">{wsState}</span> এবং AudioContext{' '}
+                  <span className="font-mono font-bold">'running'</span> অবস্থায় আছে। গেটপাস স্ক্যান হলেই তাৎক্ষণিক ভয়েস এলার্ম বাজবে।
+                </div>
+              </div>
+            )}
+
+            {/* 3 Primary Single-Elevation Telemetry Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* CARD 1: Real-time WebSocket Connection State */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <Radio className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>WebSocket সংযোগ অবস্থা</span>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
+                      wsStatusHealthy
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : fallbackActive
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                    }`}
+                  >
+                    {wsState}
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                    {wsState}
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {wsStatusHealthy
+                      ? 'প্রাইমারি WebSocket পুশ চ্যানেল সরাসরি চালু'
+                      : fallbackActive
+                      ? `WS বন্ধ — ${realtimeTransport?.toUpperCase() || 'ফ্যালব্যাক'} চ্যানেলে সিগন্যাল আসছে`
+                      : 'সার্ভারের সাথে WebSocket সংযোগ চেষ্টা চলছে'}
+                  </div>
+                </div>
+
+                <dl className="pt-2 border-t border-slate-100 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">সক্রিয় ট্রান্সপোর্ট</dt>
+                    <dd className="font-mono font-semibold text-slate-900">
+                      {(realtimeTransport || 'connecting').toUpperCase()}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">SSE ফ্যালব্যাক</dt>
+                    <dd className="font-mono text-slate-800">
+                      {realtimeDiagnostics?.sseReadyState ?? 'UNINITIALIZED'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">রিকানেক্ট চেষ্টা</dt>
+                    <dd className="font-mono tabular-nums text-slate-800">
+                      {realtimeDiagnostics?.wsReconnectAttempts ?? 0} বার
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">সার্ভার হোস্ট</dt>
+                    <dd className="font-mono text-[11px] text-slate-800 truncate max-w-[165px]" title={realtimeDiagnostics?.connectedHost || currentServerHost}>
+                      {realtimeDiagnostics?.connectedHost || currentServerHost || '—'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">ইনস্ট্যান্স আইডি</dt>
+                    <dd className="font-mono text-[11px] text-slate-700 truncate max-w-[155px]">
+                      {realtimeDiagnostics?.serverInstanceId || 'অপেক্ষমাণ'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {/* CARD 2: Last Received Signal Latency */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>সর্বশেষ সিগন্যাল ল্যাটেন্সি</span>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
+                      latencyMs === null
+                        ? 'bg-slate-100 text-slate-600 border-slate-200'
+                        : isLatencySlow
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    }`}
+                  >
+                    {latencyMs === null ? 'WAIT' : isLatencySlow ? 'SLOW' : 'FAST'}
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                    {latencyMs !== null ? `${latencyMs} ms` : 'অপেক্ষমাণ'}
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {realtimeDiagnostics?.lastSignalType
+                      ? `সর্বশেষ: ${realtimeDiagnostics.lastSignalType}`
+                      : 'এখনো কোনো সিগন্যাল বা পিং পাওয়া যায়নি'}
+                  </div>
+                </div>
+
+                <dl className="pt-2 border-t border-slate-100 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">স্ক্যান ডেলিভারি</dt>
+                    <dd className="font-mono tabular-nums font-semibold text-slate-900">
+                      {realtimeDiagnostics?.lastScanLatencyMs !== null &&
+                      realtimeDiagnostics?.lastScanLatencyMs !== undefined
+                        ? `${realtimeDiagnostics.lastScanLatencyMs} ms`
+                        : 'স্ক্যান আসেনি'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">পিং RTT</dt>
+                    <dd className="font-mono tabular-nums text-slate-800">
+                      {realtimeDiagnostics?.lastPingRttMs !== null &&
+                      realtimeDiagnostics?.lastPingRttMs !== undefined
+                        ? `${realtimeDiagnostics.lastPingRttMs} ms`
+                        : 'অপেক্ষমাণ'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">ঘড়ির ব্যবধান (Offset)</dt>
+                    <dd className="font-mono tabular-nums text-slate-800">
+                      {realtimeDiagnostics?.clockOffsetMs !== null &&
+                      realtimeDiagnostics?.clockOffsetMs !== undefined
+                        ? `${realtimeDiagnostics.clockOffsetMs >= 0 ? '+' : ''}${realtimeDiagnostics.clockOffsetMs} ms`
+                        : '—'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">প্রাপ্তির সময়</dt>
+                    <dd className="font-mono tabular-nums text-slate-800">
+                      {formatPreciseTime(realtimeDiagnostics?.lastSignalAt)}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">সিগন্যাল মাধ্যম</dt>
+                    <dd className="font-mono text-slate-800">
+                      {realtimeDiagnostics?.lastSignalTransport?.toUpperCase() || '—'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {/* CARD 3: AudioContext State ('suspended' vs 'running') */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                    <Volume2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>AudioContext অবস্থা</span>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
+                      audioCtxRunning
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : audioCtxState === 'suspended'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                    }`}
+                  >
+                    {audioCtxState}
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold font-mono text-slate-900">
+                    '{audioCtxState}'
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {audioCtxRunning
+                      ? 'স্পিকার চলমান (running) — অটো এলার্ম বাজতে প্রস্তুত'
+                      : audioCtxState === 'suspended'
+                      ? 'স্থগিত (suspended) — আনলক করতে বাটনে ট্যাপ করুন'
+                      : 'অডিও কনটেক্সট এখনো তৈরি হয়নি'}
+                  </div>
+                </div>
+
+                <dl className="pt-2 border-t border-slate-100 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">সেশন আনলক</dt>
+                    <dd className={`font-semibold ${audioHardwareStatus.unlocked ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {audioHardwareStatus.unlocked ? 'হ্যাঁ (Unlocked)' : 'না (Locked)'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">কিপ-অ্যালাইভ অসিলেটর</dt>
+                    <dd className="font-mono text-slate-800">
+                      {audioHardwareStatus.liveWatchActive ? 'ACTIVE' : 'INACTIVE'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">স্ক্রিন Wake Lock</dt>
+                    <dd className="font-mono text-slate-800">
+                      {audioHardwareStatus.wakeLockActive ? 'LOCKED' : 'RELEASED'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">সর্বশেষ ইঞ্জিন</dt>
+                    <dd className="font-mono text-slate-800">
+                      {audioHardwareStatus.lastEngineUsed}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <dt className="text-slate-500">নোটিফিকেশন</dt>
+                    <dd className="font-mono text-slate-800">
+                      {realtimeDiagnostics?.notificationPermission ?? 'unsupported'}
+                    </dd>
+                  </div>
+                </dl>
+
+                {audioHardwareStatus.lastPlaybackError && (
+                  <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-[11px] font-mono text-rose-800 break-words">
+                    Error: {audioHardwareStatus.lastPlaybackError}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action & Event Stream Container */}
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              {/* Filter + Quick Actions Bar */}
+              <div className="p-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { id: 'all' as const, label: `সব লগ (${toBengaliNumber(allLogs.length)})` },
+                    { id: 'network' as const, label: 'WS / SSE / পোলিং' },
+                    { id: 'signal' as const, label: 'স্ক্যান সিগন্যাল' },
+                    { id: 'audio' as const, label: 'AudioContext' },
+                    { id: 'issues' as const, label: 'ত্রুটি ও সতর্কতা' },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setDiagnosticFilter(f.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
+                        diagnosticFilter === f.id
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onTestAudio(true)}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>ভয়েস টেস্ট</span>
+                  </button>
+
+                  {onForceCheckRealtime && (
+                    <button
+                      type="button"
+                      disabled={isManualChecking}
+                      onClick={handleManualForceCheck}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isManualChecking ? 'animate-spin' : ''}`} />
+                      <span>স্ক্যান সিঙ্ক চেক</span>
+                    </button>
+                  )}
+
+                  {onReconnectRealtime && (
+                    <button
+                      type="button"
+                      onClick={onReconnectRealtime}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Wifi className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>WS রিকানেক্ট</span>
+                    </button>
+                  )}
+
+                  {onClearDiagnosticLogs && (
+                    <button
+                      type="button"
+                      onClick={onClearDiagnosticLogs}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>পরিষ্কার</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Event Log Table / Stream */}
+              {filteredLogs.length === 0 ? (
+                <div className="p-8 text-center space-y-3">
+                  <div className="text-sm font-bold text-slate-800">
+                    এই ফিল্টারে এখনো কোনো ডায়াগনস্টিক ইভেন্ট রেকর্ড হয়নি
+                  </div>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    সংযোগ ল্যাটেন্সি ও অডিও অবস্থা তাৎক্ষণিকভাবে যাচাই করতে নিচের বাটনে চাপ দিন অথবা গেটে একটি আইডি কার্ড স্ক্যান করুন।
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDiagnosticPingClick}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>প্রথম পিং পরীক্ষা চালান</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                        <th className="py-2.5 px-3 whitespace-nowrap">সময়</th>
+                        <th className="py-2.5 px-3 whitespace-nowrap">উৎস</th>
+                        <th className="py-2.5 px-3 whitespace-nowrap">অবস্থা</th>
+                        <th className="py-2.5 px-3">ইভেন্ট ও বিবরণ</th>
+                        <th className="py-2.5 px-3 text-right whitespace-nowrap">ল্যাটেন্সি</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredLogs.map((entry) => {
+                        const badgeClass =
+                          entry.level === 'ok'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : entry.level === 'warn'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : entry.level === 'error'
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                            : 'bg-slate-100 text-slate-700 border-slate-200';
+                        const levelText =
+                          entry.level === 'ok'
+                            ? 'OK'
+                            : entry.level === 'warn'
+                            ? 'WARN'
+                            : entry.level === 'error'
+                            ? 'ERR'
+                            : 'INFO';
+
+                        return (
+                          <tr key={entry.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-2.5 px-3 font-mono tabular-nums text-slate-500 whitespace-nowrap align-top">
+                              {formatPreciseTime(entry.at)}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-700 whitespace-nowrap align-top">
+                              {entry.source}
+                            </td>
+                            <td className="py-2.5 px-3 whitespace-nowrap align-top">
+                              <span
+                                className={`inline-block px-1.5 py-0.5 rounded border font-mono text-[10.5px] font-bold ${badgeClass}`}
+                              >
+                                {levelText}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-800 align-top">
+                              <div className="font-medium">{entry.message}</div>
+                              {entry.detail && (
+                                <div className="text-[11px] font-mono text-slate-500 mt-0.5 break-all">
+                                  {entry.detail}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap align-top">
+                              {typeof entry.latencyMs === 'number' ? `${entry.latencyMs} ms` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* =================================================================== */}
       {/* SECTION 4: DIGITAL ID CARD, PASSWORD & SCHOOL MESSAGE               */}

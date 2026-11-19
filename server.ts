@@ -3184,7 +3184,14 @@ async function startServer() {
             })
           );
         } else if (parsed && parsed.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong', serverTime: Date.now() }));
+          ws.send(
+            JSON.stringify({
+              type: 'pong',
+              serverTime: Date.now(),
+              serverInstanceId: SERVER_INSTANCE_ID,
+              clientSentAt: typeof parsed.clientSentAt === 'number' ? parsed.clientSentAt : null,
+            })
+          );
         }
       } catch {
         // Ignore malformed WS message

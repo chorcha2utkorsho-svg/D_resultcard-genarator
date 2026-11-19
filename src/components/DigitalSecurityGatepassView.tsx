@@ -94,6 +94,7 @@ import {
 } from '../utils/gatepassAudio';
 import {
   broadcastLocalGatepassScan,
+  GatepassRealtimeDiagnostics,
   hasPlayedGuardianVoiceLog,
   isGuardianAudioEnabledPref,
   markGatepassLogSeen,
@@ -101,6 +102,7 @@ import {
   RealtimeSyncHealth,
   RealtimeTransportMode,
   setGuardianAudioEnabledPref,
+  useGatepassRealtime,
 } from '../hooks/useGatepassRealtime';
 import { parseJsonApiResponse } from '../utils/apiResponse';
 
@@ -118,6 +120,10 @@ interface DigitalSecurityGatepassViewProps {
   realtimeTransport?: RealtimeTransportMode;
   realtimeSyncHealth?: RealtimeSyncHealth;
   onForceCheckRealtime?: () => Promise<{ foundCount: number; latestLog: SecurityGatepassLog | null }>;
+  realtimeDiagnostics?: GatepassRealtimeDiagnostics;
+  onSendDiagnosticPing?: () => Promise<number | null>;
+  onReconnectRealtime?: () => void;
+  onClearDiagnosticLogs?: () => void;
   onRoleLogout?: () => void;
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
@@ -134,6 +140,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   realtimeTransport,
   realtimeSyncHealth,
   onForceCheckRealtime,
+  realtimeDiagnostics,
+  onSendDiagnosticPing,
+  onReconnectRealtime,
+  onClearDiagnosticLogs,
   onRoleLogout,
   isDeviceLocked = false,
   onInstallLockedDashboard,
@@ -1222,6 +1232,24 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (!loggedInGuardianStudent) return null;
     return students.find((s) => s.id === loggedInGuardianStudent.id) || loggedInGuardianStudent;
   }, [loggedInGuardianStudent, students]);
+
+  // Fallback realtime telemetry when Official previews a Guardian Dashboard (no external App-level hook passed)
+  const previewRealtime = useGatepassRealtime({
+    role: 'student',
+    studentId: activeSignedInStudent?.id || null,
+    portalId: activeSignedInStudent ? getStudentPortalId(activeSignedInStudent) : null,
+    classId: activeSignedInStudent?.classId || null,
+    roll: activeSignedInStudent?.roll || null,
+    enabled: !realtimeDiagnostics && activeTab === 'guardian_portal' && Boolean(activeSignedInStudent),
+  });
+
+  const effectiveRealtimeTransport = realtimeTransport ?? previewRealtime.connectionTransport;
+  const effectiveRealtimeSyncHealth = realtimeSyncHealth ?? previewRealtime.syncHealth;
+  const effectiveForceCheckRealtime = onForceCheckRealtime ?? previewRealtime.forceCheckNow;
+  const effectiveRealtimeDiagnostics = realtimeDiagnostics ?? previewRealtime.diagnostics;
+  const effectiveSendDiagnosticPing = onSendDiagnosticPing ?? previewRealtime.sendDiagnosticPing;
+  const effectiveReconnectRealtime = onReconnectRealtime ?? previewRealtime.reconnectRealtime;
+  const effectiveClearDiagnosticLogs = onClearDiagnosticLogs ?? previewRealtime.clearDiagnosticLogs;
 
   // Authenticate Guardian/Student (Strictly isolated per student via Portal ID, Class+Roll, or Phone + Password)
   const handleGuardianLogin = (identifier: string, pin: string, classIdFilter: string = guardianLoginClassId) => {
@@ -3424,9 +3452,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               isGuardianAlarmRinging={isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)}
               externalLiveRingingAlert={externalLiveRingingAlert}
               onDismissExternalRingingAlert={onDismissExternalRingingAlert}
-              realtimeTransport={realtimeTransport}
-              realtimeSyncHealth={realtimeSyncHealth}
-              onForceCheckRealtime={onForceCheckRealtime}
+              realtimeTransport={effectiveRealtimeTransport}
+              realtimeSyncHealth={effectiveRealtimeSyncHealth}
+              onForceCheckRealtime={effectiveForceCheckRealtime}
+              realtimeDiagnostics={effectiveRealtimeDiagnostics}
+              onSendDiagnosticPing={effectiveSendDiagnosticPing}
+              onReconnectRealtime={effectiveReconnectRealtime}
+              onClearDiagnosticLogs={effectiveClearDiagnosticLogs}
               ackSuccessFeedback={ackSuccessFeedback}
               isSubmittingAck={isSubmittingAck}
               guardianReplyText={guardianReplyText}

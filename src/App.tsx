@@ -118,6 +118,10 @@ function MainContent() {
     connectionTransport,
     syncHealth,
     forceCheckNow,
+    diagnostics,
+    sendDiagnosticPing,
+    reconnectRealtime,
+    clearDiagnosticLogs,
   } = useGatepassRealtime({
     role: authSession?.role,
     studentId: authSession?.role === 'student' ? authSession.accountId : null,
@@ -432,6 +436,10 @@ function MainContent() {
                 realtimeTransport={connectionTransport}
                 realtimeSyncHealth={syncHealth}
                 onForceCheckRealtime={forceCheckNow}
+                realtimeDiagnostics={diagnostics}
+                onSendDiagnosticPing={sendDiagnosticPing}
+                onReconnectRealtime={reconnectRealtime}
+                onClearDiagnosticLogs={clearDiagnosticLogs}
                 onRoleLogout={handleLogout}
                 isDeviceLocked={isDeviceLocked}
                 onInstallLockedDashboard={handleInstallLockedDashboard}

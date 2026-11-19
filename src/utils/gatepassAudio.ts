@@ -106,6 +106,15 @@ export interface GuardianAudioHardwareStatus {
   lastPlaybackError: string | null;
 }
 
+export interface AudioDiagnosticEvent {
+  id: string;
+  at: number;
+  category: 'audio_ctx' | 'unlock' | 'playback' | 'wakelock';
+  level: 'info' | 'ok' | 'warn' | 'error';
+  message: string;
+  detail?: string;
+}
+
 let sharedAudioCtx: AudioContext | null = null;
 let sharedCompressorNode: DynamicsCompressorNode | null = null;
 let sharedVoiceAudioEl: HTMLAudioElement | null = null;
@@ -163,6 +172,48 @@ const unlockSubscribers = new Set<(unlocked: boolean) => void>();
 const statusSubscribers = new Set<(status: GuardianAudioHardwareStatus) => void>();
 const playbackSubscribers = new Set<(playing: boolean) => void>();
 const pendingAlertSubscribers = new Set<(pending: PendingBlockedSpeechAlert | null) => void>();
+const audioDiagnosticSubscribers = new Set<(ev: AudioDiagnosticEvent) => void>();
+const recentAudioDiagnosticEvents: AudioDiagnosticEvent[] = [];
+
+function emitAudioDiagnostic(
+  category: AudioDiagnosticEvent['category'],
+  level: AudioDiagnosticEvent['level'],
+  message: string,
+  detail?: string
+): void {
+  const ev: AudioDiagnosticEvent = {
+    id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    at: Date.now(),
+    category,
+    level,
+    message,
+    detail,
+  };
+  recentAudioDiagnosticEvents.unshift(ev);
+  if (recentAudioDiagnosticEvents.length > 40) {
+    recentAudioDiagnosticEvents.length = 40;
+  }
+  for (const cb of audioDiagnosticSubscribers) {
+    try {
+      cb(ev);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+}
+
+export function getRecentAudioDiagnosticEvents(): AudioDiagnosticEvent[] {
+  return [...recentAudioDiagnosticEvents];
+}
+
+export function subscribeAudioDiagnosticEvents(
+  cb: (ev: AudioDiagnosticEvent) => void
+): () => void {
+  audioDiagnosticSubscribers.add(cb);
+  return () => {
+    audioDiagnosticSubscribers.delete(cb);
+  };
+}
 
 export function getGuardianAudioStatus(): GuardianAudioHardwareStatus {
   return {
@@ -277,11 +328,28 @@ export function getSharedAudioContext(): AudioContext | null {
     if (!AudioCtx) return null;
     if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
       sharedAudioCtx = new AudioCtx();
+      lastObservedCtxState = sharedAudioCtx.state;
+      emitAudioDiagnostic(
+        'audio_ctx',
+        sharedAudioCtx.state === 'running' ? 'ok' : 'warn',
+        `AudioContext তৈরি হয়েছে (অবস্থা: ${sharedAudioCtx.state})`,
+        `sampleRate=${sharedAudioCtx.sampleRate}Hz`
+      );
       sharedAudioCtx.onstatechange = () => {
         if (!sharedAudioCtx) return;
-        const isRunning = sharedAudioCtx.state === 'running';
+        const nextState = sharedAudioCtx.state;
+        const isRunning = nextState === 'running';
         if (isRunning && !audioUnlockedInSession) {
           audioUnlockedInSession = true;
+        }
+        if (nextState !== lastObservedCtxState) {
+          lastObservedCtxState = nextState;
+          emitAudioDiagnostic(
+            'audio_ctx',
+            isRunning ? 'ok' : 'warn',
+            `AudioContext অবস্থা পরিবর্তিত: ${nextState}`,
+            isRunning ? 'ভয়েস ও চাইম প্লেব্যাকের জন্য প্রস্তুত' : 'ব্রাউজার অডিও স্থগিত (suspended) রেখেছে'
+          );
         }
         notifyUnlockSubscribers();
       };
@@ -348,8 +416,10 @@ async function acquireWakeLock(): Promise<void> {
   try {
     if (!wakeLockSentinel) {
       wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+      emitAudioDiagnostic('wakelock', 'ok', 'স্ক্রিন Wake Lock সক্রিয় হয়েছে', 'স্ক্রিন ঘুমিয়ে যাওয়া রোধ করা হয়েছে');
       wakeLockSentinel?.addEventListener?.('release', () => {
         wakeLockSentinel = null;
+        emitAudioDiagnostic('wakelock', 'warn', 'স্ক্রিন Wake Lock মুক্ত (released) হয়েছে');
         notifyUnlockSubscribers();
       });
       notifyUnlockSubscribers();
@@ -580,7 +650,14 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
           .then(() => {
             activateBuffer();
           })
-          .catch(() => {});
+          .catch((err: any) => {
+            emitAudioDiagnostic(
+              'unlock',
+              'warn',
+              'AudioContext resume অনুরোধ ব্যর্থ হয়েছে',
+              String(err?.message || err || 'User gesture required')
+            );
+          });
       } else if (ctx.state === 'running') {
         activateBuffer();
       }
@@ -604,11 +681,18 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
             voiceElementPrimed = true;
             if (!audioUnlockedInSession) {
               audioUnlockedInSession = true;
+              emitAudioDiagnostic('unlock', 'ok', 'HTML5 Audio ও সেশন অডিও আনলক সম্পন্ন হয়েছে');
               notifyUnlockSubscribers();
             }
           })
-          .catch(() => {
+          .catch((err: any) => {
             // Do NOT mark unlocked on failed silent prime (e.g. passive scroll rejected by Chrome)
+            emitAudioDiagnostic(
+              'unlock',
+              'warn',
+              'HTML5 Audio প্রাইমিং ব্রাউজার দ্বারা স্থগিত হয়েছে',
+              String(err?.name || err?.message || 'NotAllowedError')
+            );
           });
       }
     }
@@ -653,6 +737,84 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
   }
 
   return audioUnlockedInSession;
+}
+
+export interface AudioResumeDiagnosticResult extends GuardianAudioHardwareStatus {
+  previousState: AudioContextState | 'unavailable';
+  resumedOk: boolean;
+  latencyMs: number;
+}
+
+/**
+ * Explicit user-gesture AudioContext.resume() force-unlock & hardware check used by Guardian Portal Diagnostics.
+ */
+export async function resumeAudioContextDiagnostic(): Promise<AudioResumeDiagnosticResult> {
+  const startedAt = Date.now();
+  const ctx = getSharedAudioContext();
+  if (!ctx) {
+    emitAudioDiagnostic('audio_ctx', 'error', 'এই ব্রাউজারে Web AudioContext সমর্থিত নয়');
+    const snap = getGuardianAudioStatus();
+    return {
+      ...snap,
+      previousState: 'unavailable',
+      resumedOk: false,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
+  const previousState = ctx.state;
+  try {
+    if (ctx.state !== 'running') {
+      await ctx.resume();
+    }
+    if (ctx.state === 'running') {
+      try {
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start(0);
+      } catch {
+        // Non-fatal silent prime buffer failure
+      }
+      audioUnlockedInSession = true;
+      lastPlaybackError = null;
+      if (liveWatchDesired) {
+        startSubAudibleKeepAlive(ctx);
+      }
+      unlockMobileAudioAndSpeech(false);
+      const elapsed = Date.now() - startedAt;
+      emitAudioDiagnostic(
+        'audio_ctx',
+        'ok',
+        `AudioContext.resume() সম্পন্ন: '${previousState}' → '${ctx.state}'`,
+        `sampleRate=${ctx.sampleRate}Hz, keepAlive=${Boolean(liveWatchOsc)}, ${elapsed}ms`
+      );
+    } else {
+      unlockMobileAudioAndSpeech(false);
+      emitAudioDiagnostic(
+        'audio_ctx',
+        'warn',
+        `AudioContext.resume() পরেও অবস্থা '${ctx.state}' রয়েছে (আগে: '${previousState}')`
+      );
+    }
+  } catch (err: any) {
+    lastPlaybackError = String(err?.message || err || 'AudioContext.resume() failed');
+    emitAudioDiagnostic(
+      'audio_ctx',
+      'error',
+      `AudioContext.resume() ব্যর্থ হয়েছে (${previousState})`,
+      lastPlaybackError
+    );
+  }
+  notifyUnlockSubscribers();
+  const snap = getGuardianAudioStatus();
+  return {
+    ...snap,
+    previousState,
+    resumedOk: snap.audioContextState === 'running',
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 export function replayPendingBlockedSpeech(): boolean {
@@ -1033,6 +1195,12 @@ async function playChunksViaWebAudio(
         lastEngineUsed = 'webaudio';
         lastPlaybackError = null;
         audioUnlockedInSession = true;
+        emitAudioDiagnostic(
+          'playback',
+          'ok',
+          'Web Audio API ইঞ্জিনে বাংলা ভয়েস প্লেব্যাক শুরু হয়েছে',
+          `chunks=${chunks.length}, ctx=${ctx.state}`
+        );
         notifyUnlockSubscribers();
         options.onFirstStart?.();
       }
@@ -1045,6 +1213,8 @@ async function playChunksViaWebAudio(
     return started;
   } catch (err: any) {
     lastPlaybackError = String(err?.message || err || 'WebAudio decode failed');
+    emitAudioDiagnostic('playback', 'warn', 'Web Audio প্লেব্যাক ব্যর্থ, HTML Audio চেষ্টা করা হচ্ছে', lastPlaybackError);
+    notifyUnlockSubscribers();
     return false;
   }
 }
@@ -1418,6 +1588,9 @@ async function playPhraseList(
         playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, fetchedBuffers, runToken, {
           onFirstStart: fireStartOnce,
         });
+        if (playedPhrase) {
+          emitAudioDiagnostic('playback', 'ok', 'HTML5 Audio ফ্যালব্যাক ইঞ্জিনে ভয়েস বেজেছে');
+        }
       }
     }
 
@@ -1432,8 +1605,15 @@ async function playPhraseList(
         onBlocked: pIdx === 0 ? fireBlockedOnce : undefined,
       });
       if (playedPhrase) {
+        emitAudioDiagnostic('playback', 'ok', 'ব্রাউজার Web Speech ইঞ্জিনে ভয়েস বেজেছে');
         playedAnyPhrase = true;
       } else {
+        emitAudioDiagnostic(
+          'playback',
+          'error',
+          'সব অডিও ইঞ্জিন ব্লক বা ব্যর্থ হয়েছে — ম্যানুয়াল শুনুন ব্যানার দেখানো হয়েছে',
+          lastPlaybackError || undefined
+        );
         if (!playedAnyPhrase) fireBlockedOnce();
         break;
       }

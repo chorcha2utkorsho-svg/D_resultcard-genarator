@@ -1181,6 +1181,56 @@ export function playAlarmChime(): void {
   }
 }
 
+// Clear 3-burst unmistakable guardian attention bell (Doorbell / School Bell cadence)
+export function playGuardianAttentionBell(): void {
+  try {
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
+
+    const triggerBell = () => {
+      if (ctx.state !== 'running') return;
+      const now = ctx.currentTime;
+      const bursts = [0, 0.72, 1.44];
+      const pattern = [
+        { f1: 783.99, f2: 1174.66, offset: 0, dur: 0.2 },
+        { f1: 1046.5, f2: 1567.98, offset: 0.16, dur: 0.24 },
+        { f1: 1318.51, f2: 1975.53, offset: 0.34, dur: 0.32 },
+      ];
+      const dest = getLoudAudioDestination(ctx);
+      for (const bStart of bursts) {
+        for (const n of pattern) {
+          const t0 = now + bStart + n.offset;
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc1.type = 'triangle';
+          osc2.type = 'sine';
+          osc1.frequency.setValueAtTime(n.f1, t0);
+          osc2.frequency.setValueAtTime(n.f2, t0);
+          gain.gain.setValueAtTime(0.001, t0);
+          gain.gain.linearRampToValueAtTime(0.68, t0 + 0.018);
+          gain.gain.exponentialRampToValueAtTime(0.001, t0 + n.dur);
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(dest);
+          osc1.start(t0);
+          osc2.start(t0);
+          osc1.stop(t0 + n.dur);
+          osc2.stop(t0 + n.dur);
+        }
+      }
+    };
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(triggerBell).catch(() => {});
+    } else {
+      triggerBell();
+    }
+  } catch {
+    // Ignore audio context restriction
+  }
+}
+
 /**
  * Split Bengali text strictly into <= 145 char sentence chunks so `/api/tts/bn` always returns a
  * single pure MP3 frame stream (ZERO multi-MP3 ID3 concatenation errors in AudioContext.decodeAudioData!).
@@ -1325,9 +1375,16 @@ export async function prewarmGuardianVoiceCache(
   const exitPhrases = buildGuardianRepeatedAlertPhrases(student, 'exit', dailySchedule, 2);
   const uniqueChunks = Array.from(
     new Set(
-      [...entryPhrases, ...exitPhrases].flatMap((p) => splitBengaliSentences(p, 145))
+      [
+        ...entryPhrases,
+        ...exitPhrases,
+        'মনোযোগ দিন! আপনার সন্তান বিদ্যালয়ে প্রবেশ করেছে।',
+        'মনোযোগ দিন! আপনার সন্তান বিদ্যালয় থেকে প্রস্থান করেছে।',
+      ].flatMap((p) => splitBengaliSentences(p, 145))
     )
-  ).slice(0, 12);
+  ).slice(0, 14);
+
+  const ctx = getSharedAudioContext();
 
   for (const chunk of uniqueChunks) {
     const key = chunk.slice(0, 200);
@@ -1339,9 +1396,9 @@ export async function prewarmGuardianVoiceCache(
         buf = null;
       }
     }
-    if (buf && !decodedAudioBufferCache.has(key) && sharedAudioCtx && sharedAudioCtx.state === 'running') {
+    if (buf && !decodedAudioBufferCache.has(key) && ctx && ctx.state === 'running') {
       try {
-        const decoded = await sharedAudioCtx.decodeAudioData(buf.slice(0));
+        const decoded = await ctx.decodeAudioData(buf.slice(0));
         if (decodedAudioBufferCache.size >= 80) {
           const oldest = decodedAudioBufferCache.keys().next().value;
           if (oldest) decodedAudioBufferCache.delete(oldest);
@@ -1443,7 +1500,7 @@ async function playChunksViaWebAudio(
       const chunkKey = chunks[i].slice(0, 200);
       let decoded = decodedAudioBufferCache.get(chunkKey);
       if (!decoded) {
-        const rawBuf = buffers[i];
+        const rawBuf = buffers[i] || ttsArrayBufferCache.get(chunkKey) || null;
         if (!rawBuf || rawBuf.byteLength === 0) continue;
         decoded = await ctx.decodeAudioData(rawBuf.slice(0));
         if (decodedAudioBufferCache.size >= 80) {
@@ -1832,30 +1889,49 @@ async function playPhraseList(
     const sentenceChunks = splitBengaliSentences(phrase, 145);
     let playedPhrase = false;
 
-    if (isOnline) {
-      const fetchedBuffers: (ArrayBuffer | null)[] = await Promise.all(
-        sentenceChunks.map((chunk) =>
-          fetchSingleChunkTtsBuffer(chunk).catch((err: any) => {
-            lastPlaybackError = String(err?.message || 'TTS fetch failed');
-            return null;
-          })
-        )
-      );
-      if (runToken !== currentSpeechRunToken) break;
-
-      if (fetchedBuffers.some(Boolean)) {
-        playedPhrase = await playChunksViaWebAudio(sentenceChunks, fetchedBuffers, runToken, {
-          onFirstStart: fireStartOnce,
-        });
-      }
-
-      if (!playedPhrase && runToken === currentSpeechRunToken) {
-        playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, fetchedBuffers, runToken, {
-          onFirstStart: fireStartOnce,
-        });
-        if (playedPhrase) {
-          emitAudioDiagnostic('playback', 'ok', 'HTML5 Audio ফ্যালব্যাক ইঞ্জিনে ভয়েস বেজেছে');
+    const preparedBuffers: (ArrayBuffer | null)[] = await Promise.all(
+      sentenceChunks.map(async (chunk) => {
+        const key = chunk.slice(0, 200);
+        if (decodedAudioBufferCache.has(key)) {
+          return ttsArrayBufferCache.get(key) || null;
         }
+        const cachedRaw = ttsArrayBufferCache.get(key);
+        if (cachedRaw && cachedRaw.byteLength > 0) {
+          return cachedRaw;
+        }
+        if (!isOnline) {
+          return null;
+        }
+        try {
+          return await fetchSingleChunkTtsBuffer(chunk);
+        } catch (err: any) {
+          lastPlaybackError = String(err?.message || 'TTS fetch failed');
+          return null;
+        }
+      })
+    );
+    if (runToken !== currentSpeechRunToken) break;
+
+    const hasPlayableCacheOrBuffer = sentenceChunks.some((chunk, idx) => {
+      const key = chunk.slice(0, 200);
+      return (
+        decodedAudioBufferCache.has(key) ||
+        Boolean(preparedBuffers[idx] && preparedBuffers[idx]!.byteLength > 0)
+      );
+    });
+
+    if (hasPlayableCacheOrBuffer) {
+      playedPhrase = await playChunksViaWebAudio(sentenceChunks, preparedBuffers, runToken, {
+        onFirstStart: fireStartOnce,
+      });
+    }
+
+    if (!playedPhrase && isOnline && runToken === currentSpeechRunToken) {
+      playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, preparedBuffers, runToken, {
+        onFirstStart: fireStartOnce,
+      });
+      if (playedPhrase) {
+        emitAudioDiagnostic('playback', 'ok', 'HTML5 Audio ফ্যালব্যাক ইঞ্জিনে ভয়েস বেজেছে');
       }
     }
 
@@ -1873,10 +1949,14 @@ async function playPhraseList(
         emitAudioDiagnostic('playback', 'ok', 'ব্রাউজার Web Speech ইঞ্জিনে ভয়েস বেজেছে');
         playedAnyPhrase = true;
       } else {
+        // Fallback: if AudioContext is running, at least ring the clear guardian attention bell loudly
+        if (sharedAudioCtx && sharedAudioCtx.state === 'running') {
+          playGuardianAttentionBell();
+        }
         emitAudioDiagnostic(
           'playback',
           'error',
-          'সব অডিও ইঞ্জিন ব্লক বা ব্যর্থ হয়েছে — ম্যানুয়াল শুনুন ব্যানার দেখানো হয়েছে',
+          'সব ভয়েস ইঞ্জিন ব্যর্থ হয়েছে — এলার্ম বেল বাজানো ও ম্যানুয়াল শুনুন ব্যানার দেখানো হয়েছে',
           lastPlaybackError || undefined
         );
         if (!playedAnyPhrase) fireBlockedOnce();

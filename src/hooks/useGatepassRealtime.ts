@@ -6,8 +6,10 @@ import { parseJsonApiResponse } from '../utils/apiResponse';
 import {
   AudioDiagnosticEvent,
   buildGuardianVoiceMessage,
+  getGuardianAudioStatus,
   getRecentAudioDiagnosticEvents,
   playAlarmChime,
+  playGuardianAttentionBell,
   prewarmGuardianVoiceCache,
   setGuardianLiveWatchActive,
   setPendingBlockedSpeech,
@@ -391,7 +393,7 @@ export function useGatepassRealtime({
         { detail: `action=${action}, via=${viaTransport || 'realtime'}, logId=${log.id}` }
       );
 
-      playAlarmChime();
+      playGuardianAttentionBell();
       showGuardianSystemNotification(
         `${schoolNameRef.current || 'ডি-লিকন একাডেমী'} • ${targetStudent.nameBn}`,
         message
@@ -399,13 +401,17 @@ export function useGatepassRealtime({
 
       speakRepeatedGuardianAlert(targetStudent, action, currentSchedule, {
         repeatCount: 6,
-        delayMs: 160,
+        delayMs: 180,
         onBlocked: () => {
+          const hw = getGuardianAudioStatus();
+          if (hw.audioContextState === 'running') {
+            playAlarmChime();
+          }
           appendDiagnosticLog(
             'TRIGGER',
             'error',
-            'ভয়েস অটোপ্লে ব্রাউজার দ্বারা বাধাপ্রাপ্ত হয়েছে (AudioContext suspended)',
-            { detail: `logId=${log.id}` }
+            'ভয়েস অটোপ্লে ব্রাউজার দ্বারা বাধাপ্রাপ্ত হয়েছে বা ভয়েস ইঞ্জিন ব্যর্থ',
+            { detail: `logId=${log.id}, ctx=${hw.audioContextState}` }
           );
           setPendingBlockedSpeech({
             message,
@@ -480,6 +486,7 @@ export function useGatepassRealtime({
     const nowMs = Date.now() + (clockOffsetRef.current ?? 0);
     const matchingLogs = securityLogs.filter((l) => isMatchingStudentLog(l));
 
+    const baselineWindowMs = clockOffsetRef.current !== null ? 3 * 60 * 1000 : 15 * 60 * 1000;
     if (!hasContextLogsBaselineRef.current) {
       hasContextLogsBaselineRef.current = true;
       let newestRecentUnseen: SecurityGatepassLog | null = null;
@@ -491,7 +498,7 @@ export function useGatepassRealtime({
             typeof item.serverTimestamp === 'number'
               ? item.serverTimestamp
               : new Date(item.timestamp).getTime() || 0;
-          if (logMs >= nowMs - 90000 && !item.guardianAcknowledged) {
+          if (logMs >= nowMs - baselineWindowMs && !item.guardianAcknowledged) {
             if (!newestRecentUnseen) {
               newestRecentUnseen = item;
             }

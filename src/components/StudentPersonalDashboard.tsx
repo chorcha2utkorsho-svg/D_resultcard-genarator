@@ -1219,76 +1219,103 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
             )}
 
-            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <span className="inline-flex items-center gap-1.5 font-mono">
-                  <span className="text-slate-400">audioContext.state:</span>
-                  <strong
-                    className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
+            <div className="text-[11px] text-slate-300 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2.5 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span className="inline-flex items-center gap-1.5 font-mono">
+                    <span className="text-slate-400">audioContext.state:</span>
+                    <strong
+                      className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
+                        audioHardwareStatus.audioContextState === 'running'
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                          : audioHardwareStatus.audioContextState === 'suspended'
+                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
+                          : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                      }`}
+                    >
+                      '{audioHardwareStatus.audioContextState}'
+                    </strong>
+                  </span>
+                  <span className="inline-flex items-center gap-1 font-mono">
+                    <span className="text-slate-400">WS:</span>
+                    <strong
+                      className={`px-1.5 py-0.5 rounded border text-[10.5px] font-bold ${
+                        realtimeDiagnostics?.wsReadyState === 'OPEN'
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                          : realtimeTransport === 'sse' || realtimeTransport === 'polling'
+                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
+                          : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                      }`}
+                    >
+                      {realtimeDiagnostics?.wsReadyState || 'CONNECTING'}
+                    </strong>
+                  </span>
+                  {realtimeDiagnostics?.serverInstanceId && (
+                    <span className="inline-flex items-center gap-1 font-mono text-slate-300">
+                      <span className="text-slate-400">ইনস্ট্যান্স:</span>
+                      <strong className="text-amber-300">{realtimeDiagnostics.serverInstanceId}</strong>
+                    </span>
+                  )}
+                  {audioResumeFeedback && (
+                    <span className="font-mono text-[10.5px] text-emerald-300">
+                      {audioResumeFeedback}
+                    </span>
+                  )}
+                  {currentServerHost && (
+                    <span className="text-slate-400 font-mono truncate max-w-xs sm:max-w-sm">
+                      সার্ভার: <strong className="text-slate-200">{currentServerHost}</strong>
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isResumingAudioCtx}
+                    onClick={handleDiagnosticResumeAudio}
+                    className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold font-mono flex items-center gap-1 cursor-pointer transition border ${
                       audioHardwareStatus.audioContextState === 'running'
-                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
-                        : audioHardwareStatus.audioContextState === 'suspended'
-                        ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
-                        : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                        ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border-emerald-500/60'
+                        : 'bg-amber-400 hover:bg-amber-300 text-slate-950 border-amber-300'
+                    }`}
+                    title="AudioContext.resume() সরাসরি কল করে অডিও আনলক যাচাই করুন"
+                  >
+                    <Volume2 className="w-3 h-3" />
+                    <span>
+                      {isResumingAudioCtx
+                        ? 'Resuming...'
+                        : audioHardwareStatus.audioContextState === 'running'
+                        ? 'AudioContext.resume() ✓'
+                        : 'Force-Unlock: AudioContext.resume()'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSection('diagnostics')}
+                    className="px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700"
+                  >
+                    <Activity className="w-3 h-3" />
+                    <span>ডায়াগনস্টিক লগ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopySameServerLink}
+                    className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition ${
+                      copiedSameServerLink
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
                     }`}
                   >
-                    '{audioHardwareStatus.audioContextState}'
-                  </strong>
-                </span>
-                {audioResumeFeedback && (
-                  <span className="font-mono text-[10.5px] text-emerald-300">
-                    {audioResumeFeedback}
-                  </span>
-                )}
-                {currentServerHost && (
-                  <span className="text-slate-400 font-mono truncate max-w-xs sm:max-w-sm">
-                    সার্ভার: <strong className="text-slate-200">{currentServerHost}</strong>
-                  </span>
-                )}
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedSameServerLink ? 'লিংক কপি ✓' : 'লিংক কপি'}</span>
+                  </button>
+                </div>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={isResumingAudioCtx}
-                  onClick={handleDiagnosticResumeAudio}
-                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold font-mono flex items-center gap-1 cursor-pointer transition border ${
-                    audioHardwareStatus.audioContextState === 'running'
-                      ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border-emerald-500/60'
-                      : 'bg-amber-400 hover:bg-amber-300 text-slate-950 border-amber-300'
-                  }`}
-                  title="AudioContext.resume() সরাসরি কল করে অডিও আনলক যাচাই করুন"
-                >
-                  <Volume2 className="w-3 h-3" />
-                  <span>
-                    {isResumingAudioCtx
-                      ? 'Resuming...'
-                      : audioHardwareStatus.audioContextState === 'running'
-                      ? 'AudioContext.resume() ✓'
-                      : 'Force-Unlock: AudioContext.resume()'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDashboardSection('diagnostics')}
-                  className="px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700"
-                >
-                  <Activity className="w-3 h-3" />
-                  <span>ডায়াগনস্টিক লগ</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCopySameServerLink}
-                  className={`px-2.5 py-1 rounded-md text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition ${
-                    copiedSameServerLink
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
-                  }`}
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>{copiedSameServerLink ? 'লিংক কপি ✓' : 'লিংক কপি'}</span>
-                </button>
-              </div>
+              {currentServerHost.startsWith('ais-dev-') && (
+                <div className="text-[10.5px] text-amber-200/90 border-t border-slate-800/80 pt-1.5">
+                  নোট: দুই ফোনে রিয়েল-টাইম ভয়েস পেতে স্ক্যানার ফোন ও অভিভাবক ফোন দুটোতেই একই <span className="font-mono font-bold">Shared App URL (ais-pre-...)</span> অথবা একই <span className="font-mono font-bold">ইনস্ট্যান্স আইডি</span> খোলা থাকতে হবে (কোড আপডেটের পর Shared App পুনরায় শেয়ার/পাবলিশ করুন)।
+                </div>
+              )}
             </div>
 
             {ackSuccessFeedback && (

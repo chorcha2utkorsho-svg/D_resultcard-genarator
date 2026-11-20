@@ -7052,10 +7052,10 @@
       "records": {
         "std_1794323092397_0_svik": {
           "status": "present",
-          "remarks": "ডিজিটাল গেটপাস স্ক্যান • ০৭:৪৬ PM | ডিজিটাল গেটপাস স্ক্যান • ০৮:১৫ PM"
+          "remarks": "ডিজিটাল গেটপাস স্ক্যান • ০৭:৪৬ PM"
         }
       },
-      "updatedAt": "2026-11-19T14:15:55.016Z"
+      "updatedAt": "2026-11-19T13:46:24.075Z"
     }
   },
   "calendarEvents": [
@@ -7331,22 +7331,6 @@
   "feeInvoices": [],
   "feeReceipts": [],
   "securityLogs": [
-    {
-      "id": "sec-e2e-1795097754921",
-      "studentId": "std_1794323092397_0_svik",
-      "portalUserId": "DL-C4-01",
-      "classId": "class_4",
-      "studentNameBn": "জিসান আহমেদ",
-      "studentRoll": 1,
-      "classNameBn": "চতুর্থ শ্রেণি",
-      "action": "entry",
-      "timestamp": "2026-11-19T14:15:54.921Z",
-      "status": "verified",
-      "voiceDispatched": true,
-      "smsDispatched": true,
-      "section": "ক",
-      "serverTimestamp": 1795097755007
-    },
     {
       "id": "sec_e2e_verify_1795021700960",
       "studentId": "std_1794323092397_0_svik",
@@ -9698,21 +9682,20 @@
   ],
   "staffAttendance": [],
   "admissionRequests": [],
-  "_lastUpdated": "2026-11-19T14:15:55.016Z",
+  "_lastUpdated": "2026-11-19T13:46:24.075Z",
   "_lastSecurityEvent": {
-    "id": "sec-e2e-1795097754921",
+    "id": "sec_e2e_verify_1795021700960",
     "studentId": "std_1794323092397_0_svik",
     "portalUserId": "DL-C4-01",
     "classId": "class_4",
+    "section": "ক",
     "studentNameBn": "জিসান আহমেদ",
     "studentRoll": 1,
     "classNameBn": "চতুর্থ শ্রেণি",
     "action": "entry",
-    "timestamp": "2026-11-19T14:15:54.921Z",
+    "timestamp": "2026-11-18T17:08:20.960Z",
     "status": "verified",
-    "voiceDispatched": true,
-    "smsDispatched": true,
-    "section": "ক",
-    "serverTimestamp": 1795097755007
+    "serverTimestamp": 1795021700967,
+    "guardianAcknowledged": false
   }
 }

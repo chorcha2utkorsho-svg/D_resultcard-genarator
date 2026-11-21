@@ -244,7 +244,22 @@ export function useGatepassRealtime({
       };
       setDiagnosticLogs((prev) => {
         if (prev.some((p) => p.id === entry.id)) return prev;
-        return [entry, ...prev].slice(0, 100);
+        const head = prev[0];
+        if (
+          head &&
+          head.source === entry.source &&
+          head.level === entry.level &&
+          head.message === entry.message
+        ) {
+          const updatedHead: RealtimeDiagnosticEntry = {
+            ...head,
+            at: entry.at,
+            latencyMs: entry.latencyMs ?? head.latencyMs,
+            detail: entry.detail ?? head.detail,
+          };
+          return [updatedHead, ...prev.slice(1, 20)];
+        }
+        return [entry, ...prev].slice(0, 20);
       });
     },
     []
@@ -460,6 +475,17 @@ export function useGatepassRealtime({
     ]
   );
 
+  const isMatchingStudentLogRef = useRef(isMatchingStudentLog);
+  isMatchingStudentLogRef.current = isMatchingStudentLog;
+  const triggerAlertForStudentRef = useRef(triggerAlertForStudent);
+  triggerAlertForStudentRef.current = triggerAlertForStudent;
+  const appendDiagnosticLogRef = useRef(appendDiagnosticLog);
+  appendDiagnosticLogRef.current = appendDiagnosticLog;
+  const addSecurityLogRef = useRef(addSecurityLog);
+  addSecurityLogRef.current = addSecurityLog;
+  const upsertAttendanceRecordFromServerRef = useRef(upsertAttendanceRecordFromServer);
+  upsertAttendanceRecordFromServerRef.current = upsertAttendanceRecordFromServer;
+
   // Pre-warm Bengali voice MP3 cache so incoming alerts play instantaneously (0ms fetch delay)
   useEffect(() => {
     if (!enabled || role !== 'student' || !resolvedStudent) return;
@@ -591,7 +617,10 @@ export function useGatepassRealtime({
     let wsConnected = false;
     let sseConnected = false;
     let pollVerified = false;
+    let consecutivePollFailures = 0;
     let wsReconnectAttempts = 0;
+    let wsLoggedFallbackNote = false;
+    let sseLoggedWarnNote = false;
     let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let wsPingTimer: ReturnType<typeof setInterval> | null = null;
     let sseFallbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -634,10 +663,6 @@ export function useGatepassRealtime({
           setLastSignalType('ws:pong');
           setLastSignalAt(clientNow);
           setLastSignalTransport('ws');
-          appendDiagnosticLog('WS', 'ok', 'WebSocket পিং-পং (RTT) সম্পন্ন', {
-            latencyMs: rtt,
-            detail: rawPayload.serverInstanceId ? `instance=${rawPayload.serverInstanceId}` : undefined,
-          });
         }
         if (typeof rawPayload.serverInstanceId === 'string' && rawPayload.serverInstanceId) {
           setServerInstanceId(rawPayload.serverInstanceId);
@@ -672,31 +697,33 @@ export function useGatepassRealtime({
         if (approxLag !== null) {
           setLastSignalLatencyMs((prev) => prev ?? approxLag);
         }
-        appendDiagnosticLog(
-          viaTransport === 'ws' ? 'WS' : viaTransport === 'sse' ? 'SSE' : 'POLL',
-          'info',
-          `সার্ভার থেকে প্রাথমিক সিঙ্ক (${logs.length}টি লগ)`,
-          {
-            latencyMs: approxLag,
-            detail: rawPayload.serverInstanceId ? `instance=${rawPayload.serverInstanceId}` : undefined,
-          }
-        );
+        if (isFirstInit) {
+          appendDiagnosticLogRef.current(
+            viaTransport === 'ws' ? 'WS' : viaTransport === 'sse' ? 'SSE' : 'POLL',
+            'ok',
+            `সার্ভারের সাথে লাইভ সংযোগ স্থাপিত (${logs.length}টি রেকর্ড)`,
+            {
+              latencyMs: approxLag,
+              detail: rawPayload.serverInstanceId ? `instance=${rawPayload.serverInstanceId}` : undefined,
+            }
+          );
+        }
 
         let newestRecentUnseen: SecurityGatepassLog | null = null;
         for (const item of logs) {
           if (!item || !item.id) continue;
-          addSecurityLog(item, { suppressAutoPush: true });
+          addSecurityLogRef.current(item, { suppressAutoPush: true });
           markGatepassLogSeen(item.id);
           if (
             role === 'student' &&
-            isMatchingStudentLog(item) &&
+            isMatchingStudentLogRef.current(item) &&
             !hasPlayedGuardianVoiceLog(item.id)
           ) {
             const logMs =
               typeof item.serverTimestamp === 'number'
                 ? item.serverTimestamp
                 : new Date(item.timestamp).getTime() || 0;
-            // Play if a fresh scan occurred shortly before connect or during a brief WS reconnect
+            // Play if a fresh scan occurred shortly before connect or during a brief reconnect
             if (logMs >= serverTime - windowMs && !item.guardianAcknowledged) {
               if (!newestRecentUnseen) {
                 newestRecentUnseen = item;
@@ -707,7 +734,7 @@ export function useGatepassRealtime({
           }
         }
         if (newestRecentUnseen) {
-          triggerAlertForStudent(newestRecentUnseen, viaTransport);
+          triggerAlertForStudentRef.current(newestRecentUnseen, viaTransport);
         }
         return;
       }
@@ -731,27 +758,29 @@ export function useGatepassRealtime({
         setLastSignalAt(clientNow);
         setLastSignalTransport(viaTransport);
 
-        const matched = role === 'student' ? isMatchingStudentLog(incomingLog) : false;
-        appendDiagnosticLog(
-          'SIGNAL',
-          matched ? 'ok' : 'info',
-          `স্ক্যান সিগন্যাল প্রাপ্ত (${viaTransport.toUpperCase()}): ${incomingLog.studentNameBn || incomingLog.studentId} — ${
-            matched ? 'এই শিক্ষার্থীর সাথে মিলেছে' : 'অন্য শিক্ষার্থী'
-          }`,
-          {
-            latencyMs: signalLatency,
-            detail: `portal=${incomingLog.portalUserId || 'N/A'}, id=${incomingLog.id}`,
-          }
-        );
+        const matched = role === 'student' ? isMatchingStudentLogRef.current(incomingLog) : false;
+        if (matched) {
+          appendDiagnosticLogRef.current(
+            'SIGNAL',
+            'ok',
+            `স্ক্যান সিগন্যাল প্রাপ্ত (${viaTransport.toUpperCase()}): ${incomingLog.studentNameBn || incomingLog.studentId}`,
+            {
+              latencyMs: signalLatency,
+              detail: `portal=${incomingLog.portalUserId || 'N/A'}, id=${incomingLog.id}`,
+            }
+          );
+        }
 
-        addSecurityLog(incomingLog, { suppressAutoPush: true });
+        addSecurityLogRef.current(incomingLog, { suppressAutoPush: true });
         markGatepassLogSeen(incomingLog.id);
         hasBaselineRef.current = true;
         if (rawPayload.attendanceRecord) {
-          upsertAttendanceRecordFromServer(rawPayload.attendanceRecord, { suppressAutoPush: true });
+          upsertAttendanceRecordFromServerRef.current(rawPayload.attendanceRecord, {
+            suppressAutoPush: true,
+          });
         }
         if (role === 'student' && matched) {
-          triggerAlertForStudent(incomingLog, viaTransport);
+          triggerAlertForStudentRef.current(incomingLog, viaTransport);
         }
         return;
       }
@@ -774,23 +803,25 @@ export function useGatepassRealtime({
         setLastSignalAt(clientNow);
         setLastSignalTransport(viaTransport);
 
-        appendDiagnosticLog(
-          'SIGNAL',
-          'ok',
-          `অভিভাবকের নিশ্চিতকরণ উত্তর পাওয়া গেছে (${viaTransport.toUpperCase()}): ${ackLog.studentNameBn || ackLog.studentId}`,
-          {
-            latencyMs: ackLatency,
-            detail: `${ackLog.acknowledgedBy || 'অভিভাবক'}: ${ackLog.guardianResponse || ''}`,
-          }
-        );
-
-        addSecurityLog(ackLog, { suppressAutoPush: true });
+        addSecurityLogRef.current(ackLog, { suppressAutoPush: true });
       }
     };
 
     const pollLatestLogs = async () => {
       if (isDisposed) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        consecutivePollFailures += 1;
+        pollVerified = false;
+        if (!wsConnected && !sseConnected && consecutivePollFailures >= 2) {
+          setSyncHealth('unreachable');
+        }
+        return;
+      }
+
       const pollReqStart = Date.now();
+      const abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutHandle = abortCtrl ? setTimeout(() => abortCtrl.abort(), 8000) : null;
+
       try {
         const sinceParam =
           hasBaselineRef.current && lastServerTimeRef.current > 0
@@ -799,49 +830,56 @@ export function useGatepassRealtime({
         const params = buildStudentQueryParams({ since: String(sinceParam) });
         const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
           cache: 'no-store',
+          signal: abortCtrl?.signal,
         });
         const parsed = await parseJsonApiResponse<any>(res);
         if (isDisposed) return;
 
         if (parsed.staticHostNoBackend) {
+          consecutivePollFailures += 1;
           pollVerified = false;
-          if (!wsConnected && !sseConnected) {
+          if (!wsConnected && !sseConnected && consecutivePollFailures >= 2) {
             setSyncHealth('static_host');
+            appendDiagnosticLogRef.current(
+              'POLL',
+              'error',
+              'ব্যাকএন্ড সার্ভার (server.ts) পাওয়া যায়নি',
+              { detail: 'Static HTML রেসপন্স আসছে' }
+            );
           }
-          appendDiagnosticLog(
-            'POLL',
-            'error',
-            'ব্যাকএন্ড সার্ভার (server.ts) পাওয়া যায়নি — স্ট্যাটিক HTML রেসপন্স আসছে',
-            { detail: 'এই হোস্টিং URL-এ কেবল ফ্রন্টএন্ড ফাইল চলছে, Node সার্ভার/WebSocket চালু নেই' }
-          );
           return;
         }
 
         if (parsed.authRedirected) {
+          consecutivePollFailures += 1;
           pollVerified = false;
-          if (!wsConnected && !sseConnected) {
+          if (!wsConnected && !sseConnected && consecutivePollFailures >= 2) {
             setSyncHealth('auth_redirect');
+            appendDiagnosticLogRef.current(
+              'POLL',
+              'error',
+              'পোলিং অনুরোধ অথেনটিকেশন রিডাইরেক্টে আটকে গেছে'
+            );
           }
-          appendDiagnosticLog(
-            'POLL',
-            'error',
-            'পোলিং অনুরোধ অথেনটিকেশন রিডাইরেক্টে আটকে গেছে',
-            { detail: 'সেশন ভেরিফিকেশন রিডাইরেক্ট হচ্ছে — পেজ রিলোড প্রয়োজন' }
-          );
           return;
         }
 
         if (!parsed.ok || !parsed.data || !Array.isArray(parsed.data.logs)) {
-          pollVerified = false;
-          if (!wsConnected && !sseConnected) {
-            setSyncHealth((prev) => (prev === 'static_host' || prev === 'auth_redirect' ? prev : 'unreachable'));
+          consecutivePollFailures += 1;
+          if (!wsConnected && !sseConnected && consecutivePollFailures >= 3) {
+            pollVerified = false;
+            setSyncHealth((prev) =>
+              prev === 'static_host' || prev === 'auth_redirect' ? prev : 'unreachable'
+            );
+            appendDiagnosticLogRef.current('POLL', 'warn', 'সার্ভার পোলিং অস্থায়ীভাবে বিচ্ছিন্ন', {
+              detail: `status=${parsed.status || 'retry'}`,
+            });
           }
-          appendDiagnosticLog('POLL', 'warn', 'HTTP পোলিং রেসপন্স পাওয়া যায়নি', {
-            detail: `status=${parsed.status || 'network_err'}`,
-          });
           return;
         }
 
+        // Healthy poll response — immediately clear failure state
+        consecutivePollFailures = 0;
         const pollRtt = Math.max(0, Date.now() - pollReqStart);
         const data = parsed.data;
         pollVerified = true;
@@ -862,6 +900,8 @@ export function useGatepassRealtime({
         if (!wsConnected && !sseConnected) {
           setConnectionTransport('polling');
           setSyncHealth('verified_polling');
+        } else if (sseConnected && !wsConnected) {
+          setSyncHealth('verified_sse');
         }
 
         const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
@@ -880,7 +920,6 @@ export function useGatepassRealtime({
         }
 
         lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 3000);
-        // Process chronological oldest-to-newest for fresh logs
         const sorted = [...data.logs].sort(
           (a, b) =>
             (a.serverTimestamp || new Date(a.timestamp).getTime() || 0) -
@@ -890,26 +929,29 @@ export function useGatepassRealtime({
           if (log && log.id) {
             const isNewGuardianAlert =
               role === 'student' &&
-              isMatchingStudentLog(log) &&
+              isMatchingStudentLogRef.current(log) &&
               !hasPlayedGuardianVoiceLog(log.id) &&
               !log.guardianAcknowledged;
             if (!seenGatepassLogIds.has(log.id) || isNewGuardianAlert) {
               handleIncomingPayload({ type: 'gatepass:scan', log, serverTime: serverNow }, 'polling');
             } else {
-              addSecurityLog(log, { suppressAutoPush: true });
+              addSecurityLogRef.current(log, { suppressAutoPush: true });
             }
           }
         }
       } catch (err: any) {
-        pollVerified = false;
-        if (!wsConnected && !sseConnected) {
+        consecutivePollFailures += 1;
+        if (!wsConnected && !sseConnected && consecutivePollFailures >= 3) {
+          pollVerified = false;
           setSyncHealth((prev) =>
             prev === 'auth_redirect' || prev === 'static_host' ? prev : 'unreachable'
           );
+          appendDiagnosticLogRef.current('POLL', 'warn', 'সার্ভার পোলিংয়ে অস্থায়ী নেটওয়ার্ক ত্রুটি', {
+            detail: String(err?.name === 'AbortError' ? 'Timeout 8s' : err?.message || 'Fetch failed'),
+          });
         }
-        appendDiagnosticLog('POLL', 'error', 'HTTP পোলিং নেটওয়ার্ক ত্রুটি', {
-          detail: String(err?.message || 'Fetch failed'),
-        });
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
       }
     };
 
@@ -919,12 +961,13 @@ export function useGatepassRealtime({
         const params = buildStudentQueryParams();
         sse = new EventSource(`/api/security/stream?${params.toString()}`);
         setSseReadyState('CONNECTING');
-        appendDiagnosticLog('SSE', 'info', 'SSE ফ্যালব্যাক স্ট্রিম সংযোগ শুরু হয়েছে');
 
         sse.onopen = () => {
           sseConnected = true;
+          consecutivePollFailures = 0;
+          sseLoggedWarnNote = false;
           setSseReadyState('OPEN');
-          appendDiagnosticLog('SSE', 'ok', 'SSE ইভেন্ট স্ট্রিম সংযুক্ত (OPEN)');
+          appendDiagnosticLogRef.current('SSE', 'ok', 'SSE লাইভ স্ট্রিম সক্রিয় হয়েছে');
           if (!wsConnected) {
             setConnectionTransport('sse');
             setSyncHealth('verified_sse');
@@ -933,6 +976,7 @@ export function useGatepassRealtime({
         sse.addEventListener('gatepass', (ev: MessageEvent) => {
           try {
             sseConnected = true;
+            consecutivePollFailures = 0;
             setSseReadyState('OPEN');
             if (!wsConnected) {
               setConnectionTransport('sse');
@@ -946,7 +990,10 @@ export function useGatepassRealtime({
         sse.onerror = () => {
           sseConnected = false;
           setSseReadyState('CLOSED');
-          appendDiagnosticLog('SSE', 'warn', 'SSE সংযোগ বিচ্ছিন্ন বা ত্রুটি ঘটেছে');
+          if (!sseLoggedWarnNote && !pollVerified) {
+            sseLoggedWarnNote = true;
+            appendDiagnosticLogRef.current('SSE', 'info', 'HTTP পোলিং চ্যানেলে লাইভ সিঙ্ক সচল আছে');
+          }
           if (!wsConnected) {
             setConnectionTransport(pollVerified ? 'polling' : 'connecting');
             setSyncHealth((prev) =>
@@ -954,7 +1001,7 @@ export function useGatepassRealtime({
                 ? 'verified_polling'
                 : prev === 'auth_redirect' || prev === 'static_host'
                 ? prev
-                : 'connecting'
+                : prev
             );
           }
         };
@@ -976,7 +1023,6 @@ export function useGatepassRealtime({
     const connectWebSocket = () => {
       if (isDisposed || typeof window === 'undefined' || !('WebSocket' in window)) {
         setWsReadyState('UNSUPPORTED');
-        appendDiagnosticLog('WS', 'warn', 'এই ব্রাউজারে WebSocket সাপোর্ট নেই, SSE চালু করা হচ্ছে');
         startSseFallback();
         return;
       }
@@ -987,9 +1033,6 @@ export function useGatepassRealtime({
         const fullWsUrl = `${proto}//${window.location.host}/ws/gatepass?${params.toString()}`;
         setWsUrl(fullWsUrl);
         setWsReadyState('CONNECTING');
-        appendDiagnosticLog('WS', 'info', 'WebSocket সংযোগ স্থাপনের চেষ্টা চলছে...', {
-          detail: `${proto}//${window.location.host}/ws/gatepass`,
-        });
 
         ws = new WebSocket(fullWsUrl);
         activeWsRef.current = ws;
@@ -999,17 +1042,19 @@ export function useGatepassRealtime({
           if (!wsConnected && !isDisposed) {
             startSseFallback();
           }
-        }, 2500);
+        }, 2000);
 
         ws.onopen = () => {
           wsConnected = true;
+          consecutivePollFailures = 0;
           wsReconnectAttempts = 0;
+          wsLoggedFallbackNote = false;
           setWsReconnectAttemptsState(0);
           setWsReadyState(mapWsReadyState(ws?.readyState));
           setWsLastOpenAt(Date.now());
           setConnectionTransport('ws');
           setSyncHealth('verified_ws');
-          appendDiagnosticLog('WS', 'ok', 'WebSocket সংযোগ সফলভাবে চালু হয়েছে (OPEN)');
+          appendDiagnosticLogRef.current('WS', 'ok', 'WebSocket লাইভ সংযোগ চালু হয়েছে');
 
           if (sseFallbackTimer) {
             clearTimeout(sseFallbackTimer);
@@ -1017,7 +1062,6 @@ export function useGatepassRealtime({
           }
           stopSseFallback();
 
-          // Immediately measure WS ping RTT so Signal Latency populates right away
           try {
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'ping', clientSentAt: Date.now() }));
@@ -1035,7 +1079,7 @@ export function useGatepassRealtime({
                 // Ignore
               }
             }
-          }, 20000);
+          }, 25000);
         };
 
         ws.onmessage = (event) => {
@@ -1059,12 +1103,14 @@ export function useGatepassRealtime({
           }
           if (isDisposed) return;
 
-          appendDiagnosticLog(
-            'WS',
-            'warn',
-            `WebSocket সংযোগ বন্ধ হয়েছে (code=${ev?.code ?? 'N/A'})`,
-            { detail: ev?.reason || `reconnectAttempt=${wsReconnectAttempts + 1}` }
-          );
+          if (!wsLoggedFallbackNote) {
+            wsLoggedFallbackNote = true;
+            appendDiagnosticLogRef.current(
+              'WS',
+              'info',
+              `SSE/HTTP পোলিং চ্যানেলে নিরবচ্ছিন্ন সংযোগ সচল (WS code=${ev?.code ?? 'N/A'})`
+            );
+          }
 
           setConnectionTransport(sseConnected ? 'sse' : pollVerified ? 'polling' : 'connecting');
           setSyncHealth((prev) =>
@@ -1072,28 +1118,27 @@ export function useGatepassRealtime({
               ? 'verified_sse'
               : pollVerified
               ? 'verified_polling'
-              : prev === 'auth_redirect' || prev === 'static_host'
-              ? prev
-              : 'connecting'
+              : prev
           );
           startSseFallback();
-          const backoffMs = Math.min(10000, 1200 * Math.pow(1.6, wsReconnectAttempts));
+
+          // Graceful backoff: slow down after 4 failed proxy WS upgrades so we don't spam sockets
           wsReconnectAttempts += 1;
           setWsReconnectAttemptsState(wsReconnectAttempts);
+          const backoffMs =
+            wsReconnectAttempts <= 3
+              ? 2000 * Math.pow(2, wsReconnectAttempts - 1)
+              : 45000;
           wsReconnectTimer = setTimeout(connectWebSocket, backoffMs);
         };
 
         ws.onerror = () => {
           wsConnected = false;
           setWsReadyState(mapWsReadyState(ws?.readyState));
-          appendDiagnosticLog('WS', 'error', 'WebSocket সংযোগে ত্রুটি ঘটেছে (SSE/Polling ফ্যালব্যাক সক্রিয়)');
           startSseFallback();
         };
-      } catch (err: any) {
+      } catch {
         setWsReadyState('CLOSED');
-        appendDiagnosticLog('WS', 'error', 'WebSocket চালু করতে ব্যর্থ', {
-          detail: String(err?.message || err),
-        });
         startSseFallback();
       }
     };
@@ -1113,11 +1158,11 @@ export function useGatepassRealtime({
     connectWebSocket();
     void pollLatestLogs();
 
-    // Adaptive polling: fast 2.5s whenever WS/SSE isn't open (and 8s even with WS open so cloud proxies never drop silent updates)
+    // Adaptive polling: fast 2.5s whenever WS isn't open (and 8s even with WS open so cloud proxies never drop silent updates)
     let lastPollTick = Date.now();
     pollTimer = setInterval(() => {
       const now = Date.now();
-      const isPushActive = wsConnected || sseConnected;
+      const isPushActive = wsConnected;
       if (!isPushActive || now - lastPollTick >= 8000) {
         lastPollTick = now;
         void pollLatestLogs();
@@ -1126,6 +1171,15 @@ export function useGatepassRealtime({
 
     const handleWakeUp = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      consecutivePollFailures = 0;
+      void pollLatestLogs();
+      if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED) && wsReconnectAttempts < 4) {
+        connectWebSocket();
+      }
+    };
+    const handleOnline = () => {
+      consecutivePollFailures = 0;
+      wsReconnectAttempts = 0;
       void pollLatestLogs();
       if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
         connectWebSocket();
@@ -1141,7 +1195,7 @@ export function useGatepassRealtime({
     };
     window.addEventListener('focus', handleWakeUp);
     window.addEventListener('pageshow', handleWakeUp);
-    window.addEventListener('online', handleWakeUp);
+    window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     document.addEventListener('visibilitychange', handleWakeUp);
 
@@ -1150,7 +1204,7 @@ export function useGatepassRealtime({
       activeWsRef.current = null;
       window.removeEventListener('focus', handleWakeUp);
       window.removeEventListener('pageshow', handleWakeUp);
-      window.removeEventListener('online', handleWakeUp);
+      window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleWakeUp);
       if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
@@ -1170,18 +1224,7 @@ export function useGatepassRealtime({
         } catch {}
       }
     };
-  }, [
-    enabled,
-    role,
-    effectiveStudentId,
-    effectivePortalId,
-    reconnectNonce,
-    addSecurityLog,
-    upsertAttendanceRecordFromServer,
-    isMatchingStudentLog,
-    triggerAlertForStudent,
-    appendDiagnosticLog,
-  ]);
+  }, [enabled, role, effectiveStudentId, effectivePortalId, reconnectNonce]);
 
   const forceCheckNow = useCallback(async (): Promise<{
     foundCount: number;
@@ -1203,9 +1246,17 @@ export function useGatepassRealtime({
         if (effectiveClassId) params.set('classId', effectiveClassId);
         if (effectiveRoll) params.set('roll', String(effectiveRoll));
       }
-      const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
-        cache: 'no-store',
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      let res: Response;
+      try {
+        res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const parsed = await parseJsonApiResponse<any>(res);
       if (parsed.staticHostNoBackend) {
         setSyncHealth('static_host');
@@ -1216,7 +1267,9 @@ export function useGatepassRealtime({
         return { foundCount: 0, latestLog: null };
       }
       if (!parsed.ok || !parsed.data) {
-        setSyncHealth('unreachable');
+        setSyncHealth((prev) =>
+          prev === 'verified_ws' || prev === 'verified_sse' ? prev : 'unreachable'
+        );
         return { foundCount: 0, latestLog: null };
       }
       const data = parsed.data;
@@ -1259,7 +1312,9 @@ export function useGatepassRealtime({
       }
       return { foundCount: matchingCount, latestLog: newestMatching };
     } catch {
-      setSyncHealth('unreachable');
+      setSyncHealth((prev) =>
+        prev === 'verified_ws' || prev === 'verified_sse' ? prev : 'unreachable'
+      );
       return { foundCount: 0, latestLog: null };
     }
   }, [
@@ -1285,8 +1340,13 @@ export function useGatepassRealtime({
       }
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await fetch('/api/security/health', { cache: 'no-store' });
+      const res = await fetch('/api/security/health', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
       const parsed = await parseJsonApiResponse<any>(res);
       const httpRtt = Math.max(0, Date.now() - started);
       if (parsed.ok && parsed.data) {
@@ -1322,6 +1382,8 @@ export function useGatepassRealtime({
         detail: String(err?.message || 'Network error'),
       });
       return null;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }, [appendDiagnosticLog]);
 

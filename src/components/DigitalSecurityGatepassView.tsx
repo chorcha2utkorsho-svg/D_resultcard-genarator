@@ -1285,6 +1285,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const effectiveSendDiagnosticPing = onSendDiagnosticPing ?? previewRealtime.sendDiagnosticPing;
   const effectiveReconnectRealtime = onReconnectRealtime ?? previewRealtime.reconnectRealtime;
   const effectiveClearDiagnosticLogs = onClearDiagnosticLogs ?? previewRealtime.clearDiagnosticLogs;
+  const effectiveLiveRingingAlert = externalLiveRingingAlert ?? previewRealtime.liveRingingAlert;
+  const effectiveDismissLiveRingingAlert =
+    onDismissExternalRingingAlert ?? previewRealtime.dismissLiveRingingAlert;
 
   // Authenticate Guardian/Student (Strictly isolated per student via Portal ID, Class+Roll, or Phone + Password)
   const handleGuardianLogin = (identifier: string, pin: string, classIdFilter: string = guardianLoginClassId) => {
@@ -1461,8 +1464,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [isSpeechStreamActive, setIsSpeechStreamActive] = useState<boolean>(false);
   const [audioHardwareStatus, setAudioHardwareStatus] = useState(() => getGuardianAudioStatus());
   const [wakeAudioFeedback, setWakeAudioFeedback] = useState<'idle' | 'waking' | 'awake'>('idle');
-  const lastServerTimeRef = useRef<number>(0);
-  const hasBaselinePollRef = useRef<boolean>(false);
 
   useEffect(() => {
     return subscribeGuardianAudioStatus(setAudioHardwareStatus);
@@ -1655,171 +1656,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setTimeout(() => setIsGuardianAlarmRinging(false), playDemo ? 18000 : 8000);
   };
 
-  // Keep latest signed-in student ref synced without resetting poll timers on profile edits
+  // Keep latest signed-in student ref synced without resetting listeners on profile edits
   const activeSignedInStudentRef = useRef<Student | null>(null);
   activeSignedInStudentRef.current = activeSignedInStudent || loggedInGuardianStudent;
-
-  // Reset poll baseline whenever the signed-in student changes
-  useEffect(() => {
-    hasBaselinePollRef.current = false;
-    lastServerTimeRef.current = 0;
-  }, [loggedInGuardianStudent?.id]);
-
-  // Fallback poll only when used inside Official guardian preview mode (NEVER on scanner tabs or when useGatepassRealtime is running for forcedStudentId)
-  useEffect(() => {
-    const signedStudentId = loggedInGuardianStudent?.id;
-    if (
-      !signedStudentId ||
-      forcedStudentId ||
-      restrictedMode === 'employee_scanner' ||
-      activeTab !== 'guardian_portal'
-    ) {
-      return;
-    }
-
-    let isSubscribed = true;
-
-    const matchesSignedStudent = (log: any, studentObj: Student) => {
-      if (!log) return false;
-      if (log.studentId === studentObj.id) return true;
-      const pid = getStudentPortalId(studentObj).toUpperCase();
-      if (log.portalUserId && String(log.portalUserId).toUpperCase() === pid) return true;
-      if (log.classId === studentObj.classId && Number(log.studentRoll) === Number(studentObj.roll)) return true;
-      return false;
-    };
-
-    const triggerVoiceAlarmForLog = (studentObj: Student, log: SecurityGatepassLog) => {
-      if (hasPlayedGuardianVoiceLog(log.id)) return;
-      markGuardianVoiceLogPlayed(log.id);
-
-      if (guardianAudioEnabled) {
-        setIsGuardianAlarmRinging(true);
-        playAlarmChime();
-        const action: 'entry' | 'exit' = log.action === 'exit' ? 'exit' : 'entry';
-        const announcement = buildGuardianVoiceMessage(studentObj, action);
-        showGuardianSystemNotification(
-          `${schoolInfo.name} • ${studentObj.nameBn}`,
-          announcement
-        );
-        speakRepeatedGuardianAlert(studentObj, action, activeDailySchedule, {
-          repeatCount: 3,
-          delayMs: 240,
-          onBlocked: () => {
-            setPendingBlockedSpeech({
-              message: announcement,
-              logId: log.id,
-              studentNameBn: studentObj.nameBn,
-              action,
-            });
-          },
-        });
-
-        setTimeout(() => setIsGuardianAlarmRinging(false), 26000);
-      }
-
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        try {
-          navigator.vibrate([200, 100, 200, 100, 400]);
-        } catch {}
-      }
-    };
-
-    const pollServerForScans = async () => {
-      const signedStudent = activeSignedInStudentRef.current;
-      if (!signedStudent) return;
-
-      try {
-        const sinceParam =
-          hasBaselinePollRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 15000)
-            : 0;
-        const pid = getStudentPortalId(signedStudent);
-        const res = await fetch(
-          `/api/security/latest-logs?since=${sinceParam}&role=student&studentId=${encodeURIComponent(signedStudent.id)}&portalId=${encodeURIComponent(pid)}&classId=${encodeURIComponent(signedStudent.classId || '')}&roll=${encodeURIComponent(String(signedStudent.roll ?? ''))}`,
-          { cache: 'no-store' }
-        );
-        const parsed = await parseJsonApiResponse<any>(res);
-        if (!isSubscribed || !parsed.ok || !parsed.data) return;
-        const data = parsed.data;
-
-        const serverNow = typeof data.serverTime === 'number' ? data.serverTime : Date.now();
-        const serverLogs: any[] = Array.isArray(data.logs) ? data.logs : [];
-
-        if (!hasBaselinePollRef.current) {
-          hasBaselinePollRef.current = true;
-          lastServerTimeRef.current = serverNow;
-
-          let newestLogToAlert: any = null;
-          for (const log of serverLogs) {
-            if (matchesSignedStudent(log, signedStudent)) {
-              addSecurityLog(log, { suppressAutoPush: true });
-              markGatepassLogSeen(log.id);
-              const alreadyPlayed = hasPlayedGuardianVoiceLog(log.id);
-              const sTime =
-                typeof log.serverTimestamp === 'number'
-                  ? log.serverTimestamp
-                  : new Date(log.timestamp).getTime() || 0;
-              if (!alreadyPlayed && !newestLogToAlert && sTime >= serverNow - 90000 && !log.guardianAcknowledged) {
-                newestLogToAlert = log;
-              } else if (!alreadyPlayed) {
-                markGuardianVoiceLogPlayed(log.id);
-              }
-            }
-          }
-          if (newestLogToAlert) {
-            triggerVoiceAlarmForLog(signedStudent, newestLogToAlert);
-          }
-          return;
-        }
-
-        let maxSeenTime = lastServerTimeRef.current;
-        let freshLogToAlert: any = null;
-
-        for (const log of serverLogs) {
-          if (matchesSignedStudent(log, signedStudent)) {
-            addSecurityLog(log, { suppressAutoPush: true });
-            markGatepassLogSeen(log.id);
-            const sTime =
-              typeof log.serverTimestamp === 'number'
-                ? log.serverTimestamp
-                : new Date(log.timestamp).getTime() || serverNow;
-            if (sTime > maxSeenTime) {
-              maxSeenTime = sTime;
-            }
-            if (!hasPlayedGuardianVoiceLog(log.id)) {
-              if (!freshLogToAlert) {
-                freshLogToAlert = log;
-              }
-            }
-          }
-        }
-
-        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, maxSeenTime, serverNow - 3000);
-        if (freshLogToAlert) {
-          triggerVoiceAlarmForLog(signedStudent, freshLogToAlert);
-        }
-      } catch {
-        // Quiet failure on transient network issues
-      }
-    };
-
-    pollServerForScans();
-    const pollInterval = setInterval(pollServerForScans, 2500);
-
-    return () => {
-      isSubscribed = false;
-      clearInterval(pollInterval);
-    };
-  }, [
-    forcedStudentId,
-    restrictedMode,
-    activeTab,
-    loggedInGuardianStudent?.id,
-    guardianAudioEnabled,
-    addSecurityLog,
-    activeDailySchedule,
-    schoolInfo.name,
-  ]);
 
   // Real-time Firestore listener alarm (deduplicated via shared seenGatepassLogIds)
   const hasSeededCloudLogsRef = useRef<boolean>(false);
@@ -2768,6 +2607,26 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                           : 'Audio Activity · প্রস্তুত'}
                       </span>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleWakeAudio();
+                      }}
+                      data-testid="persistent-wake-audio-btn"
+                      aria-label="Wake Audio"
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+                      title="ব্রাউজার অডিও ইঞ্জিন সজাগ করুন"
+                    >
+                      <Volume2 className="w-3.5 h-3.5 text-amber-600" />
+                      <span>
+                        {wakeAudioFeedback === 'waking'
+                          ? 'Wake Audio...'
+                          : wakeAudioFeedback === 'awake'
+                          ? 'Wake Audio ✓'
+                          : 'Wake Audio'}
+                      </span>
+                    </button>
 
                     <button
                       type="button"
@@ -3768,9 +3627,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                 setGuardianAudioEnabled(val);
               }}
               guardianAudioTested={guardianAudioTested}
-              isGuardianAlarmRinging={isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)}
-              externalLiveRingingAlert={externalLiveRingingAlert}
-              onDismissExternalRingingAlert={onDismissExternalRingingAlert}
+              isGuardianAlarmRinging={isGuardianAlarmRinging || Boolean(effectiveLiveRingingAlert)}
+              externalLiveRingingAlert={effectiveLiveRingingAlert}
+              onDismissExternalRingingAlert={effectiveDismissLiveRingingAlert}
               realtimeTransport={effectiveRealtimeTransport}
               realtimeSyncHealth={effectiveRealtimeSyncHealth}
               onForceCheckRealtime={effectiveForceCheckRealtime}
@@ -3778,6 +3637,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               onSendDiagnosticPing={effectiveSendDiagnosticPing}
               onReconnectRealtime={effectiveReconnectRealtime}
               onClearDiagnosticLogs={effectiveClearDiagnosticLogs}
+              onWakeAudio={handleWakeAudio}
+              wakeAudioFeedback={wakeAudioFeedback}
+              isSpeechStreamActive={isSpeechStreamActive || isSpeaking}
               ackSuccessFeedback={ackSuccessFeedback}
               isSubmittingAck={isSubmittingAck}
               guardianReplyText={guardianReplyText}
@@ -3786,7 +3648,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
               onStopAudio={() => {
                 stopBengaliSpeech();
                 setIsGuardianAlarmRinging(false);
-                onDismissExternalRingingAlert?.();
+                effectiveDismissLiveRingingAlert?.();
               }}
               onReplayAlarm={(log) => {
                 setPendingBlockedSpeech(null);
@@ -5781,140 +5643,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         );
       })()}
 
-      {/* Persistent Audio Activity Indicator & Wake Audio Control */}
-      <div className="print:hidden fixed bottom-4 right-4 z-40 flex flex-wrap items-center justify-end gap-2">
-        {/* Visual Audio Activity Indicator (pulses whenever active speech synthesis / TTS audio stream is detected) */}
-        <div
-          data-testid="audio-activity-indicator"
-          role="status"
-          aria-live="polite"
-          aria-label={
-            isSpeechStreamActive || isSpeaking
-              ? 'Audio Activity: Speech stream active'
-              : 'Audio Activity: Standby'
-          }
-          title={
-            isSpeechStreamActive || isSpeaking
-              ? 'সফল স্পিচ/অডিও স্ট্রিম চলছে'
-              : 'বর্তমানে কোনো স্পিচ স্ট্রিম চলছে না (স্ট্যান্ডবাই)'
-          }
-          className={`min-h-[44px] px-3.5 py-2 rounded-xl shadow-lg border text-xs font-bold transition flex items-center gap-2.5 backdrop-blur-sm ${
-            isSpeechStreamActive || isSpeaking
-              ? 'bg-emerald-950/95 text-emerald-100 border-emerald-400 ring-2 ring-emerald-400/40'
-              : 'bg-slate-950/90 text-slate-300 border-slate-700/80'
-          }`}
-        >
-          <span className="relative flex h-2.5 w-2.5 shrink-0">
-            {(isSpeechStreamActive || isSpeaking) && (
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-85" />
-            )}
-            <span
-              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                isSpeechStreamActive || isSpeaking ? 'bg-emerald-400' : 'bg-slate-500'
-              }`}
-            />
-          </span>
-
-          {/* Pulsing Audio Equalizer Bars */}
-          <span className="flex items-end gap-0.5 h-3.5 shrink-0" aria-hidden="true">
-            <span
-              className={`w-1 rounded-xs transition-all ${
-                isSpeechStreamActive || isSpeaking
-                  ? 'h-3.5 bg-emerald-400 animate-pulse'
-                  : 'h-1.5 bg-slate-600'
-              }`}
-            />
-            <span
-              className={`w-1 rounded-xs transition-all ${
-                isSpeechStreamActive || isSpeaking
-                  ? 'h-2 bg-emerald-300 animate-bounce'
-                  : 'h-2.5 bg-slate-600'
-              }`}
-            />
-            <span
-              className={`w-1 rounded-xs transition-all ${
-                isSpeechStreamActive || isSpeaking
-                  ? 'h-3.5 bg-emerald-400 animate-pulse'
-                  : 'h-1.5 bg-slate-600'
-              }`}
-            />
-          </span>
-
-          <div className="leading-tight">
-            <div className="flex items-center gap-1.5">
-              <span>Audio Activity</span>
-              <span
-                className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                  isSpeechStreamActive || isSpeaking
-                    ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/40'
-                    : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                {isSpeechStreamActive || isSpeaking ? 'ACTIVE' : 'IDLE'}
-              </span>
-            </div>
-            {(isSpeechStreamActive || isSpeaking) && (
-              <div className="text-[10px] text-emerald-300 font-medium">
-                স্পিচ স্ট্রিম চলছে ({audioHardwareStatus.lastEngineUsed === 'web_speech'
-                  ? 'Web Speech'
-                  : audioHardwareStatus.lastEngineUsed === 'webaudio'
-                  ? 'Web Audio'
-                  : audioHardwareStatus.lastEngineUsed === 'html_audio'
-                  ? 'HTML Audio'
-                  : 'Audio'})
-              </div>
-            )}
-          </div>
-        </div>
-
-        {activeTab === 'guardian_portal' && activeSignedInStudent && (
-          <button
-            type="button"
-            onClick={() => handleTestGuardianAudio(true)}
-            data-testid="persistent-name-test-btn"
-            title={`${activeSignedInStudent.nameBn}-এর নাম ধরে ভয়েস টেস্ট শুনুন`}
-            className="min-h-[44px] px-3.5 py-2 rounded-xl shadow-lg border border-amber-400/70 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-          >
-            <Volume2 className="w-4 h-4 shrink-0" />
-            <span>টেস্ট ({activeSignedInStudent.nameBn.split(' ')[0]})</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => {
-            void handleWakeAudio();
-          }}
-          data-testid="persistent-wake-audio-btn"
-          aria-label="Wake Audio"
-          title="মোবাইল ব্রাউজারের অডিও সাসপেনশন বন্ধ করে স্পিচ ও সাউন্ড সজাগ রাখুন"
-          className={`min-h-[44px] px-4 py-2.5 rounded-xl shadow-lg border text-xs font-bold transition flex items-center gap-2 cursor-pointer backdrop-blur-sm ${
-            wakeAudioFeedback === 'awake' ||
-            (audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running')
-              ? 'bg-emerald-950/95 hover:bg-emerald-900 text-emerald-100 border-emerald-500/70'
-              : 'bg-slate-950/95 hover:bg-slate-900 text-amber-300 border-amber-400/70'
-          }`}
-        >
-          <Volume2
-            className={`w-4 h-4 shrink-0 ${
-              wakeAudioFeedback === 'waking'
-                ? 'animate-pulse text-amber-300'
-                : audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running'
-                ? 'text-emerald-400'
-                : 'text-amber-400'
-            }`}
-          />
-          <span>
-            {wakeAudioFeedback === 'waking'
-              ? 'Wake Audio...'
-              : wakeAudioFeedback === 'awake'
-              ? 'Wake Audio · সজাগ ✓'
-              : audioHardwareStatus.unlocked && audioHardwareStatus.audioContextState === 'running'
-              ? 'Wake Audio · সক্রিয়'
-              : 'Wake Audio'}
-          </span>
-        </button>
-      </div>
     </div>
   );
 };

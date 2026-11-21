@@ -57,18 +57,30 @@ export async function parseJsonApiResponse<T = any>(res: Response): Promise<Pars
     }
 
     const looksLikeProxyAuth =
-      res.redirected ||
       snippet.includes('__cookie_check') ||
       snippet.includes('accounts.google.com') ||
       snippet.includes('servicelogin') ||
-      snippet.includes('ai studio');
+      (res.redirected && contentType.includes('text/html') && !snippet.includes('<div id="root"'));
 
     const looksLikeSpaShell =
-      snippet.includes('<!doctype html') ||
-      snippet.includes('<div id="root"') ||
-      snippet.includes('<script type="module"');
+      res.status === 200 &&
+      (snippet.includes('<div id="root"') ||
+        snippet.includes('/src/main.tsx') ||
+        (snippet.includes('<!doctype html') && snippet.includes('<script type="module"')));
 
-    if (!looksLikeProxyAuth && (looksLikeSpaShell || (contentType.includes('text/html') && res.status === 200))) {
+    if (looksLikeProxyAuth) {
+      return {
+        ok: false,
+        status: res.status || 401,
+        authRedirected: true,
+        staticHostNoBackend: false,
+        responseKind: 'auth_redirect',
+        data: null,
+        error: 'সেশন ভেরিফিকেশন প্রয়োজন (Proxy HTML Redirect)',
+      };
+    }
+
+    if (looksLikeSpaShell) {
       return {
         ok: false,
         status: res.status || 404,
@@ -80,17 +92,16 @@ export async function parseJsonApiResponse<T = any>(res: Response): Promise<Pars
       };
     }
 
-    if (looksLikeProxyAuth || contentType.includes('text/html') || res.status === 200) {
-      return {
-        ok: false,
-        status: res.status || 401,
-        authRedirected: true,
-        staticHostNoBackend: false,
-        responseKind: 'auth_redirect',
-        data: null,
-        error: 'সেশন ভেরিফিকেশন প্রয়োজন (Proxy HTML Redirect)',
-      };
-    }
+    // Transient gateway HTML (e.g., 502/503/504) or unexpected non-JSON error
+    return {
+      ok: false,
+      status: res.status || 502,
+      authRedirected: false,
+      staticHostNoBackend: false,
+      responseKind: 'http_error',
+      data: null,
+      error: `সার্ভার থেকে অস্থায়ী ত্রুটি (HTTP ${res.status || 'unknown'})`,
+    };
   }
 
   let parsed: T | null = null;

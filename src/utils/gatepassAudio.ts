@@ -1466,6 +1466,9 @@ function playSingleDecodedBuffer(
         }
       };
 
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {});
+      }
       source.start(0);
     } catch (err: any) {
       lastPlaybackError = String(err?.message || 'WebAudio start failed');
@@ -1695,15 +1698,6 @@ async function playWithWebSpeechFallback(
           return;
         }
         const bnVoice = selectBestBengaliVoice(voices);
-        if (voices.length > 0 && !bnVoice) {
-          // Many Android phones report voices list without a bn-BD voice pack and play silence on speak()
-          lastPlaybackError = 'Bengali voice pack unavailable for Web Speech';
-          notifyUnlockSubscribers();
-          options.onBlocked?.();
-          resolve(false);
-          return;
-        }
-
         try {
           window.speechSynthesis.resume();
         } catch {
@@ -1746,6 +1740,7 @@ async function playWithWebSpeechFallback(
           activeUtterances.add(utterance);
 
           let chunkStarted = false;
+          let chunkStartedAt = 0;
           const startWatchdog =
             index === 0
               ? setTimeout(() => {
@@ -1753,11 +1748,12 @@ async function playWithWebSpeechFallback(
                     notifyBlocked();
                     resolve(false);
                   }
-                }, 1300)
+                }, 1800)
               : null;
 
           utterance.onstart = () => {
             chunkStarted = true;
+            chunkStartedAt = Date.now();
             if (startWatchdog) clearTimeout(startWatchdog);
             if (!anyChunkStarted) {
               anyChunkStarted = true;
@@ -1771,7 +1767,13 @@ async function playWithWebSpeechFallback(
           utterance.onend = () => {
             if (startWatchdog) clearTimeout(startWatchdog);
             activeUtterances.delete(utterance);
-            if (!anyChunkStarted) {
+            const spokenDurationMs = chunkStartedAt ? Date.now() - chunkStartedAt : 0;
+            const likelySilentEnglishFallback =
+              !bnVoice && (sentences[index] || '').length > 10 && spokenDurationMs < 180;
+            if (!anyChunkStarted || likelySilentEnglishFallback) {
+              if (likelySilentEnglishFallback) {
+                lastPlaybackError = 'Bengali WebSpeech voice missing on device';
+              }
               notifyBlocked();
               resolve(false);
               return;
@@ -1856,6 +1858,16 @@ async function playPhraseList(
   let playedAnyPhrase = false;
   let blockedReported = false;
 
+  // Synchronously nudge AudioContext.resume() before async TTS fetch while any click/tap user activation is still active
+  try {
+    const preCtx = getSharedAudioContext();
+    if (preCtx && preCtx.state === 'suspended') {
+      void preCtx.resume().catch(() => {});
+    }
+  } catch {
+    // Non-fatal
+  }
+
   const fireStartOnce = () => {
     if (!notifiedStart) {
       notifiedStart = true;
@@ -1926,7 +1938,7 @@ async function playPhraseList(
       });
     }
 
-    if (!playedPhrase && isOnline && runToken === currentSpeechRunToken) {
+    if (!playedPhrase && isOnline && preparedBuffers.some(Boolean) && runToken === currentSpeechRunToken) {
       playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, preparedBuffers, runToken, {
         onFirstStart: fireStartOnce,
       });

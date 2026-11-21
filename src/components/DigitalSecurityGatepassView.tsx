@@ -238,6 +238,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     student: Student;
     deliveredCount: number;
     serverHost: string;
+    serverInstanceId?: string;
     verifiedAt: string;
     logPayload?: SecurityGatepassLog;
     syncError?: 'auth_redirect' | 'static_host' | 'network_error' | null;
@@ -669,6 +670,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           student,
           deliveredCount: delivered,
           serverHost: currentServerHost,
+          serverInstanceId: typeof data?.serverInstanceId === 'string' ? data.serverInstanceId : undefined,
           verifiedAt: nowIso,
           logPayload: data?.log || newLogRecord,
           syncError: null,
@@ -1582,6 +1584,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     const existingPending = getPendingBlockedSpeech();
     const targetStudent = activeSignedInStudent || loggedInGuardianStudent;
 
+    // Synchronously resume AudioContext inside the tap gesture before any async TTS network fetch
+    const sharedCtx = getSharedAudioContext();
+    if (sharedCtx && sharedCtx.state === 'suspended') {
+      void sharedCtx.resume().catch(() => {});
+    }
+
     // Preserve and immediately replay a real pending arrival/exit alert instead of silently discarding it
     if (!playDemo && existingPending) {
       setGuardianLiveWatchActive(true);
@@ -1609,28 +1617,42 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setGuardianAudioTested(true);
     setGuardianAudioEnabled(true);
     setIsGuardianAlarmRinging(true);
-    playAlarmChime();
+    playScannerBeep(1046.5, 90);
 
-    if (targetStudent) {
-      void prewarmGuardianVoiceCache(targetStudent, activeDailySchedule);
-    }
-    if (playDemo && targetStudent) {
-      speakRepeatedGuardianAlert(targetStudent, 'entry', activeDailySchedule, {
+    if (playDemo) {
+      const demoStudent = targetStudent || ({ id: forcedStudentId || 'demo', nameBn: 'আপনার সন্তান' } as Student);
+      recordAudioEngineDiagnostic(
+        'info',
+        `নাম ধরে ডেমো ভয়েস টেস্ট শুরু হয়েছে (${demoStudent.nameBn})`
+      );
+      speakRepeatedGuardianAlert(demoStudent, 'entry', activeDailySchedule, {
         repeatCount: 3,
-        delayMs: 240,
+        delayMs: 0,
+        onBlocked: () => {
+          setIsGuardianAlarmRinging(false);
+          recordAudioEngineDiagnostic(
+            'warn',
+            `ডেমো ভয়েস টেস্ট অটোপ্লে/ভয়েস ইঞ্জিন বাধাপ্রাপ্ত হয়েছে (${demoStudent.nameBn})`
+          );
+        },
       });
     } else {
       const msg = targetStudent
         ? `${targetStudent.nameBn}-এর লাইভ ভয়েস এলার্ম সক্রিয় হয়েছে। এখন স্কুলে কার্ড স্ক্যান হলেই এই ফোনে ${targetStudent.nameBn}-এর নাম ধরে বার্তা বেজে উঠবে।`
         : `লাইভ অভিভাবক অডিও এলার্ম সক্রিয় হয়েছে।`;
-      speakBengali(msg, true, { delayMs: 240 });
+      speakBengali(msg, true, { delayMs: 0, studentNameBn: targetStudent?.nameBn });
+    }
+    if (targetStudent) {
+      setTimeout(() => {
+        void prewarmGuardianVoiceCache(targetStudent, activeDailySchedule);
+      }, 3200);
     }
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate([150, 60, 150]);
       } catch {}
     }
-    setTimeout(() => setIsGuardianAlarmRinging(false), playDemo ? 18000 : 5000);
+    setTimeout(() => setIsGuardianAlarmRinging(false), playDemo ? 18000 : 8000);
   };
 
   // Keep latest signed-in student ref synced without resetting poll timers on profile edits
@@ -3124,7 +3146,9 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                             <>
                               <div className="font-bold">
                                 সার্ভারে স্ক্যান ও হাজিরা সেভ হয়েছে — তবে এই সার্ভারে ({lastScanDispatchInfo.serverHost}
-                                {liveServerHealth.serverInstanceId ? ` • ${liveServerHealth.serverInstanceId}` : ''}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
+                                {lastScanDispatchInfo.serverInstanceId || liveServerHealth.serverInstanceId
+                                  ? ` • ${lastScanDispatchInfo.serverInstanceId || liveServerHealth.serverInstanceId}`
+                                  : ''}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
                               </div>
                               <div className="text-[11px] opacity-90">
                                 অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost.startsWith('ais-dev-') ? 'Shared App URL / ais-pre-...' : lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "সংযোগ ও অডিও ডায়াগনস্টিক" ট্যাবে একই ইনস্ট্যান্স আইডি মিলিয়ে নিন।
@@ -3768,12 +3792,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                 setPendingBlockedSpeech(null);
                 unlockMobileAudioAndSpeech(true);
                 setIsGuardianAlarmRinging(true);
-                playAlarmChime();
+                playScannerBeep(1046.5, 90);
                 speakRepeatedGuardianAlert(
                   activeSignedInStudent,
                   log.action === 'exit' ? 'exit' : 'entry',
                   activeDailySchedule,
-                  { repeatCount: 6, delayMs: 180 }
+                  { repeatCount: 6, delayMs: 0 }
                 );
               }}
               onAcknowledgeAlarm={handleGuardianAcknowledge}
@@ -5842,6 +5866,19 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             )}
           </div>
         </div>
+
+        {activeTab === 'guardian_portal' && activeSignedInStudent && (
+          <button
+            type="button"
+            onClick={() => handleTestGuardianAudio(true)}
+            data-testid="persistent-name-test-btn"
+            title={`${activeSignedInStudent.nameBn}-এর নাম ধরে ভয়েস টেস্ট শুনুন`}
+            className="min-h-[44px] px-3.5 py-2 rounded-xl shadow-lg border border-amber-400/70 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <Volume2 className="w-4 h-4 shrink-0" />
+            <span>টেস্ট ({activeSignedInStudent.nameBn.split(' ')[0]})</span>
+          </button>
+        )}
 
         <button
           type="button"

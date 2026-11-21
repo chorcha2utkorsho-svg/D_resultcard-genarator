@@ -383,7 +383,6 @@ function MainContent() {
                         replayPendingBlockedSpeech();
                       } else if (liveRingingAlert) {
                         unlockMobileAudioAndSpeech(true);
-                        playAlarmChime();
                         const matchedStd =
                           students.find((s) => s.id === authSession.accountId) ||
                           ({
@@ -395,7 +394,7 @@ function MainContent() {
                           matchedStd,
                           liveRingingAlert.log.action === 'exit' ? 'exit' : 'entry',
                           schoolInfo.dailySchedule,
-                          { repeatCount: 6, delayMs: 180 }
+                          { repeatCount: 6, delayMs: 0 }
                         );
                       }
                     }}

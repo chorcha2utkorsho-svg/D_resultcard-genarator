@@ -294,6 +294,32 @@ export function useGatepassRealtime({
   const effectiveRoll =
     resolvedStudent?.roll ?? (typeof roll === 'number' && !Number.isNaN(roll) && roll > 0 ? roll : null);
 
+  const effectiveClassIdRef = useRef<string>(effectiveClassId);
+  effectiveClassIdRef.current = effectiveClassId;
+  const effectiveRollRef = useRef<number | null>(effectiveRoll);
+  effectiveRollRef.current = effectiveRoll;
+
+  // Dynamically update server subscription when classId/roll hydrate after initial WS open without resetting baseline
+  useEffect(() => {
+    const ws = activeWsRef.current;
+    if (!enabled || !role || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!effectiveClassId && !effectiveRoll) return;
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'subscribe',
+          role,
+          studentId: effectiveStudentId,
+          portalId: effectivePortalId,
+          classId: effectiveClassId,
+          roll: effectiveRoll,
+        })
+      );
+    } catch {
+      // Ignore send race
+    }
+  }, [enabled, role, effectiveStudentId, effectivePortalId, effectiveClassId, effectiveRoll]);
+
   const isMatchingStudentLog = useCallback(
     (log: SecurityGatepassLog | null | undefined): boolean => {
       if (!log) return false;
@@ -583,8 +609,8 @@ export function useGatepassRealtime({
       if (role === 'student') {
         if (effectiveStudentId) params.set('studentId', effectiveStudentId);
         if (effectivePortalId) params.set('portalId', effectivePortalId);
-        if (effectiveClassId) params.set('classId', effectiveClassId);
-        if (effectiveRoll) params.set('roll', String(effectiveRoll));
+        if (effectiveClassIdRef.current) params.set('classId', effectiveClassIdRef.current);
+        if (effectiveRollRef.current) params.set('roll', String(effectiveRollRef.current));
       }
       return params;
     };
@@ -634,7 +660,8 @@ export function useGatepassRealtime({
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
         const isFirstInit = !hasBaselineRef.current;
         hasBaselineRef.current = true;
-        const windowMs = isFirstInit ? 90000 : 180000;
+        // Generous 5m/15m window for unacknowledged live scans so phones waking from background sleep never miss an alert
+        const windowMs = isFirstInit ? 5 * 60 * 1000 : 15 * 60 * 1000;
         const approxLag =
           typeof rawPayload.serverTime === 'number'
             ? Math.max(0, Math.round(clientNow + (clockOffsetRef.current ?? 0) - rawPayload.serverTime))
@@ -1104,13 +1131,27 @@ export function useGatepassRealtime({
         connectWebSocket();
       }
     };
+    const handleOffline = () => {
+      pollVerified = false;
+      if (!wsConnected && !sseConnected) {
+        setSyncHealth((prev) =>
+          prev === 'static_host' || prev === 'auth_redirect' ? prev : 'unreachable'
+        );
+      }
+    };
     window.addEventListener('focus', handleWakeUp);
+    window.addEventListener('pageshow', handleWakeUp);
+    window.addEventListener('online', handleWakeUp);
+    window.addEventListener('offline', handleOffline);
     document.addEventListener('visibilitychange', handleWakeUp);
 
     return () => {
       isDisposed = true;
       activeWsRef.current = null;
       window.removeEventListener('focus', handleWakeUp);
+      window.removeEventListener('pageshow', handleWakeUp);
+      window.removeEventListener('online', handleWakeUp);
+      window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleWakeUp);
       if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
       if (wsPingTimer) clearInterval(wsPingTimer);
@@ -1134,8 +1175,6 @@ export function useGatepassRealtime({
     role,
     effectiveStudentId,
     effectivePortalId,
-    effectiveClassId,
-    effectiveRoll,
     reconnectNonce,
     addSecurityLog,
     upsertAttendanceRecordFromServer,

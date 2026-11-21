@@ -277,10 +277,45 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     };
   }, []);
 
+  const [testAudioStatusNote, setTestAudioStatusNote] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
   const isHardwareAudioTrulyActive =
     guardianAudioEnabled &&
     (guardianAudioTested || mobileAudioUnlocked) &&
     audioHardwareStatus.audioContextState === 'running';
+
+  const isServerSyncConnected =
+    realtimeSyncHealth === 'verified_ws' ||
+    realtimeSyncHealth === 'verified_sse' ||
+    realtimeSyncHealth === 'verified_polling';
+
+  const isServerBlockedOrMissing =
+    realtimeSyncHealth === 'static_host' ||
+    realtimeSyncHealth === 'auth_redirect' ||
+    realtimeSyncHealth === 'unreachable';
+
+  const isFullyReadyForLiveAlerts = isHardwareAudioTrulyActive && isServerSyncConnected;
+
+  const handleTestNameVoiceClick = () => {
+    onTestAudio(true);
+    if (realtimeSyncHealth === 'static_host') {
+      setTestAudioStatusNote({
+        ok: false,
+        text: `⚠ ${student.nameBn}-এর টেস্ট বাজানো হচ্ছে — তবে এই ডোমেইনে server.ts ব্যাকএন্ড না থাকায় /api/tts/bn পাওয়া যাচ্ছে না`,
+      });
+    } else {
+      setTestAudioStatusNote({
+        ok: true,
+        text: `🔊 "${student.nameBn}"-এর নাম ধরে বাংলা ভয়েস মেসেজ টেস্ট চলছে...`,
+      });
+    }
+    setTimeout(() => {
+      setTestAudioStatusNote(null);
+    }, 6500);
+  };
 
   const [diagnosticFilter, setDiagnosticFilter] = useState<
     'all' | 'network' | 'signal' | 'audio' | 'issues'
@@ -832,20 +867,34 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                   isGuardianAlarmRinging
                     ? 'bg-rose-600 text-white'
-                    : isHardwareAudioTrulyActive
+                    : isServerBlockedOrMissing
+                    ? 'bg-rose-500 hover:bg-rose-400 text-white'
+                    : isFullyReadyForLiveAlerts
                     ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
                     : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
                 }`}
               >
                 <BellRing className="w-4 h-4" />
                 <span>
-                  {isHardwareAudioTrulyActive ? 'ভয়েস ও এলার্ম সক্রিয়' : 'ভয়েস এলার্ম চালু করুন'}
+                  {isGuardianAlarmRinging
+                    ? 'লাইভ এলার্ম বাজছে!'
+                    : realtimeSyncHealth === 'static_host'
+                    ? 'ব্যাকএন্ড সার্ভার নেই!'
+                    : realtimeSyncHealth === 'auth_redirect'
+                    ? 'সেশন ব্লক — রিলোড দিন'
+                    : realtimeSyncHealth === 'unreachable'
+                    ? 'সার্ভার সংযোগ বিচ্ছিন্ন!'
+                    : isFullyReadyForLiveAlerts
+                    ? 'ভয়েস ও এলার্ম সক্রিয় (লাইভ)'
+                    : isHardwareAudioTrulyActive
+                    ? 'স্পিকার প্রস্তুত · সার্ভার যুক্ত হচ্ছে...'
+                    : 'ভয়েস এলার্ম চালু করুন'}
                 </span>
               </button>
 
               <button
                 type="button"
-                onClick={() => onTestAudio(true)}
+                onClick={handleTestNameVoiceClick}
                 className="px-3 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                 title="আপনার সন্তানের নাম ধরে বাংলা ভয়েস এলার্ম টেস্ট শুনুন"
               >
@@ -853,6 +902,50 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 <span>টেস্ট (নাম ধরে)</span>
               </button>
             </div>
+
+            <div className="w-full lg:w-auto flex flex-wrap items-center justify-start lg:justify-end gap-x-2.5 gap-y-1 text-[10.5px] font-mono text-slate-300">
+              <span>
+                সার্ভার:{' '}
+                <strong className="text-slate-100">{currentServerHost || 'local'}</strong>
+              </span>
+              <span className="text-slate-600">·</span>
+              <span>
+                ইনস্ট্যান্স:{' '}
+                <strong className={realtimeDiagnostics?.serverInstanceId ? 'text-amber-300' : 'text-rose-300'}>
+                  {realtimeDiagnostics?.serverInstanceId || 'নেই'}
+                </strong>
+              </span>
+              <span className="text-slate-600">·</span>
+              <span
+                className={
+                  realtimeDiagnostics?.wsReadyState === 'OPEN'
+                    ? 'text-emerald-300 font-bold'
+                    : isServerSyncConnected
+                    ? 'text-amber-300 font-bold'
+                    : 'text-rose-300 font-bold'
+                }
+              >
+                {realtimeDiagnostics?.wsReadyState === 'OPEN'
+                  ? 'WS: OPEN'
+                  : realtimeTransport === 'sse'
+                  ? 'SSE: LIVE'
+                  : realtimeTransport === 'polling'
+                  ? 'POLL: LIVE'
+                  : `WS: ${realtimeDiagnostics?.wsReadyState || 'CONNECTING'}`}
+              </span>
+            </div>
+
+            {testAudioStatusNote && (
+              <div
+                className={`w-full lg:max-w-sm px-2.5 py-1.5 rounded-lg text-[11px] font-medium border ${
+                  testAudioStatusNote.ok
+                    ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-200'
+                    : 'bg-rose-950/90 border-rose-500/60 text-rose-200'
+                }`}
+              >
+                {testAudioStatusNote.text}
+              </div>
+            )}
 
             <div className="flex items-center gap-2">
               <button
@@ -958,6 +1051,49 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           })}
         </div>
       </section>
+
+      {/* Top-Level Critical Backend / Session Alert (Always visible across ALL dashboard tabs) */}
+      {isServerBlockedOrMissing && (
+        <div className="bg-rose-950 text-white rounded-2xl p-4 border-2 border-rose-500 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 text-xs">
+            <AlertTriangle className="w-5 h-5 text-amber-300 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-bold text-sm text-amber-200">
+                {realtimeSyncHealth === 'static_host'
+                  ? 'সতর্কতা: এই ঠিকানায় Node ব্যাকএন্ড সার্ভার (server.ts) চালু নেই!'
+                  : realtimeSyncHealth === 'auth_redirect'
+                  ? 'সতর্কতা: এই ব্রাউজারে সার্ভার সিগন্যাল সেশন/অথেনটিকেশনে আটকে আছে!'
+                  : 'সতর্কতা: কেন্দ্রীয় গেটপাস সার্ভারের সাথে এই ফোনের সংযোগ বিচ্ছিন্ন!'}
+              </div>
+              <p className="text-rose-100 leading-relaxed">
+                {realtimeSyncHealth === 'static_host'
+                  ? `ডোমেইন (${currentServerHost}) কেবল স্ট্যাটিক HTML চালাচ্ছে — তাই স্কুলে আইডিকার্ড স্ক্যান করলে এই ফোনে কোনো মেসেজ বা ভয়েস পৌঁছাবে না। অনুগ্রহ করে স্কুলের ফুল-স্ট্যাক Node সার্ভার URL দিয়ে ওপেন করুন।`
+                  : realtimeSyncHealth === 'auth_redirect'
+                  ? `ডোমেইন (${currentServerHost}) লগইন রিডাইরেক্ট দিচ্ছে। পেজটি রিলোড করুন অথবা অফিসিয়াল স্ক্যানারের একই Shared URL খুলুন।`
+                  : `এই মুহূর্তে (${currentServerHost}) সার্ভার থেকে লাইভ সিগন্যাল আসছে না। ইন্টারনেট যাচাই করে পুনরায় সংযোগ দিন।`}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onReconnectRealtime && (
+              <button
+                type="button"
+                onClick={onReconnectRealtime}
+                className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+              >
+                পুনরায় সংযোগ দিন
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setDashboardSection('diagnostics')}
+              className="px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
+            >
+              ডায়াগনস্টিক দেখুন
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Active Voice Playing Banner OR Pending Autoplay-Blocked Voice Alert */}
       {(isVoiceCurrentlyPlaying || isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)) &&
@@ -1127,6 +1263,15 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTestNameVoiceClick}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  title="আপনার সন্তানের নাম ধরে গেটপাস ভয়েস মেসেজ টেস্ট শুনুন"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>টেস্ট (নাম ধরে)</span>
+                </button>
                 {onForceCheckRealtime && (
                   <button
                     type="button"

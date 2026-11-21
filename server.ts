@@ -1803,6 +1803,8 @@ async function startServer() {
     return result.length > 0 ? result : [cleaned.slice(0, maxLen)];
   };
 
+  const inFlightTtsRequests = new Map<string, Promise<Buffer>>();
+
   app.get('/api/tts/bn', async (req, res) => {
     try {
       const rawText = typeof req.query.text === 'string' ? req.query.text : '';
@@ -1819,66 +1821,82 @@ async function startServer() {
         return res.send(cached);
       }
 
-      const chunks = splitBengaliTtsChunks(cleaned, 155);
-      const fetchChunkWithRetry = async (chunk: string): Promise<Buffer> => {
-        const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=bn&q=${encodeURIComponent(chunk)}`;
-        let lastErr: any = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const upstream = await fetch(ttsUrl, {
-              headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-              },
-            });
-            if (!upstream.ok) {
-              throw new Error(`TTS upstream HTTP ${upstream.status}`);
+      let synthesisPromise = inFlightTtsRequests.get(cleaned);
+      if (!synthesisPromise) {
+        synthesisPromise = (async (): Promise<Buffer> => {
+          const chunks = splitBengaliTtsChunks(cleaned, 155);
+          const fetchChunkWithRetry = async (chunk: string): Promise<Buffer> => {
+            const urls = [
+              `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=bn&q=${encodeURIComponent(chunk)}`,
+              `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=bn&q=${encodeURIComponent(chunk)}`,
+            ];
+            let lastErr: any = null;
+            for (const ttsUrl of urls) {
+              for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                  const upstream = await fetch(ttsUrl, {
+                    headers: {
+                      'User-Agent':
+                        'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                    },
+                  });
+                  if (!upstream.ok) {
+                    throw new Error(`TTS upstream HTTP ${upstream.status}`);
+                  }
+                  const arrBuf = await upstream.arrayBuffer();
+                  const buf = Buffer.from(arrBuf);
+                  if (buf.length > 0) return buf;
+                  throw new Error('Empty upstream TTS chunk');
+                } catch (err) {
+                  lastErr = err;
+                  if (attempt === 0) {
+                    await new Promise((r) => setTimeout(r, 200));
+                  }
+                }
+              }
             }
-            const arrBuf = await upstream.arrayBuffer();
-            const buf = Buffer.from(arrBuf);
-            if (buf.length > 0) return buf;
-            throw new Error('Empty upstream TTS chunk');
-          } catch (err) {
-            lastErr = err;
-            if (attempt === 0) {
-              await new Promise((r) => setTimeout(r, 250));
+            throw lastErr || new Error('TTS chunk fetch failed');
+          };
+
+          const audioBuffers = await Promise.all(chunks.map((chunk) => fetchChunkWithRetry(chunk)));
+
+          const stripLeadingId3v2 = (buf: Buffer): Buffer => {
+            if (buf.length >= 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) {
+              const tagSize =
+                ((buf[6] & 0x7f) << 21) |
+                ((buf[7] & 0x7f) << 14) |
+                ((buf[8] & 0x7f) << 7) |
+                (buf[9] & 0x7f);
+              const totalHeader = 10 + tagSize;
+              if (totalHeader < buf.length) {
+                return buf.subarray(totalHeader);
+              }
             }
+            return buf;
+          };
+
+          const cleanedAudioBuffers = audioBuffers.map((buf, idx) =>
+            idx === 0 ? buf : stripLeadingId3v2(buf)
+          );
+          const mergedAudio = Buffer.concat(cleanedAudioBuffers);
+          if (mergedAudio.length === 0) {
+            throw new Error('Empty TTS response');
           }
-        }
-        throw lastErr || new Error('TTS chunk fetch failed');
-      };
 
-      const audioBuffers = await Promise.all(chunks.map((chunk) => fetchChunkWithRetry(chunk)));
-
-      const stripLeadingId3v2 = (buf: Buffer): Buffer => {
-        if (buf.length >= 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) {
-          const tagSize =
-            ((buf[6] & 0x7f) << 21) |
-            ((buf[7] & 0x7f) << 14) |
-            ((buf[8] & 0x7f) << 7) |
-            (buf[9] & 0x7f);
-          const totalHeader = 10 + tagSize;
-          if (totalHeader < buf.length) {
-            return buf.subarray(totalHeader);
+          if (ttsAudioCache.size >= 200) {
+            const oldestKey = ttsAudioCache.keys().next().value;
+            if (oldestKey) ttsAudioCache.delete(oldestKey);
           }
-        }
-        return buf;
-      };
-
-      const cleanedAudioBuffers = audioBuffers.map((buf, idx) =>
-        idx === 0 ? buf : stripLeadingId3v2(buf)
-      );
-      const mergedAudio = Buffer.concat(cleanedAudioBuffers);
-      if (mergedAudio.length === 0) {
-        return res.status(502).json({ success: false, message: 'Empty TTS response' });
+          ttsAudioCache.set(cleaned, mergedAudio);
+          return mergedAudio;
+        })();
+        inFlightTtsRequests.set(cleaned, synthesisPromise);
+        synthesisPromise.finally(() => {
+          inFlightTtsRequests.delete(cleaned);
+        });
       }
 
-      if (ttsAudioCache.size >= 200) {
-        const oldestKey = ttsAudioCache.keys().next().value;
-        if (oldestKey) ttsAudioCache.delete(oldestKey);
-      }
-      ttsAudioCache.set(cleaned, mergedAudio);
-
+      const mergedAudio = await synthesisPromise;
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Content-Length', String(mergedAudio.length));
       res.setHeader('Cache-Control', 'public, max-age=86400');

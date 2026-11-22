@@ -104,6 +104,12 @@ export async function signInWithGoogleCloudSync(): Promise<{
     if (code === 'auth/popup-closed-by-user') {
       return { ok: false, message: 'গুগল সাইন-ইন পপআপ বন্ধ করা হয়েছে।' };
     }
+    if (code === 'auth/popup-blocked') {
+      return {
+        ok: false,
+        message: 'মোবাইল ব্রাউজার পপ-আপ ব্লক করেছে! ব্রাউজার সেটিংস থেকে Pop-ups Allow করে আবার চাপুন।',
+      };
+    }
     return {
       ok: false,
       message: err?.message || 'গুগল ক্লাউড সিঙ্ক চালু করা যায়নি।',

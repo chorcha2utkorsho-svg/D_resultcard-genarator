@@ -282,6 +282,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     (guardianAudioTested || mobileAudioUnlocked) &&
     audioHardwareStatus.audioContextState === 'running';
 
+  const isCloudActive = Boolean(cloudUser?.emailVerified);
+
   const isServerSyncConnected =
     realtimeSyncHealth === 'verified_ws' ||
     realtimeSyncHealth === 'verified_sse' ||
@@ -291,6 +293,12 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     realtimeSyncHealth === 'static_host' ||
     realtimeSyncHealth === 'auth_redirect' ||
     realtimeSyncHealth === 'unreachable';
+
+  const handleRefreshServerSession = () => {
+    if (typeof window === 'undefined') return;
+    const currentPath = `${window.location.pathname || '/'}${window.location.search || ''}`;
+    window.location.assign(`/api/security/refresh-session?redirect=${encodeURIComponent(currentPath)}`);
+  };
 
   const handleTestNameVoiceClick = () => {
     onTestAudio(true);
@@ -772,11 +780,17 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 type="button"
                 onClick={() => {
                   onTestAudio(false);
+                  if (isServerBlockedOrMissing && !isCloudActive) {
+                    onReconnectRealtime?.();
+                    void onForceCheckRealtime?.();
+                    const bannerEl = document.querySelector('[data-testid="guardian-sync-warning-banner"]');
+                    bannerEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }
                 }}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                   isGuardianAlarmRinging
                     ? 'bg-rose-600 text-white'
-                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !cloudUser
+                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !isCloudActive
                     ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
                     : isHardwareAudioTrulyActive
                     ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
@@ -787,13 +801,33 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 <span>
                   {isGuardianAlarmRinging
                     ? 'লাইভ এলার্ম বাজছে!'
-                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !cloudUser
+                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !isCloudActive
                     ? 'অডিও চালু — সার্ভার সংযোগ বিচ্ছিন্ন!'
                     : isHardwareAudioTrulyActive
                     ? 'ভয়েস ও এলার্ম সক্রিয়'
                     : 'ভয়েস এলার্ম চালু করুন'}
                 </span>
               </button>
+
+              {isServerBlockedOrMissing && !isCloudActive && (
+                <button
+                  type="button"
+                  disabled={cloudConnecting}
+                  onClick={async () => {
+                    setCloudConnecting(true);
+                    try {
+                      await connectCloudSync();
+                    } finally {
+                      setCloudConnecting(false);
+                    }
+                  }}
+                  className="px-3 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  title="অন্য নেটওয়ার্ক বা ভিন্ন লিংক থেকেও তাৎক্ষণিক এলার্ম পেতে Google ক্লাউড সিঙ্ক চালু করুন"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'ক্লাউড সিঙ্ক চালু'}</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -919,7 +953,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       </section>
 
       {/* Honest Server Sync Warning Banner (shown ONLY when server connection is auth-blocked/missing and Cloud Sync isn't active) */}
-      {isServerBlockedOrMissing && !cloudUser && (
+      {isServerBlockedOrMissing && !isCloudActive && (
         <div
           data-testid="guardian-sync-warning-banner"
           className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -936,7 +970,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
               <p className="text-xs text-rose-800">
                 {realtimeSyncHealth === 'auth_redirect'
-                  ? 'দ্বিতীয় ফোনে সেশন চালু করতে "সেশন সক্রিয় করুন" চাপুন অথবা অফিস ও অভিভাবক উভয় ফোনে "Google ক্লাউড সিঙ্ক" যুক্ত করুন।'
+                  ? 'এই ব্রাউজারে সেশন চালু করতে "সেশন সক্রিয় করুন" চাপুন অথবা অফিস ও অভিভাবক উভয় ফোনে "Google ক্লাউড সিঙ্ক" যুক্ত করুন।'
                   : 'অন্য লিংক বা নেটওয়ার্ক থেকে তাৎক্ষণিক এলার্ম পেতে "Google ক্লাউড সিঙ্ক চালু করুন" অথবা পুনরায় সংযুক্ত করুন।'}
               </p>
               {cloudSyncError && (
@@ -964,10 +998,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             {realtimeSyncHealth === 'auth_redirect' && (
               <button
                 type="button"
-                onClick={() => window.location.reload()}
+                onClick={handleRefreshServerSession}
                 className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap"
               >
-                সেশন সক্রিয় করুন (রিলোড)
+                সেশন সক্রিয় করুন
               </button>
             )}
             {(onReconnectRealtime || onForceCheckRealtime) && (
@@ -1197,7 +1231,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   {guardianAudioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   <span>{guardianAudioEnabled ? 'অডিও চালু' : 'মিউট'}</span>
                 </button>
-                {isServerBlockedOrMissing && cloudUser ? (
+                {isServerBlockedOrMissing && isCloudActive ? (
                   <span className="text-xs font-medium flex items-center gap-1.5 text-emerald-300">
                     <Globe className="w-3.5 h-3.5" />
                     <span>ক্লাউড সিঙ্ক সচল</span>

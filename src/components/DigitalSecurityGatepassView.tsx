@@ -2775,6 +2775,19 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {liveServerHealth.authRedirected && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const p = `${window.location.pathname || '/'}${window.location.search || ''}`;
+                          window.location.assign(`/api/security/refresh-session?redirect=${encodeURIComponent(p)}`);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>সেশন সক্রিয় করুন</span>
+                      </button>
+                    )}
                     {cloudUser && cloudUser.emailVerified ? (
                       <span
                         className="px-2.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-500/50 text-emerald-200 font-semibold text-[11px] flex items-center gap-1.5 whitespace-nowrap"
@@ -2796,10 +2809,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                           }
                         }}
                         className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                        title={
-                          cloudSyncError ||
-                          'অন্য নেটওয়ার্ক বা ভিন্ন সার্ভার লিংকের অভিভাবক ফোনে লাইভ এলার্ম পাঠাতে Google ক্লাউড পুশ চালু করুন'
-                        }
+                        title="অন্য নেটওয়ার্ক বা ভিন্ন সার্ভার লিংকের অভিভাবক ফোনে লাইভ এলার্ম পাঠাতে Google ক্লাউড পুশ চালু করুন"
                       >
                         <Globe className="w-3.5 h-3.5" />
                         <span>
@@ -2818,6 +2828,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </button>
                   </div>
                 </div>
+                {cloudSyncError && !cloudUser?.emailVerified && (
+                  <div className="rounded-xl border border-rose-300 bg-rose-50 text-rose-900 px-3 py-2 text-xs font-medium">
+                    <strong>ক্লাউড পুশ সতর্কতা:</strong> {cloudSyncError}
+                  </div>
+                )}
               </div>
 
               {/* Action Bar (Entry vs Exit + Audio Controls) */}

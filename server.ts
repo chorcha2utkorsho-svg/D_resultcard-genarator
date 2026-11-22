@@ -590,6 +590,17 @@ async function startServer() {
     next();
   });
 
+  // Top-level session cookie refresh endpoint (forces AI Studio IAP / cookie check and returns safely)
+  app.get('/api/security/refresh-session', (req, res) => {
+    const rawTarget = typeof req.query.redirect === 'string' ? req.query.redirect.trim() : '/';
+    const safeTarget =
+      rawTarget.startsWith('/') && !rawTarget.startsWith('//') && !rawTarget.startsWith('/\\')
+        ? rawTarget
+        : '/';
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    return res.redirect(302, safeTarget);
+  });
+
   // Security WebSocket/SSE/Polling diagnostic health endpoint
   app.get('/api/security/health', (_req, res) => {
     pruneRecentGuardianPolls();

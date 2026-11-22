@@ -841,6 +841,7 @@ export function useGatepassRealtime({
         const params = buildStudentQueryParams({ since: String(sinceParam) });
         const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
           cache: 'no-store',
+          credentials: 'include',
           signal: abortCtrl?.signal,
         });
         const parsed = await parseJsonApiResponse<any>(res);
@@ -1191,7 +1192,8 @@ export function useGatepassRealtime({
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       consecutivePollFailures = 0;
       void pollLatestLogs();
-      if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED) && wsReconnectAttempts < 4) {
+      if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
+        wsReconnectAttempts = 0;
         connectWebSocket();
       }
     };
@@ -1270,6 +1272,7 @@ export function useGatepassRealtime({
       try {
         res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
           cache: 'no-store',
+          credentials: 'include',
           signal: controller.signal,
         });
       } finally {

@@ -291,6 +291,7 @@ export function useGatepassRealtime({
 
   const activeWsRef = useRef<WebSocket | null>(null);
   const lastServerTimeRef = useRef<number>(0);
+  const prevServerInstanceIdRef = useRef<string>('');
   const hasBaselineRef = useRef<boolean>(false);
   const hasContextLogsBaselineRef = useRef<boolean>(false);
   const ringClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -535,10 +536,11 @@ export function useGatepassRealtime({
     if (!enabled || role !== 'student') return;
     if (!effectiveStudentId && !effectivePortalId && !(effectiveClassId && effectiveRoll)) return;
 
+    const hasServerClock = clockOffsetRef.current !== null;
     const nowMs = Date.now() + (clockOffsetRef.current ?? 0);
     const matchingLogs = securityLogs.filter((l) => isMatchingStudentLog(l));
 
-    const baselineWindowMs = clockOffsetRef.current !== null ? 3 * 60 * 1000 : 15 * 60 * 1000;
+    const baselineWindowMs = hasServerClock ? 5 * 60 * 1000 : 30 * 60 * 1000;
     if (!hasContextLogsBaselineRef.current) {
       hasContextLogsBaselineRef.current = true;
       let newestRecentUnseen: SecurityGatepassLog | null = null;
@@ -554,7 +556,7 @@ export function useGatepassRealtime({
             if (!newestRecentUnseen) {
               newestRecentUnseen = item;
             }
-          } else {
+          } else if (item.guardianAcknowledged || (hasServerClock && logMs < nowMs - 60 * 60 * 1000)) {
             markGuardianVoiceLogPlayed(item.id);
           }
         }
@@ -574,12 +576,13 @@ export function useGatepassRealtime({
           typeof item.serverTimestamp === 'number'
             ? item.serverTimestamp
             : new Date(item.timestamp).getTime() || 0;
-        // Post-baseline newly arrived logs: generous 15m window prevents phone-clock skew from silencing live scans
-        if (logMs >= nowMs - 15 * 60 * 1000 && !item.guardianAcknowledged) {
+        const postBaselineWindowMs = hasServerClock ? 15 * 60 * 1000 : 60 * 60 * 1000;
+        // Post-baseline newly arrived logs: generous window prevents phone-clock skew from silencing live scans
+        if (logMs >= nowMs - postBaselineWindowMs && !item.guardianAcknowledged) {
           if (!freshUnplayed) {
             freshUnplayed = item;
           }
-        } else {
+        } else if (item.guardianAcknowledged || (hasServerClock && logMs < nowMs - 60 * 60 * 1000)) {
           markGuardianVoiceLogPlayed(item.id);
         }
       }
@@ -671,15 +674,23 @@ export function useGatepassRealtime({
         return;
       }
 
+      if (typeof rawPayload.serverInstanceId === 'string' && rawPayload.serverInstanceId) {
+        if (
+          prevServerInstanceIdRef.current &&
+          prevServerInstanceIdRef.current !== rawPayload.serverInstanceId
+        ) {
+          lastServerTimeRef.current = 0;
+        }
+        prevServerInstanceIdRef.current = rawPayload.serverInstanceId;
+        setServerInstanceId(rawPayload.serverInstanceId);
+      }
+
       const serverTime =
         typeof rawPayload.serverTime === 'number' ? rawPayload.serverTime : clientNow;
       if (serverTime > lastServerTimeRef.current) {
         lastServerTimeRef.current = serverTime;
       }
       setLastSyncServerTime(clientNow);
-      if (typeof rawPayload.serverInstanceId === 'string' && rawPayload.serverInstanceId) {
-        setServerInstanceId(rawPayload.serverInstanceId);
-      }
 
       if (rawPayload.type === 'gatepass:init') {
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
@@ -825,7 +836,7 @@ export function useGatepassRealtime({
       try {
         const sinceParam =
           hasBaselineRef.current && lastServerTimeRef.current > 0
-            ? Math.max(0, lastServerTimeRef.current - 15000)
+            ? Math.max(0, lastServerTimeRef.current - 30000)
             : 0;
         const params = buildStudentQueryParams({ since: String(sinceParam) });
         const res = await fetch(`/api/security/latest-logs?${params.toString()}`, {
@@ -895,6 +906,13 @@ export function useGatepassRealtime({
           setLastSignalTransport((prev) => prev || 'polling');
         }
         if (typeof data.serverInstanceId === 'string' && data.serverInstanceId) {
+          if (
+            prevServerInstanceIdRef.current &&
+            prevServerInstanceIdRef.current !== data.serverInstanceId
+          ) {
+            lastServerTimeRef.current = 0;
+          }
+          prevServerInstanceIdRef.current = data.serverInstanceId;
           setServerInstanceId(data.serverInstanceId);
         }
         if (!wsConnected && !sseConnected) {
@@ -919,7 +937,7 @@ export function useGatepassRealtime({
           return;
         }
 
-        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 3000);
+        lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 5000);
         const sorted = [...data.logs].sort(
           (a, b) =>
             (a.serverTimestamp || new Date(a.timestamp).getTime() || 0) -

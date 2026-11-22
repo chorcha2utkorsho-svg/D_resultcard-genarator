@@ -156,6 +156,14 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "portalUserId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "classId": {
+          "type": "string",
+          "maxLength": 64
+        },
         "studentNameBn": {
           "type": "string",
           "maxLength": 160

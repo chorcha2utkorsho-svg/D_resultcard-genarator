@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Award,
   BellRing,
   BookOpen,
@@ -11,6 +12,7 @@ import {
   Circle,
   Clock,
   Compass,
+  Copy,
   CreditCard,
   Edit3,
   Globe,
@@ -91,11 +93,13 @@ import {
   isMobileAudioUnlocked,
   PendingBlockedSpeechAlert,
   replayPendingBlockedSpeech,
+  setGuardianLiveWatchActive,
   stopBengaliSpeech,
   subscribeGuardianAudioStatus,
   subscribeMobileAudioUnlock,
   subscribePendingBlockedSpeech,
   subscribeSpeechPlayback,
+  unlockMobileAudioAndSpeech,
 } from '../utils/gatepassAudio';
 import {
   GatepassRealtimeDiagnostics,
@@ -213,7 +217,11 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     calendarEvents,
     libraryMaterials,
     cloudUser,
+    cloudSyncError,
+    connectCloudSync,
   } = useSchool();
+  const [cloudConnecting, setCloudConnecting] = useState(false);
+  const [copiedUid, setCopiedUid] = useState(false);
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
@@ -228,7 +236,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
   const [showCompactSupportDrawer, setShowCompactSupportDrawer] = useState<boolean>(false);
 
   const handleManualForceCheck = async () => {
-    onTestAudio(false);
+    unlockMobileAudioAndSpeech(true);
+    if (guardianAudioEnabled) {
+      setGuardianLiveWatchActive(true);
+    }
     if (!onForceCheckRealtime) return;
     setIsManualChecking(true);
     setManualCheckStatus(null);
@@ -761,11 +772,12 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 type="button"
                 onClick={() => {
                   onTestAudio(false);
-                  void onWakeAudio?.();
                 }}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                   isGuardianAlarmRinging
                     ? 'bg-rose-600 text-white'
+                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !cloudUser
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
                     : isHardwareAudioTrulyActive
                     ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
                     : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
@@ -775,6 +787,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 <span>
                   {isGuardianAlarmRinging
                     ? 'লাইভ এলার্ম বাজছে!'
+                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !cloudUser
+                    ? 'অডিও চালু — সার্ভার সংযোগ বিচ্ছিন্ন!'
                     : isHardwareAudioTrulyActive
                     ? 'ভয়েস ও এলার্ম সক্রিয়'
                     : 'ভয়েস এলার্ম চালু করুন'}
@@ -903,6 +917,75 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
           })}
         </div>
       </section>
+
+      {/* Honest Server Sync Warning Banner (shown ONLY when server connection is auth-blocked/missing and Cloud Sync isn't active) */}
+      {isServerBlockedOrMissing && !cloudUser && (
+        <div
+          data-testid="guardian-sync-warning-banner"
+          className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5 text-xs sm:text-sm text-rose-950">
+            <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-bold">
+                {realtimeSyncHealth === 'auth_redirect'
+                  ? 'এই ফোনে লাইভ সার্ভার সেশন অনুমতি (কুকি) অনুপস্থিত — অফিসের স্ক্যান এখনো পৌঁছাচ্ছে না!'
+                  : realtimeSyncHealth === 'static_host'
+                  ? 'এই প্রিভিউ লিংকে লাইভ সার্ভার চালু নেই — Google ক্লাউড সিঙ্ক বা মূল সার্ভার লিংক ব্যবহার করুন।'
+                  : 'বিদ্যালয় সার্ভারের সাথে লাইভ সংযোগ বিচ্ছিন্ন রয়েছে — তাই কার্ড স্ক্যানের সিগন্যাল আসছে না।'}
+              </div>
+              <p className="text-xs text-rose-800">
+                {realtimeSyncHealth === 'auth_redirect'
+                  ? 'দ্বিতীয় ফোনে সেশন চালু করতে "সেশন সক্রিয় করুন" চাপুন অথবা অফিস ও অভিভাবক উভয় ফোনে "Google ক্লাউড সিঙ্ক" যুক্ত করুন।'
+                  : 'অন্য লিংক বা নেটওয়ার্ক থেকে তাৎক্ষণিক এলার্ম পেতে "Google ক্লাউড সিঙ্ক চালু করুন" অথবা পুনরায় সংযুক্ত করুন।'}
+              </p>
+              {cloudSyncError && (
+                <p className="text-[11px] font-semibold text-rose-700">{cloudSyncError}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={cloudConnecting}
+              onClick={async () => {
+                setCloudConnecting(true);
+                try {
+                  await connectCloudSync();
+                } finally {
+                  setCloudConnecting(false);
+                }
+              }}
+              className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'Google ক্লাউড সিঙ্ক চালু করুন'}</span>
+            </button>
+            {realtimeSyncHealth === 'auth_redirect' && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap"
+              >
+                সেশন সক্রিয় করুন (রিলোড)
+              </button>
+            )}
+            {(onReconnectRealtime || onForceCheckRealtime) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onReconnectRealtime) onReconnectRealtime();
+                  else void onForceCheckRealtime?.();
+                }}
+                className="px-3.5 py-2 bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>পুনরায় সংযুক্ত</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Active Voice Playing Banner OR Pending Autoplay-Blocked Voice Alert */}
       {(isVoiceCurrentlyPlaying || isGuardianAlarmRinging || Boolean(externalLiveRingingAlert)) &&
@@ -1114,18 +1197,43 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   {guardianAudioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   <span>{guardianAudioEnabled ? 'অডিও চালু' : 'মিউট'}</span>
                 </button>
-                {isServerBlockedOrMissing && (onReconnectRealtime || onForceCheckRealtime) ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onReconnectRealtime) onReconnectRealtime();
-                      else void onForceCheckRealtime?.();
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 border border-amber-400/40 flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>পুনরায় সংযুক্ত করুন</span>
-                  </button>
+                {isServerBlockedOrMissing && cloudUser ? (
+                  <span className="text-xs font-medium flex items-center gap-1.5 text-emerald-300">
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>ক্লাউড সিঙ্ক সচল</span>
+                  </span>
+                ) : isServerBlockedOrMissing ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={cloudConnecting}
+                      onClick={async () => {
+                        setCloudConnecting(true);
+                        try {
+                          await connectCloudSync();
+                        } finally {
+                          setCloudConnecting(false);
+                        }
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <Globe className="w-3.5 h-3.5" />
+                      <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'ক্লাউড সিঙ্ক চালু'}</span>
+                    </button>
+                    {(onReconnectRealtime || onForceCheckRealtime) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onReconnectRealtime) onReconnectRealtime();
+                          else void onForceCheckRealtime?.();
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 border border-amber-400/40 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>পুনরায় সংযুক্ত</span>
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <span
                     className={`text-xs font-medium flex items-center gap-1.5 ${
@@ -2375,6 +2483,41 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {cloudUser && cloudUser.emailVerified ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                        navigator.clipboard.writeText(cloudUser.uid).then(() => {
+                          setCopiedUid(true);
+                          setTimeout(() => setCopiedUid(false), 3000);
+                        }).catch(() => {});
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+                    title={`Google ক্লাউড সিঙ্ক সক্রিয় (${cloudUser.email}) — ভিন্ন জিমেইল হলে UID অফিসে দিন`}
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copiedUid ? 'UID কপি সম্পন্ন ✓' : `ক্লাউড সচল · UID কপি`}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={cloudConnecting}
+                    onClick={async () => {
+                      setCloudConnecting(true);
+                      try {
+                        await connectCloudSync();
+                      } finally {
+                        setCloudConnecting(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'Google ক্লাউড সিঙ্ক চালু'}</span>
+                  </button>
+                )}
                 {onWakeAudio && (
                   <button
                     type="button"

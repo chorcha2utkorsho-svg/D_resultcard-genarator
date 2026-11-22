@@ -182,8 +182,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     forceServerSync,
     seedParentDetailsForClass,
     cloudUser,
+    cloudSyncError,
+    connectCloudSync,
     broadcastSecurityLogToCloud,
   } = useSchool();
+  const [scannerCloudConnecting, setScannerCloudConnecting] = useState(false);
 
   const initialUrlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const urlGuardianParam = initialUrlParams?.get('guardian') || '';
@@ -234,6 +237,19 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>('');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+  const [scanSuccessToast, setScanSuccessToast] = useState<{
+    id: string;
+    studentNameBn: string;
+    classNameBn: string;
+    roll: number;
+    portalId: string;
+    avatarUrl?: string;
+    action: 'entry' | 'exit';
+    dispatchPhase: 'starting' | 'delivered' | 'saved_no_online' | 'error';
+    deliveredCount: number;
+    recognizedAt: string;
+  } | null>(null);
+  const scanToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastScanDispatchInfo, setLastScanDispatchInfo] = useState<{
     student: Student;
     deliveredCount: number;
@@ -266,6 +282,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   const [showGuardianQrBridge, setShowGuardianQrBridge] = useState<boolean>(false);
   const [bridgeTargetStudentId, setBridgeTargetStudentId] = useState<string>('');
   const [bridgeQrDataUrl, setBridgeQrDataUrl] = useState<string>('');
+  const [bridgeOriginMode, setBridgeOriginMode] = useState<'same' | 'pre'>('same');
+  const [siblingPreStatus, setSiblingPreStatus] = useState<{
+    checked: boolean;
+    reachable: boolean;
+    onlineCount: number;
+  }>({ checked: false, reachable: false, onlineCount: 0 });
   const [lastScanEtiquette, setLastScanEtiquette] = useState<{
     logId: string;
     studentId: string;
@@ -306,6 +328,42 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     }
   }, [autoInstantScanGreeting]);
 
+  // Probe sibling Shared App (ais-pre-) backend health when running on ais-dev-
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.location.origin.includes('://ais-dev-')) return;
+    if (activeTab !== 'barcode_scanner' && !showGuardianQrBridge) return;
+    let active = true;
+    const preOrigin = window.location.origin.replace('://ais-dev-', '://ais-pre-');
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const tId = ctrl ? setTimeout(() => ctrl.abort(), 3500) : null;
+    fetch(`${preOrigin}/api/security/health`, { cache: 'no-store', signal: ctrl?.signal })
+      .then((res) => parseJsonApiResponse<any>(res))
+      .then((parsed) => {
+        if (!active) return;
+        const ok = Boolean(parsed.ok && parsed.data && parsed.data.success !== false);
+        const onlineCount = Array.isArray(parsed.data?.onlineGuardians)
+          ? parsed.data.onlineGuardians.length
+          : 0;
+        setSiblingPreStatus({ checked: true, reachable: ok, onlineCount });
+        if (ok && onlineCount > 0) {
+          setBridgeOriginMode('pre');
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setSiblingPreStatus({ checked: true, reachable: false, onlineCount: 0 });
+        }
+      })
+      .finally(() => {
+        if (tId) clearTimeout(tId);
+      });
+    return () => {
+      active = false;
+      if (tId) clearTimeout(tId);
+      ctrl?.abort();
+    };
+  }, [activeTab, showGuardianQrBridge]);
+
   useEffect(() => {
     if (!showGuardianQrBridge || typeof window === 'undefined') return;
     const defaultStd =
@@ -316,9 +374,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     if (targetId && !bridgeTargetStudentId) {
       setBridgeTargetStudentId(targetId);
     }
-    const bridgeOrigin = window.location.origin.includes('://ais-dev-')
-      ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
-      : window.location.origin;
+    const isDev = window.location.origin.includes('://ais-dev-');
+    const bridgeOrigin =
+      isDev && bridgeOriginMode === 'pre'
+        ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+        : window.location.origin;
     const shareUrl = targetId
       ? `${bridgeOrigin}/?tab=security&guardian=${encodeURIComponent(targetId)}`
       : bridgeOrigin;
@@ -330,7 +390,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     })
       .then(setBridgeQrDataUrl)
       .catch(() => setBridgeQrDataUrl(''));
-  }, [showGuardianQrBridge, bridgeTargetStudentId, recentScannedStudent, students]);
+  }, [showGuardianQrBridge, bridgeTargetStudentId, bridgeOriginMode, recentScannedStudent, students]);
+
+  useEffect(() => {
+    return () => {
+      if (scanToastTimerRef.current) {
+        clearTimeout(scanToastTimerRef.current);
+      }
+    };
+  }, []);
 
   // QR Scanner Event Audit State
   const [scannerAuditLogs, setScannerAuditLogs] = useState<ScannerAuditEvent[]>([]);
@@ -591,7 +659,34 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       operatorNote: `${actionLabel} সফল হয়েছে · দৈনিক হাজিরা সংরক্ষিত`,
     };
 
-    // 2. Immediately persist today's attendance in Main DB / SchoolContext & notify Attendance app
+    // 2. Immediately surface floating visual toast confirming ID recognition + alert start
+    if (scanToastTimerRef.current) {
+      clearTimeout(scanToastTimerRef.current);
+    }
+    const toastId = newLogRecord.id;
+    const recognizedTimeLabel = new Date().toLocaleTimeString('bn-BD', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+    setScanSuccessToast({
+      id: toastId,
+      studentNameBn: student.nameBn,
+      classNameBn,
+      roll: student.roll,
+      portalId: portalIdCode,
+      avatarUrl: student.avatarUrl,
+      action: gateAction,
+      dispatchPhase: 'starting',
+      deliveredCount: 0,
+      recognizedAt: recognizedTimeLabel,
+    });
+    scanToastTimerRef.current = setTimeout(() => {
+      setScanSuccessToast((prev) => (prev?.id === toastId ? null : prev));
+    }, 7000);
+
+    // 2a. Immediately persist today's attendance in Main DB / SchoolContext & notify Attendance app
     markStudentAttendanceFromScan(student, gateAction, nowIso);
 
     // 2b. Add security log locally & notify same-browser tabs
@@ -601,6 +696,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
     broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
     const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
+    const siblingPreOrigin =
+      typeof window !== 'undefined' && window.location.origin.includes('://ais-dev-')
+        ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+        : null;
+
     setLastScanDispatchInfo({
       student,
       deliveredCount: 0,
@@ -610,36 +710,81 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       syncError: null,
       isSending: true,
     });
-    const dispatchScanToServer = async (attempt = 0): Promise<void> => {
+
+    const mirrorScanToSiblingOrigin = async (): Promise<number> => {
+      if (!siblingPreOrigin) return 0;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const tId = ctrl ? setTimeout(() => ctrl.abort(), 4500) : null;
       try {
-        const res = await fetch('/api/security/scan', {
+        const resPre = await fetch(`${siblingPreOrigin}/api/security/scan`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          keepalive: true,
-          cache: 'no-store',
           body: JSON.stringify({ log: newLogRecord }),
+          signal: ctrl?.signal,
         });
+        const parsedPre = await parseJsonApiResponse<any>(resPre);
+        if (parsedPre.ok && parsedPre.data && typeof parsedPre.data.deliveredLiveSubscribers === 'number') {
+          return parsedPre.data.deliveredLiveSubscribers;
+        }
+        return 0;
+      } catch {
+        return 0;
+      } finally {
+        if (tId) clearTimeout(tId);
+      }
+    };
+
+    const dispatchScanToServer = async (attempt = 0): Promise<void> => {
+      try {
+        const [res, mirrorDelivered] = await Promise.all([
+          fetch('/api/security/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            cache: 'no-store',
+            body: JSON.stringify({ log: newLogRecord }),
+          }),
+          attempt === 0 ? mirrorScanToSiblingOrigin() : Promise.resolve(0),
+        ]);
         const parsed = await parseJsonApiResponse<any>(res);
         if (parsed.staticHostNoBackend) {
           setLastScanDispatchInfo({
             student,
-            deliveredCount: 0,
+            deliveredCount: mirrorDelivered,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: 'static_host',
+            syncError: mirrorDelivered > 0 ? null : 'static_host',
           });
+          setScanSuccessToast((prev) =>
+            prev?.id === toastId
+              ? {
+                  ...prev,
+                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
+                  deliveredCount: mirrorDelivered,
+                }
+              : prev
+          );
           return;
         }
         if (parsed.authRedirected) {
           setLastScanDispatchInfo({
             student,
-            deliveredCount: 0,
+            deliveredCount: mirrorDelivered,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: 'auth_redirect',
+            syncError: mirrorDelivered > 0 ? null : 'auth_redirect',
           });
+          setScanSuccessToast((prev) =>
+            prev?.id === toastId
+              ? {
+                  ...prev,
+                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
+                  deliveredCount: mirrorDelivered,
+                }
+              : prev
+          );
           return;
         }
         if (!parsed.ok || !parsed.data) {
@@ -649,12 +794,21 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           }
           setLastScanDispatchInfo({
             student,
-            deliveredCount: 0,
+            deliveredCount: mirrorDelivered,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: 'network_error',
+            syncError: mirrorDelivered > 0 ? null : 'network_error',
           });
+          setScanSuccessToast((prev) =>
+            prev?.id === toastId
+              ? {
+                  ...prev,
+                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
+                  deliveredCount: mirrorDelivered,
+                }
+              : prev
+          );
           return;
         }
         const data = parsed.data;
@@ -664,17 +818,27 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         if (data?.attendanceRecord) {
           upsertAttendanceRecordFromServer(data.attendanceRecord, { suppressAutoPush: true });
         }
-        const delivered =
+        const localDelivered =
           typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
+        const totalDelivered = localDelivered + mirrorDelivered;
         setLastScanDispatchInfo({
           student,
-          deliveredCount: delivered,
+          deliveredCount: totalDelivered,
           serverHost: currentServerHost,
           serverInstanceId: typeof data?.serverInstanceId === 'string' ? data.serverInstanceId : undefined,
           verifiedAt: nowIso,
           logPayload: data?.log || newLogRecord,
           syncError: null,
         });
+        setScanSuccessToast((prev) =>
+          prev?.id === toastId
+            ? {
+                ...prev,
+                dispatchPhase: totalDelivered > 0 ? 'delivered' : 'saved_no_online',
+                deliveredCount: totalDelivered,
+              }
+            : prev
+        );
       } catch (err) {
         console.warn('Gate log sync error:', err);
         if (attempt === 0) {
@@ -689,6 +853,11 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           logPayload: newLogRecord,
           syncError: 'network_error',
         });
+        setScanSuccessToast((prev) =>
+          prev?.id === toastId
+            ? { ...prev, dispatchPhase: 'error', deliveredCount: 0 }
+            : prev
+        );
       }
     };
     void dispatchScanToServer(0);
@@ -1391,10 +1560,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     playAlarmChime();
   };
 
-  // Build Personal Guardian Direct Pairing URL (convert ais-dev preview URL to shared ais-pre URL for external phones)
-  const getGuardianDirectUrl = (student: Student) => {
+  // Build Personal Guardian Direct Pairing URL matching active bridge selection or same live origin
+  const getGuardianDirectUrl = (student: Student, preferSharedPre = false) => {
     if (typeof window === 'undefined') return '';
-    const origin = window.location.origin.includes('://ais-dev-')
+    const isDev = window.location.origin.includes('://ais-dev-');
+    const usePre = isDev && (preferSharedPre || bridgeOriginMode === 'pre' || siblingPreStatus.reachable);
+    const origin = usePre
       ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
       : window.location.origin;
     return `${origin}/?tab=security&guardian=${encodeURIComponent(student.id)}`;
@@ -1587,7 +1758,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     // Synchronously resume AudioContext inside the tap gesture before any async TTS network fetch
     const sharedCtx = getSharedAudioContext();
-    if (sharedCtx && sharedCtx.state === 'suspended') {
+    if (sharedCtx && sharedCtx.state !== 'running' && sharedCtx.state !== 'closed') {
       void sharedCtx.resume().catch(() => {});
     }
 
@@ -1678,7 +1849,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       return;
     }
 
-    const childLogs = securityLogs.filter((l) => l.studentId === signedStudent.id);
+    const targetPortal = getStudentPortalId(signedStudent).toUpperCase();
+    const childLogs = securityLogs.filter(
+      (l) =>
+        l.studentId === signedStudent.id ||
+        (l.portalUserId && l.portalUserId.toUpperCase() === targetPortal) ||
+        (l.classId === signedStudent.classId &&
+          Number(l.studentRoll) === Number(signedStudent.roll))
+    );
     if (!hasSeededCloudLogsRef.current) {
       hasSeededCloudLogsRef.current = true;
       const nowMs = Date.now();
@@ -2121,6 +2299,99 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
       className="space-y-6 pb-16"
       style={{ fontFamily: "'Kalpurush', 'Hind Siliguri', sans-serif" }}
     >
+      {/* Floating Scan Recognition & Alert Start Toast Indicator */}
+      {scanSuccessToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="scan-success-toast"
+          className="fixed top-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-sm rounded-xl bg-slate-900 text-white border border-emerald-500/80 shadow-lg p-3.5 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200"
+        >
+          <div className="w-10 h-10 rounded-lg bg-emerald-500 text-slate-950 flex items-center justify-center shrink-0 overflow-hidden border border-emerald-400">
+            {scanSuccessToast.avatarUrl ? (
+              <img
+                src={scanSuccessToast.avatarUrl}
+                alt={scanSuccessToast.studentNameBn}
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <CheckCircle2 className="w-5 h-5" />
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>আইডি শনাক্ত সম্পন্ন ✓</span>
+              </span>
+              <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                {scanSuccessToast.recognizedAt}
+              </span>
+            </div>
+
+            <div className="text-sm font-bold text-white leading-snug truncate">
+              {scanSuccessToast.studentNameBn}
+            </div>
+            <div className="text-[11px] text-slate-300 tabular-nums">
+              {scanSuccessToast.classNameBn} · রোল {toBengaliRoll(scanSuccessToast.roll)} ·{' '}
+              <span className="font-mono text-amber-300">{scanSuccessToast.portalId}</span>
+            </div>
+
+            <div
+              className={`pt-1 text-[11px] font-medium flex items-center gap-1.5 ${
+                scanSuccessToast.dispatchPhase === 'error'
+                  ? 'text-rose-300'
+                  : scanSuccessToast.dispatchPhase === 'delivered'
+                  ? 'text-emerald-300'
+                  : 'text-amber-200'
+              }`}
+            >
+              {scanSuccessToast.dispatchPhase === 'starting' ? (
+                <>
+                  <Radio className="w-3.5 h-3.5 text-amber-300 animate-pulse shrink-0" />
+                  <span>অভিভাবক এলার্ম ও হাজিরা প্রক্রিয়া শুরু হয়েছে...</span>
+                </>
+              ) : scanSuccessToast.dispatchPhase === 'delivered' ? (
+                <>
+                  <BellRing className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>
+                    অভিভাবক ফোনে লাইভ এলার্ম পাঠানো হয়েছে ({toBengaliNumber(scanSuccessToast.deliveredCount)}টি অনলাইন)
+                  </span>
+                </>
+              ) : scanSuccessToast.dispatchPhase === 'saved_no_online' ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                  <span>
+                    {cloudUser?.emailVerified
+                      ? 'হাজিরা সংরক্ষিত ও ক্লাউড সিঙ্কে পাঠানো হয়েছে'
+                      : 'হাজিরা সংরক্ষিত (অভিভাবক ফোন যুক্ত হলে বেজে উঠবে)'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  <span>আইডি যাচাই হয়েছে (সার্ভার সিঙ্ক ত্রুটি)</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (scanToastTimerRef.current) clearTimeout(scanToastTimerRef.current);
+              setScanSuccessToast(null);
+            }}
+            aria-label="নোটিফিকেশন বন্ধ করুন"
+            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* 1. Header Hero Banner (Hidden in student_only mode for clean personal experience) */}
       {restrictedMode === 'full' && (
       <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-blue-950 rounded-2xl shadow-md border border-slate-800 text-white p-4 sm:p-6 overflow-hidden relative">
@@ -2439,11 +2710,23 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <div className="flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <div>
-                        <strong>সতর্কতা (ডেভ প্রিভিউ URL — ais-dev):</strong> আপনি এখন ডেভেলপার-এডিটর লিংকে আছেন, যা{' '}
-                        <code className="font-mono font-bold">ais-pre-</code> (Shared App URL) থেকে সম্পূর্ণ আলাদা সার্ভারে চলে! দুটি ফোনের মধ্যে লাইভ এলার্ম ও রেসপন্স আদান-প্রদানের জন্য দুটি ফোনেই Shared App URL (
-                        <code className="font-mono font-bold">ais-pre-...</code>) খুলুন।
+                        <strong>ডেভ প্রিভিউ মোড (<code className="font-mono">ais-dev-</code>):</strong>{' '}
+                        {siblingPreStatus.reachable
+                          ? `Shared App (ais-pre-) চালু আছে (${toBengaliNumber(siblingPreStatus.onlineCount)} জন অভিভাবক অনলাইন)। এখন এই স্ক্যানার থেকে স্ক্যান করলে উভয় সার্ভারেই স্বয়ংক্রিয়ভাবে এলার্ম পাঠানো হবে।`
+                          : `দুই ফোনে একই লিংক (এই ঠিকানা অথবা Shared App URL) ব্যবহার করুন। এই প্রিভিউ লিংকে অভিভাবক ফোন খুলতে পাশের "অভিভাবক ফোনে খোলার QR" ব্যবহার করুন।`}
                       </div>
                     </div>
+                    {siblingPreStatus.reachable && (
+                      <a
+                        href={window.location.origin.replace('://ais-dev-', '://ais-pre-')}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Shared App এ খুলুন</span>
+                      </a>
+                    )}
                   </div>
                 )}
                 <div
@@ -2491,7 +2774,39 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {cloudUser && cloudUser.emailVerified ? (
+                      <span
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-500/50 text-emerald-200 font-semibold text-[11px] flex items-center gap-1.5 whitespace-nowrap"
+                        title={`অফিস স্ক্যান রিয়েলটাইম Google ক্লাউড সিঙ্কে যাচ্ছে (${cloudUser.email})`}
+                      >
+                        <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>ক্লাউড পুশ সক্রিয়</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={scannerCloudConnecting}
+                        onClick={async () => {
+                          setScannerCloudConnecting(true);
+                          try {
+                            await connectCloudSync();
+                          } finally {
+                            setScannerCloudConnecting(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                        title={
+                          cloudSyncError ||
+                          'অন্য নেটওয়ার্ক বা ভিন্ন সার্ভার লিংকের অভিভাবক ফোনে লাইভ এলার্ম পাঠাতে Google ক্লাউড পুশ চালু করুন'
+                        }
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>
+                          {scannerCloudConnecting ? 'যুক্ত হচ্ছে...' : 'Google ক্লাউড পুশ চালু করুন'}
+                        </span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setShowGuardianQrBridge(true)}
@@ -3010,7 +3325,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                                   : ''}) {lastScanDispatchInfo.student.nameBn}-এর কোনো অভিভাবক ফোন অনলাইন নেই
                               </div>
                               <div className="text-[11px] opacity-90">
-                                অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost.startsWith('ais-dev-') ? 'Shared App URL / ais-pre-...' : lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "সংযোগ ও অডিও ডায়াগনস্টিক" ট্যাবে একই ইনস্ট্যান্স আইডি মিলিয়ে নিন।
+                                অভিভাবকের স্মার্টফোনটি ঠিক একই ঠিকানায় ({lastScanDispatchInfo.serverHost}) সাইন-ইন থাকা অবস্থায় খোলা রাখুন এবং "ভয়েস এলার্ম চালু করুন" বাটনে ট্যাপ করুন। প্রয়োজনে নিচের QR বাটন থেকে সরাসরি লিংক দিন।
                               </div>
                             </>
                           )}
@@ -3035,22 +3350,35 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                           </button>
                         </div>
                       ) : !isAcked && lastScanDispatchInfo.deliveredCount === 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
-                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer transition ${
-                            copiedGuardianLinkId === lastScanDispatchInfo.student.id
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
-                          }`}
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>
-                            {copiedGuardianLinkId === lastScanDispatchInfo.student.id
-                              ? 'লিংক কপি হয়েছে ✓'
-                              : 'এই ছাত্রের অভিভাবক লিংক কপি করুন'}
-                          </span>
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBridgeTargetStudentId(lastScanDispatchInfo.student.id);
+                              setShowGuardianQrBridge(true);
+                            }}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-amber-300" />
+                            <span>QR দেখুন</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyGuardianLink(lastScanDispatchInfo.student)}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                              copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                            }`}
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>
+                              {copiedGuardianLinkId === lastScanDispatchInfo.student.id
+                                ? 'লিংক কপি হয়েছে ✓'
+                                : 'লিংক কপি'}
+                            </span>
+                          </button>
+                        </div>
                       ) : null}
                     </div>
                   );
@@ -5305,6 +5633,24 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50/50 font-mono font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     />
                   </div>
+
+                  <div className="col-span-2">
+                    <label className="block text-slate-600 font-bold mb-1">
+                      অভিভাবক Google Cloud UID (ভিন্ন জিমেইলের ক্লাউড এলার্মের জন্য — ঐচ্ছিক)
+                    </label>
+                    <input
+                      type="text"
+                      value={quickEditStudent.guardianUid || ''}
+                      onChange={(e) =>
+                        setQuickEditStudent({
+                          ...quickEditStudent,
+                          guardianUid: e.target.value.trim(),
+                        })
+                      }
+                      placeholder="অভিভাবকের 'আইডি কার্ড ও পাসওয়ার্ড' ট্যাব থেকে কপি করা UID বসান"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-mono text-[11px] text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -5536,10 +5882,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           students[0];
         const isDevHost =
           typeof window !== 'undefined' && window.location.origin.includes('://ais-dev-');
+        const preOrigin =
+          typeof window !== 'undefined'
+            ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+            : '';
         const bridgeOrigin =
           typeof window !== 'undefined'
-            ? isDevHost
-              ? window.location.origin.replace('://ais-dev-', '://ais-pre-')
+            ? isDevHost && bridgeOriginMode === 'pre'
+              ? preOrigin
               : window.location.origin
             : '';
         const shareUrl =
@@ -5578,8 +5928,48 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
               <div className="p-5 space-y-4 text-xs">
                 {isDevHost && (
-                  <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl p-3 text-[11px] leading-relaxed">
-                    <strong>গুরুত্বপূর্ণ:</strong> আপনি এখন <code className="font-mono font-bold">ais-dev-</code> লিংকে আছেন, তাই নিচের QR কোডে স্বয়ংক্রিয়ভাবে পাবলিক <code className="font-mono font-bold">ais-pre-</code> Shared App URL যুক্ত করা হয়েছে। দুটি ফোনের মধ্যে যোগাযোগের জন্য স্ক্যানার ফোনেও <code className="font-mono font-bold">ais-pre-</code> লিংকটি ব্যবহার করুন।
+                  <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl p-3 text-[11px] leading-relaxed space-y-2">
+                    <div>
+                      <strong>সার্ভার নির্বাচন ({siblingPreStatus.reachable ? 'Shared App সচল' : 'প্রিভিউ মোড'}):</strong>{' '}
+                      {siblingPreStatus.reachable
+                        ? `দুটি ফোনেই Shared App URL (ais-pre-) ব্যবহার করা উত্তম। বর্তমানে এই স্ক্যানার থেকে দুই সার্ভারেই স্ক্যান পাঠানো হয়।`
+                        : `Shared App URL (ais-pre-) এই মুহূর্তে চালু নেই — তাই একই প্রিভিউ লিংক (Same Server) ব্যবহার করুন।`}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setBridgeOriginMode('same')}
+                        className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer border ${
+                          bridgeOriginMode === 'same'
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-800 border-slate-300'
+                        }`}
+                      >
+                        এই একই সার্ভার (Same Host)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBridgeOriginMode('pre')}
+                        className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer border ${
+                          bridgeOriginMode === 'pre'
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white text-slate-800 border-slate-300'
+                        }`}
+                      >
+                        Shared App (ais-pre-) {siblingPreStatus.reachable ? '✓' : ''}
+                      </button>
+                      {siblingPreStatus.reachable && (
+                        <a
+                          href={preOrigin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>স্ক্যানার ais-pre- এ খুলুন</span>
+                        </a>
+                      )}
+                    </div>
                   </div>
                 )}
                 <div>
@@ -5626,7 +6016,13 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     <button
                       type="button"
                       onClick={() => {
-                        if (selectedStd) handleCopyGuardianLink(selectedStd);
+                        if (selectedStd && shareUrl) {
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(shareUrl).catch(() => {});
+                          }
+                          setCopiedGuardianLinkId(selectedStd.id);
+                          setTimeout(() => setCopiedGuardianLinkId(null), 2500);
+                        }
                       }}
                       className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg flex items-center gap-1 cursor-pointer shrink-0"
                     >

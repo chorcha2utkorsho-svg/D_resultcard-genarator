@@ -84,7 +84,7 @@ service cloud.firestore {
           'action', 'timestamp', 'status', 'ownerUid', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'id', 'studentId', 'studentNameBn', 'studentRoll', 'classNameBn',
+          'id', 'studentId', 'portalUserId', 'classId', 'studentNameBn', 'studentRoll', 'classNameBn',
           'action', 'timestamp', 'serverTimestamp', 'status', 'voiceDispatched',
           'smsDispatched', 'guardianAcknowledged', 'guardianResponse',
           'acknowledgedAt', 'acknowledgedBy', 'ownerUid', 'guardianUid',
@@ -92,6 +92,8 @@ service cloud.firestore {
         ]) &&
         isValidId(data.id) &&
         isValidId(data.studentId) &&
+        (!('portalUserId' in data) || (data.portalUserId is string && data.portalUserId.size() <= 64)) &&
+        (!('classId' in data) || (data.classId is string && data.classId.size() <= 64)) &&
         data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 160 &&
         data.studentRoll is number && data.studentRoll >= 0 && data.studentRoll <= 9999 &&
         data.classNameBn is string && data.classNameBn.size() >= 1 && data.classNameBn.size() <= 80 &&

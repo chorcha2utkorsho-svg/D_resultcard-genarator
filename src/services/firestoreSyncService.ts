@@ -95,6 +95,8 @@ export async function pushSecurityLogToFirestore(
     updatedAt: serverTimestamp(),
   };
 
+  if (log.portalUserId) payload.portalUserId = clampStr(log.portalUserId, 64);
+  if (log.classId) payload.classId = clampStr(log.classId, 64);
   if (log.guardianResponse) payload.guardianResponse = clampStr(log.guardianResponse, 300);
   if (log.acknowledgedAt) payload.acknowledgedAt = clampStr(log.acknowledgedAt, 64);
   if (log.acknowledgedBy) payload.acknowledgedBy = clampStr(log.acknowledgedBy, 160);
@@ -153,7 +155,13 @@ function buildStudentFirestorePayload(
   if (student.guardianPhone) payload.guardianPhone = clampStr(student.guardianPhone, 32);
   if (student.guardianName) payload.guardianNameBn = clampStr(student.guardianName, 160);
   if (student.guardianPin) payload.guardianPin = clampStr(student.guardianPin, 32);
-  if (existingData?.guardianUid) payload.guardianUid = safeId(existingData.guardianUid);
+  const resolvedGuardianUid =
+    typeof student.guardianUid === 'string' && student.guardianUid.trim()
+      ? safeId(student.guardianUid.trim())
+      : typeof existingData?.guardianUid === 'string' && existingData.guardianUid.trim()
+      ? safeId(existingData.guardianUid.trim())
+      : '';
+  if (resolvedGuardianUid) payload.guardianUid = resolvedGuardianUid;
 
   const isCleared = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') =>
     explicitClear === true || Boolean(explicitClear && typeof explicitClear === 'object' && explicitClear[field]);
@@ -298,6 +306,7 @@ export async function pullStudentsFromFirestore(
         guardianPhone: data.guardianPhone,
         guardianName: data.guardianNameBn,
         guardianPin: data.guardianPin,
+        ...(typeof data.guardianUid === 'string' && data.guardianUid ? { guardianUid: data.guardianUid } : {}),
         avatarUrl: typeof data.avatarUrl === 'string' ? data.avatarUrl : undefined,
         fatherAvatarUrl: typeof data.fatherAvatarUrl === 'string' ? data.fatherAvatarUrl : undefined,
         motherAvatarUrl: typeof data.motherAvatarUrl === 'string' ? data.motherAvatarUrl : undefined,
@@ -319,44 +328,97 @@ export function subscribeCloudSecurityLogs(
   const path = `schools/${DEFAULT_SCHOOL_ID}/securityLogs`;
   const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'securityLogs');
 
-  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
-  const q = isAdminUser
-    ? query(colRef, orderBy('timestamp', 'desc'), limit(100))
-    : query(colRef, where('guardianUid', '==', safeId(user.uid)), limit(100));
+  const mapDoc = (d: any): SecurityGatepassLog => {
+    const data = d.data();
+    return {
+      id: data.id || d.id,
+      studentId: data.studentId,
+      portalUserId: typeof data.portalUserId === 'string' ? data.portalUserId : undefined,
+      classId: typeof data.classId === 'string' ? data.classId : undefined,
+      studentNameBn: data.studentNameBn,
+      studentRoll: Number(data.studentRoll) || 0,
+      classNameBn: data.classNameBn,
+      action: data.action === 'exit' ? 'exit' : 'entry',
+      timestamp: data.timestamp,
+      serverTimestamp: typeof data.serverTimestamp === 'number' ? data.serverTimestamp : undefined,
+      guardianPhone: '',
+      voiceDispatched: Boolean(data.voiceDispatched),
+      smsDispatched: Boolean(data.smsDispatched),
+      status: data.status === 'flagged' ? 'flagged' : 'verified',
+      guardianAcknowledged: Boolean(data.guardianAcknowledged),
+      guardianResponse: data.guardianResponse,
+      acknowledgedAt: data.acknowledgedAt,
+      acknowledgedBy: data.acknowledgedBy,
+    };
+  };
 
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  if (isAdminUser) {
+    const q = query(colRef, orderBy('timestamp', 'desc'), limit(100));
+    let isFirst = true;
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const logs = snapshot.docs.map(mapDoc);
+        logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        onLogs(logs, isFirst);
+        isFirst = false;
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  }
+
+  const uid = safeId(user.uid);
+  const ownerMap = new Map<string, SecurityGatepassLog>();
+  const guardianMap = new Map<string, SecurityGatepassLog>();
   let isFirst = true;
-  return onSnapshot(
-    q,
+
+  const emitMerged = () => {
+    const merged = new Map<string, SecurityGatepassLog>();
+    for (const [k, v] of ownerMap.entries()) merged.set(k, v);
+    for (const [k, v] of guardianMap.entries()) merged.set(k, v);
+    const logs = Array.from(merged.values());
+    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    onLogs(logs, isFirst);
+    isFirst = false;
+  };
+
+  const unsubOwner = onSnapshot(
+    query(colRef, where('ownerUid', '==', uid), limit(100)),
     (snapshot) => {
-      const logs: SecurityGatepassLog[] = snapshot.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: data.id || d.id,
-          studentId: data.studentId,
-          studentNameBn: data.studentNameBn,
-          studentRoll: Number(data.studentRoll) || 0,
-          classNameBn: data.classNameBn,
-          action: data.action === 'exit' ? 'exit' : 'entry',
-          timestamp: data.timestamp,
-          serverTimestamp: typeof data.serverTimestamp === 'number' ? data.serverTimestamp : undefined,
-          guardianPhone: '',
-          voiceDispatched: Boolean(data.voiceDispatched),
-          smsDispatched: Boolean(data.smsDispatched),
-          status: data.status === 'flagged' ? 'flagged' : 'verified',
-          guardianAcknowledged: Boolean(data.guardianAcknowledged),
-          guardianResponse: data.guardianResponse,
-          acknowledgedAt: data.acknowledgedAt,
-          acknowledgedBy: data.acknowledgedBy,
-        };
-      });
-      logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      onLogs(logs, isFirst);
-      isFirst = false;
+      ownerMap.clear();
+      for (const d of snapshot.docs) {
+        const log = mapDoc(d);
+        ownerMap.set(log.id, log);
+      }
+      emitMerged();
     },
     (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+
+  const unsubGuardian = onSnapshot(
+    query(colRef, where('guardianUid', '==', uid), limit(100)),
+    (snapshot) => {
+      guardianMap.clear();
+      for (const d of snapshot.docs) {
+        const log = mapDoc(d);
+        guardianMap.set(log.id, log);
+      }
+      emitMerged();
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+
+  return () => {
+    unsubOwner();
+    unsubGuardian();
+  };
 }
 
 export async function syncLibraryMaterialToFirestore(

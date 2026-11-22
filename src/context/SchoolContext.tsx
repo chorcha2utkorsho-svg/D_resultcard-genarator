@@ -57,7 +57,14 @@ import {
   INITIAL_PAYMENT_RECEIPTS,
   INITIAL_LIBRARY_MATERIALS,
 } from '../data/defaultData';
-import { calculateGrade, formatGpa, getOverallGradeFromGpa, toBengaliOrdinal, toBengaliNumber } from '../utils/bengali';
+import {
+  calculateGrade,
+  formatGpa,
+  getOverallGradeFromGpa,
+  getStudentPortalId,
+  toBengaliOrdinal,
+  toBengaliNumber,
+} from '../utils/bengali';
 import { numberToBengaliWords } from '../utils/bengaliWords';
 import {
   auth,
@@ -915,6 +922,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               mergedMap.set(item.id, {
                 ...existing,
                 ...item,
+                portalUserId: item.portalUserId || existing.portalUserId,
+                classId: item.classId || existing.classId,
                 guardianPhone: existing.guardianPhone || item.guardianPhone,
                 guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
                 acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
@@ -2334,7 +2343,18 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const broadcastSecurityLogToCloud = useCallback(
     async (log: SecurityGatepassLog) => {
       if (cloudUser && cloudUser.emailVerified) {
-        await pushSecurityLogToFirestore(log, cloudUser, latestStateRef.current.schoolInfo).catch((err) => {
+        const matchedStudent = latestStateRef.current.students.find(
+          (s) =>
+            s.id === log.studentId ||
+            (log.portalUserId && getStudentPortalId(s).toUpperCase() === log.portalUserId.toUpperCase()) ||
+            (log.classId && s.classId === log.classId && Number(s.roll) === Number(log.studentRoll))
+        );
+        await pushSecurityLogToFirestore(
+          log,
+          cloudUser,
+          latestStateRef.current.schoolInfo,
+          matchedStudent?.guardianUid
+        ).catch((err) => {
           console.warn('Firestore security log push warning:', err);
         });
       }

@@ -350,6 +350,9 @@ export function getSharedAudioContext(): AudioContext | null {
         if (isRunning && !audioUnlockedInSession) {
           audioUnlockedInSession = true;
         }
+        if (isRunning) {
+          void decodeCachedTtsBuffersOnUnlock(sharedAudioCtx);
+        }
         if (nextState !== lastObservedCtxState) {
           lastObservedCtxState = nextState;
           emitAudioDiagnostic(
@@ -366,6 +369,10 @@ export function getSharedAudioContext(): AudioContext | null {
   } catch {
     return null;
   }
+}
+
+function isAudioCtxResumable(ctx: AudioContext | null | undefined): boolean {
+  return Boolean(ctx && ctx.state !== 'running' && ctx.state !== 'closed');
 }
 
 function getSharedVoiceAudioElement(): HTMLAudioElement | null {
@@ -473,7 +480,7 @@ function updateGuardianMediaSession(studentNameBn?: string) {
 
 function syncHardwareStateSnapshot(attemptResume = false): void {
   const ctx = sharedAudioCtx;
-  if (attemptResume && liveWatchDesired && ctx && ctx.state === 'suspended') {
+  if (attemptResume && liveWatchDesired && ctx && isAudioCtxResumable(ctx)) {
     ctx
       .resume()
       .then(() => {
@@ -652,7 +659,7 @@ export function unlockMobileAudioAndSpeech(skipSpeechPrime = false): boolean {
         }
       };
 
-      if (ctx.state === 'suspended') {
+      if (isAudioCtxResumable(ctx)) {
         ctx
           .resume()
           .then(() => {
@@ -848,7 +855,7 @@ export function triggerDummySpeechSynthesisTest(): Promise<DummySpeechTestResult
 
   unlockMobileAudioAndSpeech(true);
   const ctx = getSharedAudioContext();
-  if (ctx && ctx.state === 'suspended') {
+  if (ctx && isAudioCtxResumable(ctx)) {
     ctx.resume().catch(() => {});
   }
 
@@ -988,7 +995,7 @@ export async function playSilentAudioTrack(): Promise<SilentTrackWakeResult> {
       window.speechSynthesis.resume();
       window.speechSynthesis.getVoices();
       speechResumed = true;
-      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+      if (!isVoiceAudioPlaying && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
         const silentUtter = new SpeechSynthesisUtterance(' ');
         silentUtter.volume = 0;
         silentUtter.rate = 10;
@@ -1024,6 +1031,7 @@ export async function playSilentAudioTrack(): Promise<SilentTrackWakeResult> {
         if (liveWatchDesired) {
           startSubAudibleKeepAlive(ctx);
         }
+        void decodeCachedTtsBuffersOnUnlock(ctx);
       }
     } catch (err: any) {
       errorMsg = errorMsg || String(err?.message || err || 'AudioContext resume failed');
@@ -1126,7 +1134,7 @@ export function playScannerBeep(freq = 1900, durationMs = 120): void {
       osc.stop(ctx.currentTime + durationMs / 1000);
     };
 
-    if (ctx.state === 'suspended') {
+    if (isAudioCtxResumable(ctx)) {
       ctx.resume().then(triggerBeep).catch(() => {});
     } else {
       triggerBeep();
@@ -1171,7 +1179,7 @@ export function playAlarmChime(): void {
       }
     };
 
-    if (ctx.state === 'suspended') {
+    if (isAudioCtxResumable(ctx)) {
       ctx.resume().then(triggerNotes).catch(() => {});
     } else {
       triggerNotes();
@@ -1221,7 +1229,7 @@ export function playGuardianAttentionBell(): void {
       }
     };
 
-    if (ctx.state === 'suspended') {
+    if (isAudioCtxResumable(ctx)) {
       ctx.resume().then(triggerBell).catch(() => {});
     } else {
       triggerBell();
@@ -1360,6 +1368,38 @@ async function fetchSingleChunkTtsBuffer(chunk: string): Promise<ArrayBuffer> {
   }
 }
 
+let isDecodingPrewarmQueue = false;
+
+/**
+ * Decode any already-fetched MP3 chunks in ttsArrayBufferCache into decodedAudioBufferCache
+ * as soon as AudioContext transitions to 'running'.
+ */
+export async function decodeCachedTtsBuffersOnUnlock(ctxParam?: AudioContext | null): Promise<void> {
+  const ctx = ctxParam || getSharedAudioContext();
+  if (!ctx || ctx.state !== 'running' || isDecodingPrewarmQueue) return;
+  if (ttsArrayBufferCache.size === 0) return;
+
+  isDecodingPrewarmQueue = true;
+  try {
+    for (const [key, buf] of Array.from(ttsArrayBufferCache.entries())) {
+      if (ctx.state !== 'running') break;
+      if (!buf || buf.byteLength === 0 || decodedAudioBufferCache.has(key)) continue;
+      try {
+        const decoded = await ctx.decodeAudioData(buf.slice(0));
+        if (decodedAudioBufferCache.size >= 80) {
+          const oldest = decodedAudioBufferCache.keys().next().value;
+          if (oldest) decodedAudioBufferCache.delete(oldest);
+        }
+        decodedAudioBufferCache.set(key, decoded);
+      } catch {
+        // Non-fatal decode skip
+      }
+    }
+  } finally {
+    isDecodingPrewarmQueue = false;
+  }
+}
+
 /**
  * Pre-fetch and cache Bengali MP3 voice chunks for the signed-in student's arrival/exit messages
  * so incoming gatepass alerts trigger instant 0ms Web Audio playback without network latency.
@@ -1466,7 +1506,7 @@ function playSingleDecodedBuffer(
         }
       };
 
-      if (ctx.state === 'suspended') {
+      if (isAudioCtxResumable(ctx)) {
         void ctx.resume().catch(() => {});
       }
       source.start(0);
@@ -1487,7 +1527,7 @@ async function playChunksViaWebAudio(
   if (!ctx) return false;
 
   try {
-    if (ctx.state === 'suspended') {
+    if (isAudioCtxResumable(ctx)) {
       await Promise.race([
         ctx.resume(),
         new Promise<void>((_, rej) => setTimeout(() => rej(new Error('AudioContext resume timeout')), 1200)),
@@ -1652,10 +1692,14 @@ async function playChunksViaHtmlAudio(
   options: { onFirstStart?: () => void }
 ): Promise<boolean> {
   let startedAny = false;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
   for (let i = 0; i < chunks.length; i++) {
     if (runToken !== currentSpeechRunToken) return true;
     const chunk = chunks[i];
-    const buf = buffers[i] || null;
+    const buf = buffers[i] || ttsArrayBufferCache.get(chunk.slice(0, 200)) || null;
+    if (!buf && offline) {
+      return startedAny;
+    }
     const url = `/api/tts/bn?text=${encodeURIComponent(chunk.slice(0, 200))}`;
     const outcome = await playSingleHtmlAudioChunk(buf, url, runToken, () => {
       if (!startedAny) {
@@ -1861,7 +1905,7 @@ async function playPhraseList(
   // Synchronously nudge AudioContext.resume() before async TTS fetch while any click/tap user activation is still active
   try {
     const preCtx = getSharedAudioContext();
-    if (preCtx && preCtx.state === 'suspended') {
+    if (preCtx && isAudioCtxResumable(preCtx)) {
       void preCtx.resume().catch(() => {});
     }
   } catch {
@@ -1938,7 +1982,7 @@ async function playPhraseList(
       });
     }
 
-    if (!playedPhrase && isOnline && preparedBuffers.some(Boolean) && runToken === currentSpeechRunToken) {
+    if (!playedPhrase && preparedBuffers.some(Boolean) && runToken === currentSpeechRunToken) {
       playedPhrase = await playChunksViaHtmlAudio(sentenceChunks, preparedBuffers, runToken, {
         onFirstStart: fireStartOnce,
       });

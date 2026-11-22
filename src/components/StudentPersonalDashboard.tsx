@@ -218,10 +218,18 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     libraryMaterials,
     cloudUser,
     cloudSyncError,
+    cloudGuardianBindingState,
     connectCloudSync,
+    registerGuardianCloudSubscription,
   } = useSchool();
   const [cloudConnecting, setCloudConnecting] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
+
+  useEffect(() => {
+    if (cloudUser?.emailVerified && student?.id) {
+      void registerGuardianCloudSubscription(student);
+    }
+  }, [cloudUser?.uid, cloudUser?.emailVerified, student?.id, registerGuardianCloudSubscription]);
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
@@ -239,6 +247,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     unlockMobileAudioAndSpeech(true);
     if (guardianAudioEnabled) {
       setGuardianLiveWatchActive(true);
+    }
+    if (cloudUser?.emailVerified && student?.id) {
+      void registerGuardianCloudSubscription(student);
     }
     if (!onForceCheckRealtime) return;
     setIsManualChecking(true);
@@ -282,7 +293,13 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     (guardianAudioTested || mobileAudioUnlocked) &&
     audioHardwareStatus.audioContextState === 'running';
 
-  const isCloudActive = Boolean(cloudUser?.emailVerified);
+  const isCloudSignedIn = Boolean(cloudUser?.emailVerified);
+  const isCloudNeedsOfficialInit =
+    isCloudSignedIn && cloudGuardianBindingState.status === 'needs_official_init';
+  const isCloudBindingError =
+    isCloudSignedIn && cloudGuardianBindingState.status === 'error';
+  const isCloudActive =
+    isCloudSignedIn && !isCloudNeedsOfficialInit && !isCloudBindingError;
 
   const isServerSyncConnected =
     realtimeSyncHealth === 'verified_ws' ||
@@ -952,8 +969,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
         </div>
       </section>
 
-      {/* Honest Server Sync Warning Banner (shown ONLY when server connection is auth-blocked/missing and Cloud Sync isn't active) */}
-      {isServerBlockedOrMissing && !isCloudActive && (
+      {/* Honest Server Sync Warning Banner (shown when server connection is auth-blocked/missing and Cloud Sync isn't bound yet) */}
+      {(isServerBlockedOrMissing || isCloudNeedsOfficialInit || isCloudBindingError) && !isCloudActive && (
         <div
           data-testid="guardian-sync-warning-banner"
           className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -962,14 +979,22 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
             <div className="space-y-1">
               <div className="font-bold">
-                {realtimeSyncHealth === 'auth_redirect'
+                {isCloudNeedsOfficialInit
+                  ? 'স্কুল অফিস থেকে এখনো প্রথমবার Google ক্লাউড পুশ চালু করা হয়নি!'
+                  : isCloudBindingError
+                  ? 'Google ক্লাউড সিঙ্কে অভিভাবক ডিভাইস যুক্ত করতে সমস্যা হয়েছে!'
+                  : realtimeSyncHealth === 'auth_redirect'
                   ? 'এই ফোনে লাইভ সার্ভার সেশন অনুমতি (কুকি) অনুপস্থিত — অফিসের স্ক্যান এখনো পৌঁছাচ্ছে না!'
                   : realtimeSyncHealth === 'static_host'
                   ? 'এই প্রিভিউ লিংকে লাইভ সার্ভার চালু নেই — Google ক্লাউড সিঙ্ক বা মূল সার্ভার লিংক ব্যবহার করুন।'
                   : 'বিদ্যালয় সার্ভারের সাথে লাইভ সংযোগ বিচ্ছিন্ন রয়েছে — তাই কার্ড স্ক্যানের সিগন্যাল আসছে না।'}
               </div>
               <p className="text-xs text-rose-800">
-                {realtimeSyncHealth === 'auth_redirect'
+                {isCloudNeedsOfficialInit
+                  ? `আপনার Gmail (${cloudUser?.email}) প্রস্তুত আছে। স্কুলের স্ক্যানার ফোন থেকে অফিসের মূল Gmail দিয়ে একবার "Google ক্লাউড পুশ চালু করুন" চাপলেই এই ফোনে অ্যালার্ম যাবে।`
+                  : isCloudBindingError
+                  ? cloudGuardianBindingState.error || 'ইন্টারনেট যাচাই করে নিচের "আবার যুক্ত করুন" বাটনে চাপুন।'
+                  : realtimeSyncHealth === 'auth_redirect'
                   ? 'এই ব্রাউজারে সেশন চালু করতে "সেশন সক্রিয় করুন" চাপুন অথবা অফিস ও অভিভাবক উভয় ফোনে "Google ক্লাউড সিঙ্ক" যুক্ত করুন।'
                   : 'অন্য লিংক বা নেটওয়ার্ক থেকে তাৎক্ষণিক এলার্ম পেতে "Google ক্লাউড সিঙ্ক চালু করুন" অথবা পুনরায় সংযুক্ত করুন।'}
               </p>
@@ -979,22 +1004,33 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              disabled={cloudConnecting}
-              onClick={async () => {
-                setCloudConnecting(true);
-                try {
-                  await connectCloudSync();
-                } finally {
-                  setCloudConnecting(false);
-                }
-              }}
-              className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'Google ক্লাউড সিঙ্ক চালু করুন'}</span>
-            </button>
+            {isCloudSignedIn ? (
+              <button
+                type="button"
+                onClick={() => void registerGuardianCloudSubscription(student)}
+                className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>অভিভাবক ডিভাইস আবার যুক্ত করুন</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={cloudConnecting}
+                onClick={async () => {
+                  setCloudConnecting(true);
+                  try {
+                    await connectCloudSync();
+                  } finally {
+                    setCloudConnecting(false);
+                  }
+                }}
+                className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span>{cloudConnecting ? 'যুক্ত হচ্ছে...' : 'Google ক্লাউড সিঙ্ক চালু করুন'}</span>
+              </button>
+            )}
             {realtimeSyncHealth === 'auth_redirect' && (
               <button
                 type="button"
@@ -1231,10 +1267,24 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   {guardianAudioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                   <span>{guardianAudioEnabled ? 'অডিও চালু' : 'মিউট'}</span>
                 </button>
-                {isServerBlockedOrMissing && isCloudActive ? (
-                  <span className="text-xs font-medium flex items-center gap-1.5 text-emerald-300">
+                {isCloudSignedIn ? (
+                  <span
+                    className={`text-xs font-medium flex items-center gap-1.5 ${
+                      isCloudNeedsOfficialInit || isCloudBindingError
+                        ? 'text-amber-300'
+                        : 'text-emerald-300'
+                    }`}
+                  >
                     <Globe className="w-3.5 h-3.5" />
-                    <span>ক্লাউড সিঙ্ক সচল</span>
+                    <span>
+                      {cloudGuardianBindingState.status === 'binding'
+                        ? 'অভিভাবক ডিভাইস যুক্ত হচ্ছে...'
+                        : isCloudNeedsOfficialInit
+                        ? 'অফিস স্ক্যানারে ক্লাউড পুশ বাকি'
+                        : isCloudBindingError
+                        ? 'ডিভাইস যুক্ত ত্রুটি'
+                        : 'ক্লাউড সিঙ্ক সচল (অভিভাবক ডিভাইস যুক্ত)'}
+                    </span>
                   </span>
                 ) : isServerBlockedOrMissing ? (
                   <div className="flex flex-wrap items-center gap-1.5">

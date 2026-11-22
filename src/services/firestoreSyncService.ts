@@ -38,6 +38,153 @@ const safeId = (val: string): string => {
   return cleaned || `doc_${Date.now()}`;
 };
 
+export interface CloudScannerAuthStatus {
+  authorized: boolean;
+  isBootstrapAdmin: boolean;
+  schoolExists: boolean;
+  reason: 'verified_admin' | 'school_owner' | 'not_authorized' | 'unverified';
+}
+
+export async function checkCloudScannerAuthorization(
+  user: User
+): Promise<CloudScannerAuthStatus> {
+  if (!user.emailVerified) {
+    return {
+      authorized: false,
+      isBootstrapAdmin: false,
+      schoolExists: false,
+      reason: 'unverified',
+    };
+  }
+  const cleanUid = safeId(user.uid);
+  const isBootstrap = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  if (isBootstrap) {
+    let schoolExists = false;
+    try {
+      const snap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+      schoolExists = snap.exists();
+    } catch {
+      schoolExists = false;
+    }
+    return {
+      authorized: true,
+      isBootstrapAdmin: true,
+      schoolExists,
+      reason: 'verified_admin',
+    };
+  }
+
+  try {
+    const adminSnap = await getDoc(doc(db, 'admins', cleanUid));
+    if (adminSnap.exists()) {
+      let schoolExists = true;
+      try {
+        const sSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+        schoolExists = sSnap.exists();
+      } catch {
+        schoolExists = true;
+      }
+      return {
+        authorized: true,
+        isBootstrapAdmin: false,
+        schoolExists,
+        reason: 'verified_admin',
+      };
+    }
+  } catch {
+    // Continue to school owner check
+  }
+
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+    if (schoolSnap.exists() && schoolSnap.data()?.ownerUid === cleanUid) {
+      return {
+        authorized: true,
+        isBootstrapAdmin: false,
+        schoolExists: true,
+        reason: 'school_owner',
+      };
+    }
+    return {
+      authorized: false,
+      isBootstrapAdmin: false,
+      schoolExists: schoolSnap.exists(),
+      reason: 'not_authorized',
+    };
+  } catch {
+    return {
+      authorized: false,
+      isBootstrapAdmin: false,
+      schoolExists: true,
+      reason: 'not_authorized',
+    };
+  }
+}
+
+export async function authorizeScannerUidInFirestore(
+  scannerUid: string,
+  scannerEmail: string | undefined,
+  adminUser: User
+): Promise<void> {
+  if (!adminUser.emailVerified || adminUser.email !== BOOTSTRAP_ADMIN_EMAIL) {
+    throw new Error('শুধুমাত্র মূল অ্যাডমিন (chorcho2utkosho@gmail.com) অন্য স্ক্যানার অনুমোদন করতে পারবেন।');
+  }
+  const cleanUid = safeId(scannerUid.trim());
+  const path = `admins/${cleanUid}`;
+  const ref = doc(db, 'admins', cleanUid);
+  const payload: Record<string, any> = {
+    uid: cleanUid,
+    createdAt: serverTimestamp(),
+  };
+  if (scannerEmail && scannerEmail.trim()) {
+    payload.email = clampStr(scannerEmail.trim(), 200);
+  }
+  try {
+    await setDoc(ref, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function registerGuardianSubscription(
+  student: Student,
+  portalUserId: string,
+  user: User
+): Promise<{ bindingId: string }> {
+  if (!user.emailVerified) {
+    throw new Error('গুগল অ্যাকাউন্টের ইমেইল ভেরিফাইড নয়।');
+  }
+  const cleanStudentId = safeId(student.id);
+  const cleanUid = safeId(user.uid);
+  const bindingId = `${cleanStudentId}__${cleanUid}`;
+  const path = `schools/${DEFAULT_SCHOOL_ID}/guardianSubscribers/${bindingId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'guardianSubscribers', bindingId);
+
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        portalUserId: clampStr(portalUserId || student.portalUserId || '', 64),
+        studentNameBn: clampStr(student.nameBn || 'শিক্ষার্থী', 160),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        id: bindingId,
+        studentId: cleanStudentId,
+        portalUserId: clampStr(portalUserId || student.portalUserId || '', 64),
+        studentNameBn: clampStr(student.nameBn || 'শিক্ষার্থী', 160),
+        guardianUid: cleanUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return { bindingId };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
 export async function ensureSchoolDocument(
   user: User,
   schoolInfo: SchoolInfo
@@ -68,18 +215,97 @@ export async function pushSecurityLogToFirestore(
   log: SecurityGatepassLog,
   user: User,
   schoolInfo: SchoolInfo,
-  guardianUid?: string
-): Promise<void> {
-  if (!user.emailVerified) return;
+  guardianUid?: string,
+  extraGuardianUids?: string[]
+): Promise<{ guardianCount: number }> {
+  if (!user.emailVerified) return { guardianCount: 0 };
   await ensureSchoolDocument(user, schoolInfo);
 
   const cleanLogId = safeId(log.id);
+  const cleanStudentId = safeId(log.studentId);
   const path = `schools/${DEFAULT_SCHOOL_ID}/securityLogs/${cleanLogId}`;
   const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'securityLogs', cleanLogId);
 
+  const uidSet = new Set<string>();
+  const addValidUid = (candidate: unknown) => {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      uidSet.add(safeId(candidate.trim()));
+    }
+  };
+  addValidUid(guardianUid);
+  if (Array.isArray(extraGuardianUids)) {
+    extraGuardianUids.forEach(addValidUid);
+  }
+
+  // Pull bound guardian UIDs from cloud student doc (allowed for any authorized admin/owner)
+  let studentDocGuardianUids: string[] = [];
+  let studentDocExists = false;
+  try {
+    const stSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID, 'students', cleanStudentId));
+    if (stSnap.exists()) {
+      studentDocExists = true;
+      const stData = stSnap.data();
+      addValidUid(stData.guardianUid);
+      if (Array.isArray(stData.guardianUids)) {
+        studentDocGuardianUids = stData.guardianUids.filter((u: unknown) => typeof u === 'string');
+        studentDocGuardianUids.forEach(addValidUid);
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Bootstrap admin also queries live guardianSubscribers collection (both studentId & portalUserId)
+  if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+    const subCol = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'guardianSubscribers');
+    const discoveredFromSubs: string[] = [];
+    try {
+      const byStudentSnap = await getDocs(query(subCol, where('studentId', '==', cleanStudentId), limit(10)));
+      byStudentSnap.docs.forEach((d) => {
+        const gUid = d.data()?.guardianUid;
+        if (typeof gUid === 'string' && gUid.trim()) {
+          discoveredFromSubs.push(safeId(gUid.trim()));
+          addValidUid(gUid);
+        }
+      });
+    } catch {
+      // Non-fatal
+    }
+    if (log.portalUserId) {
+      try {
+        const byPortalSnap = await getDocs(
+          query(subCol, where('portalUserId', '==', clampStr(log.portalUserId, 64)), limit(10))
+        );
+        byPortalSnap.docs.forEach((d) => {
+          const gUid = d.data()?.guardianUid;
+          if (typeof gUid === 'string' && gUid.trim()) {
+            discoveredFromSubs.push(safeId(gUid.trim()));
+            addValidUid(gUid);
+          }
+        });
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    // Opportunistically mirror discovered guardian UIDs back onto students/{studentId} for secondary scanners
+    if (studentDocExists && discoveredFromSubs.length > 0) {
+      const mergedForStudent = Array.from(uidSet).slice(0, 10);
+      const missingOnStudent = mergedForStudent.some((u) => !studentDocGuardianUids.includes(u));
+      if (missingOnStudent) {
+        updateDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID, 'students', cleanStudentId), {
+          guardianUids: mergedForStudent,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+    }
+  }
+
+  const boundedGuardianUids = Array.from(uidSet).slice(0, 10);
+
   const payload: Record<string, any> = {
     id: cleanLogId,
-    studentId: safeId(log.studentId),
+    studentId: cleanStudentId,
     studentNameBn: clampStr(log.studentNameBn, 160),
     studentRoll: Number(log.studentRoll) || 0,
     classNameBn: clampStr(log.classNameBn, 80),
@@ -100,10 +326,14 @@ export async function pushSecurityLogToFirestore(
   if (log.guardianResponse) payload.guardianResponse = clampStr(log.guardianResponse, 300);
   if (log.acknowledgedAt) payload.acknowledgedAt = clampStr(log.acknowledgedAt, 64);
   if (log.acknowledgedBy) payload.acknowledgedBy = clampStr(log.acknowledgedBy, 160);
-  if (guardianUid) payload.guardianUid = safeId(guardianUid);
+  if (boundedGuardianUids.length > 0) {
+    payload.guardianUid = boundedGuardianUids[0];
+    payload.guardianUids = boundedGuardianUids;
+  }
 
   try {
     await setDoc(ref, payload);
+    return { guardianCount: boundedGuardianUids.length };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
@@ -162,6 +392,17 @@ function buildStudentFirestorePayload(
       ? safeId(existingData.guardianUid.trim())
       : '';
   if (resolvedGuardianUid) payload.guardianUid = resolvedGuardianUid;
+
+  const mergedGuardianUids = new Set<string>();
+  if (resolvedGuardianUid) mergedGuardianUids.add(resolvedGuardianUid);
+  if (Array.isArray(existingData?.guardianUids)) {
+    existingData.guardianUids.forEach((u: unknown) => {
+      if (typeof u === 'string' && u.trim()) mergedGuardianUids.add(safeId(u.trim()));
+    });
+  }
+  if (mergedGuardianUids.size > 0) {
+    payload.guardianUids = Array.from(mergedGuardianUids).slice(0, 10);
+  }
 
   const isCleared = (field: 'avatarUrl' | 'fatherAvatarUrl' | 'motherAvatarUrl') =>
     explicitClear === true || Boolean(explicitClear && typeof explicitClear === 'object' && explicitClear[field]);
@@ -320,13 +561,22 @@ export async function pullStudentsFromFirestore(
 
 export function subscribeCloudSecurityLogs(
   user: User,
-  onLogs: (logs: SecurityGatepassLog[], isInitialSnapshot: boolean) => void
+  onLogs: (logs: SecurityGatepassLog[], isInitialSnapshot: boolean) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   if (!user.emailVerified) {
     return () => {};
   }
   const path = `schools/${DEFAULT_SCHOOL_ID}/securityLogs`;
   const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'securityLogs');
+
+  const reportSnapshotError = (error: unknown) => {
+    try {
+      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (wrappedErr: any) {
+      onError?.(wrappedErr instanceof Error ? wrappedErr : new Error(String(error)));
+    }
+  };
 
   const mapDoc = (d: any): SecurityGatepassLog => {
     const data = d.data();
@@ -364,21 +614,21 @@ export function subscribeCloudSecurityLogs(
         onLogs(logs, isFirst);
         isFirst = false;
       },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, path);
-      }
+      reportSnapshotError
     );
   }
 
   const uid = safeId(user.uid);
   const ownerMap = new Map<string, SecurityGatepassLog>();
   const guardianMap = new Map<string, SecurityGatepassLog>();
+  const guardianArrayMap = new Map<string, SecurityGatepassLog>();
   let isFirst = true;
 
   const emitMerged = () => {
     const merged = new Map<string, SecurityGatepassLog>();
     for (const [k, v] of ownerMap.entries()) merged.set(k, v);
     for (const [k, v] of guardianMap.entries()) merged.set(k, v);
+    for (const [k, v] of guardianArrayMap.entries()) merged.set(k, v);
     const logs = Array.from(merged.values());
     logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     onLogs(logs, isFirst);
@@ -395,9 +645,7 @@ export function subscribeCloudSecurityLogs(
       }
       emitMerged();
     },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    }
+    reportSnapshotError
   );
 
   const unsubGuardian = onSnapshot(
@@ -410,14 +658,26 @@ export function subscribeCloudSecurityLogs(
       }
       emitMerged();
     },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    }
+    reportSnapshotError
+  );
+
+  const unsubGuardianArray = onSnapshot(
+    query(colRef, where('guardianUids', 'array-contains', uid), limit(100)),
+    (snapshot) => {
+      guardianArrayMap.clear();
+      for (const d of snapshot.docs) {
+        const log = mapDoc(d);
+        guardianArrayMap.set(log.id, log);
+      }
+      emitMerged();
+    },
+    reportSnapshotError
   );
 
   return () => {
     unsubOwner();
     unsubGuardian();
+    unsubGuardianArray();
   };
 }
 

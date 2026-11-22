@@ -68,6 +68,7 @@ export interface Student {
   emergencyPhone?: string;
   guardianPin?: string; // অভিভাবকের গোপন পিন বা পাসওয়ার্ড
   guardianUid?: string; // অভিভাবকের গুগল অ্যাকাউন্ট UID (ঐচ্ছিক ক্লাউড সিঙ্ক)
+  guardianUids?: string[]; // একাধিক অভিভাবক ডিভাইসের গুগল UID তালিকা
 
   // ঠিকানা
   presentAddress?: string; // বর্তমান ঠিকানা (বাড়ি/রাস্তা, ডাকঘর, উপজেলা, জেলা)

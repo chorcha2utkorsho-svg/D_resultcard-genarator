@@ -75,12 +75,15 @@ import {
 } from '../firebase';
 import {
   acknowledgeSecurityLogInFirestore,
+  authorizeScannerUidInFirestore,
   batchPushStudentsToFirestore,
+  checkCloudScannerAuthorization,
   deleteLibraryMaterialFromFirestore,
   ensureSchoolDocument,
   pullLibraryMaterialsFromFirestore,
   pullStudentsFromFirestore,
   pushSecurityLogToFirestore,
+  registerGuardianSubscription,
   subscribeCloudSecurityLogs,
   syncLibraryMaterialToFirestore,
   syncStudentRecordToFirestore,
@@ -350,12 +353,24 @@ interface SchoolContextType {
   cloudUser: User | null;
   cloudSyncError: string | null;
   cloudUnauthorizedDomain: string | null;
+  cloudPushAuthorized: boolean | null;
+  cloudGuardianBindingState: {
+    status: 'idle' | 'binding' | 'bound' | 'needs_official_init' | 'error';
+    studentId?: string;
+    error?: string;
+  };
   isCloudPhotoSyncing: boolean;
   cloudPhotoSyncProgress: { done: number; total: number } | null;
   connectCloudSync: () => Promise<boolean>;
   disconnectCloudSync: () => Promise<void>;
   syncAllPhotosToCloud: () => Promise<{ ok: boolean; pushedCount: number; pulledCount: number; message: string }>;
-  broadcastSecurityLogToCloud: (log: SecurityGatepassLog) => Promise<void>;
+  registerGuardianCloudSubscription: (
+    student: Student
+  ) => Promise<{ ok: boolean; status: 'bound' | 'needs_official_init' | 'error'; error?: string }>;
+  authorizeScannerUid: (scannerUid: string, scannerEmail?: string) => Promise<{ ok: boolean; message: string }>;
+  broadcastSecurityLogToCloud: (
+    log: SecurityGatepassLog
+  ) => Promise<{ ok: boolean; guardianCount?: number; error?: string }>;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -683,6 +698,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [cloudUser, setCloudUser] = useState<User | null>(null);
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [cloudUnauthorizedDomain, setCloudUnauthorizedDomain] = useState<string | null>(null);
+  const [cloudPushAuthorized, setCloudPushAuthorized] = useState<boolean | null>(null);
+  const [cloudGuardianBindingState, setCloudGuardianBindingState] = useState<{
+    status: 'idle' | 'binding' | 'bound' | 'needs_official_init' | 'error';
+    studentId?: string;
+    error?: string;
+  }>({ status: 'idle' });
   const [isCloudPhotoSyncing, setIsCloudPhotoSyncing] = useState<boolean>(false);
   const [cloudPhotoSyncProgress, setCloudPhotoSyncProgress] = useState<{ done: number; total: number } | null>(null);
 
@@ -694,6 +715,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCloudUnauthorizedDomain(null);
       } else {
         hasAutoSyncedCloudSessionRef.current = null;
+        setCloudPushAuthorized(null);
+        setCloudGuardianBindingState({ status: 'idle' });
       }
     });
     return () => unsub();
@@ -871,77 +894,162 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   useEffect(() => {
     if (!cloudUser || !cloudUser.emailVerified) return;
-    ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+    let cancelled = false;
 
-    // Automatically run 2-way student & photo sync once per verified sign-in
-    if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
-      hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
-      syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
-      pullLibraryMaterialsFromFirestore(cloudUser)
-        .then((cloudMats) => {
-          if (cloudMats.length === 0) return;
-          setLibraryMaterials((prev) => {
-            const merged = new Map<string, LibraryMaterial>();
-            for (const item of prev) merged.set(item.id, item);
-            for (const cm of cloudMats) {
-              const ex = merged.get(cm.id);
-              if (!ex || new Date(cm.updatedAt).getTime() > new Date(ex.updatedAt).getTime()) {
-                merged.set(cm.id, {
-                  ...cm,
-                  downloadsCount: Math.max(cm.downloadsCount || 0, ex?.downloadsCount || 0),
+    checkCloudScannerAuthorization(cloudUser)
+      .then((authStatus) => {
+        if (cancelled) return;
+        setCloudPushAuthorized(authStatus.authorized);
+        if (authStatus.authorized) {
+          ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+          if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
+            hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
+            syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
+            pullLibraryMaterialsFromFirestore(cloudUser)
+              .then((cloudMats) => {
+                if (cloudMats.length === 0) return;
+                setLibraryMaterials((prev) => {
+                  const merged = new Map<string, LibraryMaterial>();
+                  for (const item of prev) merged.set(item.id, item);
+                  for (const cm of cloudMats) {
+                    const ex = merged.get(cm.id);
+                    if (!ex || new Date(cm.updatedAt).getTime() > new Date(ex.updatedAt).getTime()) {
+                      merged.set(cm.id, {
+                        ...cm,
+                        downloadsCount: Math.max(cm.downloadsCount || 0, ex?.downloadsCount || 0),
+                      });
+                    }
+                  }
+                  return Array.from(merged.values()).sort(
+                    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                  );
                 });
-              }
-            }
-            return Array.from(merged.values()).sort(
-              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-            );
-          });
-        })
-        .catch(() => {});
-    }
-
-    const unsub = subscribeCloudSecurityLogs(cloudUser, (cloudLogs) => {
-      setServerSyncStatus('synced');
-      setLastSyncedTime(
-        new Date().toLocaleTimeString('bn-BD', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      );
-      if (cloudLogs.length === 0) return;
-      setSecurityLogs((prev) => {
-        const mergedMap = new Map<string, SecurityGatepassLog>();
-        for (const item of prev) {
-          if (item && item.id) mergedMap.set(item.id, item);
-        }
-        for (const item of cloudLogs) {
-          if (item && item.id) {
-            const existing = mergedMap.get(item.id);
-            if (existing) {
-              mergedMap.set(item.id, {
-                ...existing,
-                ...item,
-                portalUserId: item.portalUserId || existing.portalUserId,
-                classId: item.classId || existing.classId,
-                guardianPhone: existing.guardianPhone || item.guardianPhone,
-                guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
-                acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
-                guardianResponse: item.guardianResponse || existing.guardianResponse,
-                acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
-              });
-            } else {
-              mergedMap.set(item.id, item);
-            }
+              })
+              .catch(() => {});
           }
         }
-        return Array.from(mergedMap.values())
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, 1000);
+      })
+      .catch(() => {
+        if (!cancelled) setCloudPushAuthorized(false);
       });
-    });
-    return () => unsub();
+
+    const unsub = subscribeCloudSecurityLogs(
+      cloudUser,
+      (cloudLogs) => {
+        setServerSyncStatus('synced');
+        setLastSyncedTime(
+          new Date().toLocaleTimeString('bn-BD', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        );
+        if (cloudLogs.length === 0) return;
+        setSecurityLogs((prev) => {
+          const mergedMap = new Map<string, SecurityGatepassLog>();
+          for (const item of prev) {
+            if (item && item.id) mergedMap.set(item.id, item);
+          }
+          for (const item of cloudLogs) {
+            if (item && item.id) {
+              const existing = mergedMap.get(item.id);
+              if (existing) {
+                mergedMap.set(item.id, {
+                  ...existing,
+                  ...item,
+                  portalUserId: item.portalUserId || existing.portalUserId,
+                  classId: item.classId || existing.classId,
+                  guardianPhone: existing.guardianPhone || item.guardianPhone,
+                  guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+                  acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+                  guardianResponse: item.guardianResponse || existing.guardianResponse,
+                  acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+                });
+              } else {
+                mergedMap.set(item.id, item);
+              }
+            }
+          }
+          return Array.from(mergedMap.values())
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+            .slice(0, 1000);
+        });
+      },
+      (err) => {
+        const msg = err?.message || '';
+        if (msg.includes('permission-denied') || msg.includes('Missing or insufficient permissions')) {
+          setCloudSyncError('ক্লাউড সিঙ্ক পাঠ/শুনতে অনুমতি সমস্যা হয়েছে।');
+        } else {
+          setCloudSyncError('Google ক্লাউড সিঙ্ক সংযোগে সমস্যা হয়েছে।');
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, [cloudUser, syncAllPhotosToCloudWithUser]);
+
+  const registerGuardianCloudSubscription = useCallback(
+    async (
+      student: Student
+    ): Promise<{ ok: boolean; status: 'bound' | 'needs_official_init' | 'error'; error?: string }> => {
+      if (!cloudUser || !cloudUser.emailVerified) {
+        return { ok: false, status: 'error', error: 'গুগল ক্লাউড সিঙ্ক যুক্ত নেই।' };
+      }
+      setCloudGuardianBindingState({ status: 'binding', studentId: student.id });
+      try {
+        await registerGuardianSubscription(student, getStudentPortalId(student), cloudUser);
+        setCloudGuardianBindingState({ status: 'bound', studentId: student.id });
+        return { ok: true, status: 'bound' };
+      } catch (err: any) {
+        const msg = err?.message || '';
+        if (msg.includes('permission-denied') || msg.includes('Missing or insufficient permissions')) {
+          const reason =
+            'স্কুলের অফিস স্ক্যানার ফোন থেকে প্রথমবার "Google ক্লাউড পুশ" চালু করলেই এই অভিভাবক ডিভাইস স্বয়ংক্রিয়ভাবে যুক্ত হবে।';
+          setCloudGuardianBindingState({
+            status: 'needs_official_init',
+            studentId: student.id,
+            error: reason,
+          });
+          return { ok: false, status: 'needs_official_init', error: reason };
+        }
+        const errText = 'অভিভাবক ডিভাইস ক্লাউডে যুক্ত করতে সমস্যা হয়েছে।';
+        setCloudGuardianBindingState({
+          status: 'error',
+          studentId: student.id,
+          error: errText,
+        });
+        return { ok: false, status: 'error', error: errText };
+      }
+    },
+    [cloudUser]
+  );
+
+  const authorizeScannerUid = useCallback(
+    async (scannerUid: string, scannerEmail?: string): Promise<{ ok: boolean; message: string }> => {
+      if (!cloudUser || !cloudUser.emailVerified) {
+        return { ok: false, message: 'প্রথমে মূল অ্যাডমিন Google অ্যাকাউন্ট দিয়ে সাইন-ইন করুন।' };
+      }
+      const trimmedUid = scannerUid.trim();
+      if (!trimmedUid) {
+        return { ok: false, message: 'স্ক্যানার ফোনের UID লিখুন।' };
+      }
+      try {
+        await authorizeScannerUidInFirestore(trimmedUid, scannerEmail, cloudUser);
+        return {
+          ok: true,
+          message: `✓ স্ক্যানার UID (${trimmedUid.slice(0, 8)}...) সফলভাবে অনুমোদিত হয়েছে!`,
+        };
+      } catch (err: any) {
+        return {
+          ok: false,
+          message: err?.message || 'স্ক্যানার অনুমোদন করতে ব্যর্থ হয়েছে।',
+        };
+      }
+    },
+    [cloudUser]
+  );
 
   const connectCloudSync = useCallback(async (): Promise<boolean> => {
     setCloudSyncError(null);
@@ -955,15 +1063,25 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return false;
     }
     if (res.user) {
-      await ensureSchoolDocument(res.user, latestStateRef.current.schoolInfo).catch(() => {});
-      hasAutoSyncedCloudSessionRef.current = res.user.uid;
-      await syncAllPhotosToCloudWithUser(res.user).catch(() => {});
+      try {
+        const authStatus = await checkCloudScannerAuthorization(res.user);
+        setCloudPushAuthorized(authStatus.authorized);
+        if (authStatus.authorized) {
+          await ensureSchoolDocument(res.user, latestStateRef.current.schoolInfo).catch(() => {});
+          hasAutoSyncedCloudSessionRef.current = res.user.uid;
+          await syncAllPhotosToCloudWithUser(res.user).catch(() => {});
+        }
+      } catch {
+        setCloudPushAuthorized(false);
+      }
     }
     return true;
   }, [syncAllPhotosToCloudWithUser]);
 
   const disconnectCloudSync = useCallback(async (): Promise<void> => {
     hasAutoSyncedCloudSessionRef.current = null;
+    setCloudPushAuthorized(null);
+    setCloudGuardianBindingState({ status: 'idle' });
     await signOutCloudSync();
   }, []);
 
@@ -2341,22 +2459,36 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const broadcastSecurityLogToCloud = useCallback(
-    async (log: SecurityGatepassLog) => {
-      if (cloudUser && cloudUser.emailVerified) {
-        const matchedStudent = latestStateRef.current.students.find(
-          (s) =>
-            s.id === log.studentId ||
-            (log.portalUserId && getStudentPortalId(s).toUpperCase() === log.portalUserId.toUpperCase()) ||
-            (log.classId && s.classId === log.classId && Number(s.roll) === Number(log.studentRoll))
-        );
-        await pushSecurityLogToFirestore(
+    async (
+      log: SecurityGatepassLog
+    ): Promise<{ ok: boolean; guardianCount?: number; error?: string }> => {
+      if (!cloudUser || !cloudUser.emailVerified) {
+        return { ok: false, error: 'Google ক্লাউড পুশ চালু নেই।' };
+      }
+      const matchedStudent = latestStateRef.current.students.find(
+        (s) =>
+          s.id === log.studentId ||
+          (log.portalUserId && getStudentPortalId(s).toUpperCase() === log.portalUserId.toUpperCase()) ||
+          (log.classId && s.classId === log.classId && Number(s.roll) === Number(log.studentRoll))
+      );
+      try {
+        const res = await pushSecurityLogToFirestore(
           log,
           cloudUser,
           latestStateRef.current.schoolInfo,
-          matchedStudent?.guardianUid
-        ).catch((err) => {
-          console.warn('Firestore security log push warning:', err);
-        });
+          matchedStudent?.guardianUid,
+          matchedStudent?.guardianUids
+        );
+        return { ok: true, guardianCount: res.guardianCount };
+      } catch (err: any) {
+        console.warn('Firestore security log push warning:', err);
+        const msg = err?.message || '';
+        const friendlyError =
+          msg.includes('permission-denied') || msg.includes('Missing or insufficient permissions')
+            ? `এই ফোনের Gmail (${cloudUser.email}) এখনো স্ক্যানার হিসেবে অনুমোদিত নয় — অভিভাবকের ফোনে ক্লাউড মেসেজ যায়নি।`
+            : 'Google ক্লাউডে স্ক্যান পাঠাতে সমস্যা হয়েছে।';
+        setCloudSyncError(friendlyError);
+        return { ok: false, error: friendlyError };
       }
     },
     [cloudUser]
@@ -4453,11 +4585,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cloudUser,
         cloudSyncError,
         cloudUnauthorizedDomain,
+        cloudPushAuthorized,
+        cloudGuardianBindingState,
         isCloudPhotoSyncing,
         cloudPhotoSyncProgress,
         connectCloudSync,
         disconnectCloudSync,
         syncAllPhotosToCloud,
+        registerGuardianCloudSubscription,
+        authorizeScannerUid,
         broadcastSecurityLogToCloud,
       }}
     >

@@ -130,6 +130,10 @@
           "type": "string",
           "maxLength": 128
         },
+        "guardianUids": {
+          "type": "array",
+          "description": "Bounded list (max 10) of verified guardian UIDs bound to this student."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -221,6 +225,10 @@
         "guardianUid": {
           "type": "string",
           "maxLength": 128
+        },
+        "guardianUids": {
+          "type": "array",
+          "description": "Bounded list (max 10) of verified guardian UIDs subscribed for live alerts."
         },
         "createdAt": {
           "type": "string",
@@ -444,6 +452,45 @@
       },
       "required": ["id", "title", "category", "fileType", "classId", "fileName", "mimeType", "fileSizeBytes", "fileUrl", "uploadedBy", "downloadsCount", "academicYear", "ownerUid", "createdAt", "updatedAt"]
     },
+    "GuardianSubscriber": {
+      "title": "GuardianSubscriber",
+      "description": "Verified guardian device binding to a specific student for automatic live gatepass push delivery.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 258,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "studentId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "portalUserId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "studentNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "guardianUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "studentId", "guardianUid", "createdAt", "updatedAt"]
+    },
     "ConnectionCheck": {
       "title": "ConnectionCheck",
       "description": "Health check document for validating server reachability.",
@@ -480,6 +527,10 @@
     "/schools/{schoolId}/staffAttendance/{attId}": {
       "schema": { "$ref": "#/entities/StaffAttendance" },
       "description": "Stores daily employee check-in and check-out logs."
+    },
+    "/schools/{schoolId}/guardianSubscribers/{bindingId}": {
+      "schema": { "$ref": "#/entities/GuardianSubscriber" },
+      "description": "Stores verified guardian device subscriptions per student for multi-device push delivery."
     },
     "/schools/{schoolId}/libraryMaterials/{materialId}": {
       "schema": { "$ref": "#/entities/LibraryMaterial" },

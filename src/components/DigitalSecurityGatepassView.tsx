@@ -183,10 +183,18 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     seedParentDetailsForClass,
     cloudUser,
     cloudSyncError,
+    cloudPushAuthorized,
     connectCloudSync,
+    authorizeScannerUid,
     broadcastSecurityLogToCloud,
   } = useSchool();
   const [scannerCloudConnecting, setScannerCloudConnecting] = useState(false);
+  const [copiedScannerUid, setCopiedScannerUid] = useState(false);
+  const [showScannerAllowBox, setShowScannerAllowBox] = useState(false);
+  const [allowScannerUidInput, setAllowScannerUidInput] = useState('');
+  const [allowScannerEmailInput, setAllowScannerEmailInput] = useState('');
+  const [allowScannerResult, setAllowScannerResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [isAuthorizingScanner, setIsAuthorizingScanner] = useState(false);
 
   const initialUrlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const urlGuardianParam = initialUrlParams?.get('guardian') || '';
@@ -257,7 +265,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     serverInstanceId?: string;
     verifiedAt: string;
     logPayload?: SecurityGatepassLog;
-    syncError?: 'auth_redirect' | 'static_host' | 'network_error' | null;
+    syncError?: 'auth_redirect' | 'static_host' | 'network_error' | 'cloud_permission_denied' | null;
     isSending?: boolean;
   } | null>(null);
   const [ambiguousCandidates, setAmbiguousCandidates] = useState<Student[]>([]);
@@ -694,7 +702,10 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     broadcastLocalGatepassScan(newLogRecord);
 
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
-    broadcastSecurityLogToCloud(newLogRecord).catch(() => {});
+    const cloudPushPromise = broadcastSecurityLogToCloud(newLogRecord).catch(() => ({
+      ok: false,
+      error: 'Google ক্লাউডে স্ক্যান পাঠাতে ব্যর্থ হয়েছে।',
+    }));
     const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
     const siblingPreOrigin =
       typeof window !== 'undefined' && window.location.origin.includes('://ais-dev-')
@@ -736,7 +747,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
 
     const dispatchScanToServer = async (attempt = 0): Promise<void> => {
       try {
-        const [res, mirrorDelivered] = await Promise.all([
+        const [res, mirrorDelivered, cloudRes] = await Promise.all([
           fetch('/api/security/scan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -745,43 +756,57 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             body: JSON.stringify({ log: newLogRecord }),
           }),
           attempt === 0 ? mirrorScanToSiblingOrigin() : Promise.resolve(0),
+          attempt === 0 ? cloudPushPromise : Promise.resolve({ ok: false, guardianCount: 0 } as { ok: boolean; guardianCount?: number; error?: string }),
         ]);
         const parsed = await parseJsonApiResponse<any>(res);
+        const cloudGuardianCount = cloudRes.ok ? (cloudRes.guardianCount || 0) : 0;
+        const cloudDenied = Boolean(cloudUser?.emailVerified && !cloudRes.ok);
+
         if (parsed.staticHostNoBackend) {
+          const deliveredAny = Math.max(mirrorDelivered, cloudGuardianCount);
           setLastScanDispatchInfo({
             student,
-            deliveredCount: mirrorDelivered,
+            deliveredCount: deliveredAny,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: mirrorDelivered > 0 ? null : 'static_host',
+            syncError: cloudDenied
+              ? 'cloud_permission_denied'
+              : cloudRes.ok || mirrorDelivered > 0
+              ? null
+              : 'static_host',
           });
           setScanSuccessToast((prev) =>
             prev?.id === toastId
               ? {
                   ...prev,
-                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
-                  deliveredCount: mirrorDelivered,
+                  dispatchPhase: deliveredAny > 0 ? 'delivered' : cloudRes.ok ? 'saved_no_online' : 'error',
+                  deliveredCount: deliveredAny,
                 }
               : prev
           );
           return;
         }
         if (parsed.authRedirected) {
+          const deliveredAny = Math.max(mirrorDelivered, cloudGuardianCount);
           setLastScanDispatchInfo({
             student,
-            deliveredCount: mirrorDelivered,
+            deliveredCount: deliveredAny,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: mirrorDelivered > 0 ? null : 'auth_redirect',
+            syncError: cloudDenied
+              ? 'cloud_permission_denied'
+              : cloudRes.ok || mirrorDelivered > 0
+              ? null
+              : 'auth_redirect',
           });
           setScanSuccessToast((prev) =>
             prev?.id === toastId
               ? {
                   ...prev,
-                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
-                  deliveredCount: mirrorDelivered,
+                  dispatchPhase: deliveredAny > 0 ? 'delivered' : cloudRes.ok ? 'saved_no_online' : 'error',
+                  deliveredCount: deliveredAny,
                 }
               : prev
           );
@@ -792,20 +817,25 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
             await new Promise((r) => setTimeout(r, 650));
             return dispatchScanToServer(1);
           }
+          const deliveredAny = Math.max(mirrorDelivered, cloudGuardianCount);
           setLastScanDispatchInfo({
             student,
-            deliveredCount: mirrorDelivered,
+            deliveredCount: deliveredAny,
             serverHost: currentServerHost,
             verifiedAt: nowIso,
             logPayload: newLogRecord,
-            syncError: mirrorDelivered > 0 ? null : 'network_error',
+            syncError: cloudDenied
+              ? 'cloud_permission_denied'
+              : cloudRes.ok || mirrorDelivered > 0
+              ? null
+              : 'network_error',
           });
           setScanSuccessToast((prev) =>
             prev?.id === toastId
               ? {
                   ...prev,
-                  dispatchPhase: mirrorDelivered > 0 ? 'delivered' : 'error',
-                  deliveredCount: mirrorDelivered,
+                  dispatchPhase: deliveredAny > 0 ? 'delivered' : cloudRes.ok ? 'saved_no_online' : 'error',
+                  deliveredCount: deliveredAny,
                 }
               : prev
           );
@@ -820,7 +850,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
         }
         const localDelivered =
           typeof data?.deliveredLiveSubscribers === 'number' ? data.deliveredLiveSubscribers : 0;
-        const totalDelivered = localDelivered + mirrorDelivered;
+        const totalDelivered = Math.max(localDelivered + mirrorDelivered, cloudGuardianCount);
         setLastScanDispatchInfo({
           student,
           deliveredCount: totalDelivered,
@@ -828,13 +858,18 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           serverInstanceId: typeof data?.serverInstanceId === 'string' ? data.serverInstanceId : undefined,
           verifiedAt: nowIso,
           logPayload: data?.log || newLogRecord,
-          syncError: null,
+          syncError: cloudDenied && totalDelivered === 0 ? 'cloud_permission_denied' : null,
         });
         setScanSuccessToast((prev) =>
           prev?.id === toastId
             ? {
                 ...prev,
-                dispatchPhase: totalDelivered > 0 ? 'delivered' : 'saved_no_online',
+                dispatchPhase:
+                  totalDelivered > 0
+                    ? 'delivered'
+                    : cloudDenied
+                    ? 'error'
+                    : 'saved_no_online',
                 deliveredCount: totalDelivered,
               }
             : prev
@@ -845,17 +880,29 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
           await new Promise((r) => setTimeout(r, 650));
           return dispatchScanToServer(1);
         }
+        const cloudRes = await cloudPushPromise;
+        const cloudGuardianCount = cloudRes.ok ? (cloudRes.guardianCount || 0) : 0;
+        const cloudDenied = Boolean(cloudUser?.emailVerified && !cloudRes.ok);
         setLastScanDispatchInfo({
           student,
-          deliveredCount: 0,
+          deliveredCount: cloudGuardianCount,
           serverHost: currentServerHost,
           verifiedAt: nowIso,
           logPayload: newLogRecord,
-          syncError: 'network_error',
+          syncError: cloudDenied
+            ? 'cloud_permission_denied'
+            : cloudRes.ok
+            ? null
+            : 'network_error',
         });
         setScanSuccessToast((prev) =>
           prev?.id === toastId
-            ? { ...prev, dispatchPhase: 'error', deliveredCount: 0 }
+            ? {
+                ...prev,
+                dispatchPhase:
+                  cloudGuardianCount > 0 ? 'delivered' : cloudRes.ok ? 'saved_no_online' : 'error',
+                deliveredCount: cloudGuardianCount,
+              }
             : prev
         );
       }
@@ -2639,6 +2686,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                         >
                           {lastScanDispatchInfo.isSending
                             ? `⏳ ${lastScanDispatchInfo.student.nameBn}-এর এলার্ম সার্ভারে পাঠানো হচ্ছে...`
+                            : lastScanDispatchInfo.syncError === 'cloud_permission_denied'
+                            ? `⚠ এই ফোনের Gmail (${cloudUser?.email}) অনুমোদিত স্ক্যানার নয় — ক্লাউড মেসেজ যায়নি!`
                             : lastScanDispatchInfo.syncError === 'static_host'
                             ? `⚠ ব্যাকএন্ড সার্ভার নেই — এই হোস্টিংয়ে কেবল ফ্রন্টএন্ড ফাইল চলছে, অন্য ফোনে এলার্ম যাবে না!`
                             : lastScanDispatchInfo.syncError === 'auth_redirect'
@@ -2789,13 +2838,48 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                       </button>
                     )}
                     {cloudUser && cloudUser.emailVerified ? (
-                      <span
-                        className="px-2.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-500/50 text-emerald-200 font-semibold text-[11px] flex items-center gap-1.5 whitespace-nowrap"
-                        title={`অফিস স্ক্যান রিয়েলটাইম Google ক্লাউড সিঙ্কে যাচ্ছে (${cloudUser.email})`}
-                      >
-                        <Globe className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>ক্লাউড পুশ সক্রিয়</span>
-                      </span>
+                      cloudPushAuthorized === false ? (
+                        <button
+                          type="button"
+                          disabled={scannerCloudConnecting}
+                          onClick={async () => {
+                            setScannerCloudConnecting(true);
+                            try {
+                              await connectCloudSync();
+                            } finally {
+                              setScannerCloudConnecting(false);
+                            }
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-600 border border-rose-400 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                          title={`এই Gmail (${cloudUser.email}) এখনো স্ক্যানার হিসেবে অনুমোদিত নয়`}
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                          <span>ক্লাউড পুশ অননুমোদিত · Gmail বদলান</span>
+                        </button>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className="px-2.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-500/50 text-emerald-200 font-semibold text-[11px] flex items-center gap-1.5 whitespace-nowrap"
+                            title={`অফিস স্ক্যান রিয়েলটাইম Google ক্লাউড সিঙ্কে যাচ্ছে (${cloudUser.email})`}
+                          >
+                            <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>
+                              {cloudPushAuthorized === null ? 'ক্লাউড যাচাই হচ্ছে...' : 'ক্লাউড পুশ সক্রিয়'}
+                            </span>
+                          </span>
+                          {cloudUser.email === 'chorcho2utkosho@gmail.com' && (
+                            <button
+                              type="button"
+                              onClick={() => setShowScannerAllowBox((v) => !v)}
+                              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-200 font-semibold text-[11px] flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                              title="অন্য গেটকিপার বা শিক্ষকের ফোনের Gmail UID অনুমোদন করুন"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>অন্য স্ক্যানার অনুমোদন</span>
+                            </button>
+                          )}
+                        </div>
+                      )
                     ) : (
                       <button
                         type="button"
@@ -2828,6 +2912,105 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </button>
                   </div>
                 </div>
+                {cloudUser?.emailVerified && cloudPushAuthorized === false && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 text-amber-950 px-3.5 py-2.5 text-xs space-y-2">
+                    <div className="font-bold flex items-center gap-1.5 text-rose-800">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>
+                        এই ফোনের Gmail ({cloudUser.email}) এখনো অনুমোদিত স্ক্যানার নয় — তাই অভিভাবকের ফোনে ক্লাউড মেসেজ যাবে না!
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-900 leading-relaxed">
+                      সমাধান (যেকোনো ১টি): মূল অ্যাডমিন Gmail (<strong>chorcho2utkosho@gmail.com</strong>) দিয়ে এখানে সাইন-ইন করুন, অথবা নিচ থেকে এই ফোনের <strong>UID কপি করে</strong> মূল অ্যাডমিনের ড্যাশবোর্ডে <strong>"অন্য স্ক্যানার অনুমোদন"</strong>-এ দিয়ে একবার অনুমোদন করিয়ে নিন।
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                            navigator.clipboard.writeText(cloudUser.uid).then(() => {
+                              setCopiedScannerUid(true);
+                              setTimeout(() => setCopiedScannerUid(false), 3000);
+                            }).catch(() => {});
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>{copiedScannerUid ? 'UID কপি সম্পন্ন ✓' : `এই ফোনের UID কপি (${cloudUser.uid.slice(0, 8)}...)`}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={scannerCloudConnecting}
+                        onClick={async () => {
+                          setScannerCloudConnecting(true);
+                          try {
+                            await connectCloudSync();
+                          } finally {
+                            setScannerCloudConnecting(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>মূল অ্যাডমিন Gmail দিয়ে সাইন-ইন</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {showScannerAllowBox && cloudUser?.email === 'chorcho2utkosho@gmail.com' && (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      setIsAuthorizingScanner(true);
+                      setAllowScannerResult(null);
+                      try {
+                        const res = await authorizeScannerUid(allowScannerUidInput, allowScannerEmailInput);
+                        setAllowScannerResult(res);
+                        if (res.ok) {
+                          setAllowScannerUidInput('');
+                          setAllowScannerEmailInput('');
+                        }
+                      } finally {
+                        setIsAuthorizingScanner(false);
+                      }
+                    }}
+                    className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs space-y-2"
+                  >
+                    <div className="font-bold text-indigo-950">
+                      অন্য গেটকিপার / শিক্ষকের ফোনের Google UID অনুমোদন করুন
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={allowScannerUidInput}
+                        onChange={(e) => setAllowScannerUidInput(e.target.value)}
+                        placeholder="স্ক্যানার ফোনের Google UID পেস্ট করুন"
+                        className="flex-1 min-w-[200px] px-3 py-1.5 rounded-lg border border-indigo-300 bg-white font-mono text-xs"
+                      />
+                      <input
+                        type="email"
+                        value={allowScannerEmailInput}
+                        onChange={(e) => setAllowScannerEmailInput(e.target.value)}
+                        placeholder="ইমেইল (ঐচ্ছিক)"
+                        className="w-48 px-3 py-1.5 rounded-lg border border-indigo-300 bg-white text-xs"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isAuthorizingScanner}
+                        className="px-3.5 py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 text-white font-bold text-xs cursor-pointer"
+                      >
+                        {isAuthorizingScanner ? 'অনুমোদন হচ্ছে...' : 'অনুমোদন করুন'}
+                      </button>
+                    </div>
+                    {allowScannerResult && (
+                      <div className={`font-semibold text-[11px] ${allowScannerResult.ok ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {allowScannerResult.message}
+                      </div>
+                    )}
+                  </form>
+                )}
                 {cloudSyncError && !cloudUser?.emailVerified && (
                   <div className="rounded-xl border border-rose-300 bg-rose-50 text-rose-900 px-3 py-2 text-xs font-medium">
                     <strong>ক্লাউড পুশ সতর্কতা:</strong> {cloudSyncError}
@@ -3307,6 +3490,15 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                               </div>
                               <div className="text-[11px] text-rose-100">
                                 এই ব্রাউজারে সেশন যাচাই বাকি থাকায় অভিভাবক ফোনে এলার্ম যায়নি। নিচের "পেজ রিলোড করুন" বাটনে ক্লিক করে আবার স্ক্যান করুন।
+                              </div>
+                            </>
+                          ) : lastScanDispatchInfo.syncError === 'cloud_permission_denied' ? (
+                            <>
+                              <div className="font-bold text-amber-200">
+                                ⚠ সতর্কতা: {lastScanDispatchInfo.student.nameBn}-এর স্ক্যান Google ক্লাউডে পাঠানো যায়নি (অননুমোদিত স্ক্যানার Gmail)!
+                              </div>
+                              <div className="text-[11px] text-rose-100">
+                                এই ফোনের Gmail ({cloudUser?.email}) অনুমোদিত স্ক্যানার নয়। মূল অ্যাডমিন Gmail দিয়ে সাইন-ইন করুন অথবা উপরের "UID কপি" করে মূল অ্যাডমিনে অনুমোদন দিন।
                               </div>
                             </>
                           ) : lastScanDispatchInfo.syncError === 'network_error' ? (

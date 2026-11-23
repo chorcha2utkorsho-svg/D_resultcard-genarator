@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   orderBy,
   query,
@@ -144,6 +145,102 @@ export async function authorizeScannerUidInFirestore(
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
+}
+
+export function subscribeBootstrapGuardianSubscribersMirror(
+  user: User,
+  getLocalStudents: () => Student[]
+): Unsubscribe {
+  if (!user.emailVerified || user.email !== BOOTSTRAP_ADMIN_EMAIL) {
+    return () => {};
+  }
+  const subCol = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'guardianSubscribers');
+
+  return onSnapshot(
+    query(subCol, limit(500)),
+    async (snapshot) => {
+      if (snapshot.empty) return;
+      const localList = getLocalStudents();
+      const localById = new Map<string, Student>();
+      const portalToStudentIds = new Map<string, string[]>();
+      for (const s of localList) {
+        const cleanId = safeId(s.id);
+        localById.set(cleanId, s);
+        const rawPortal = typeof s.portalUserId === 'string' && s.portalUserId.trim() ? s.portalUserId.trim() : '';
+        if (rawPortal) {
+          const pKey = rawPortal.toUpperCase();
+          const arr = portalToStudentIds.get(pKey) || [];
+          arr.push(cleanId);
+          portalToStudentIds.set(pKey, arr);
+        }
+      }
+
+      const byStudent = new Map<string, Set<string>>();
+      for (const d of snapshot.docs) {
+        const data = d.data();
+        const gUid =
+          typeof data.guardianUid === 'string' && data.guardianUid.trim()
+            ? safeId(data.guardianUid.trim())
+            : '';
+        if (!gUid) continue;
+        if (typeof data.studentId === 'string' && data.studentId.trim()) {
+          const sid = safeId(data.studentId.trim());
+          if (!byStudent.has(sid)) byStudent.set(sid, new Set<string>());
+          byStudent.get(sid)!.add(gUid);
+        }
+        if (typeof data.portalUserId === 'string' && data.portalUserId.trim()) {
+          const matchedSids = portalToStudentIds.get(data.portalUserId.trim().toUpperCase()) || [];
+          for (const sid of matchedSids) {
+            if (!byStudent.has(sid)) byStudent.set(sid, new Set<string>());
+            byStudent.get(sid)!.add(gUid);
+          }
+        }
+      }
+
+      for (const [sid, uidSet] of byStudent.entries()) {
+        const nextUids = Array.from(uidSet).slice(0, 10);
+        if (nextUids.length === 0) continue;
+        try {
+          const stRef = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'students', sid);
+          const stSnap = await getDoc(stRef);
+          if (!stSnap.exists()) {
+            const localStd = localById.get(sid);
+            if (!localStd) continue;
+            const payload = buildStudentFirestorePayload(
+              { ...localStd, guardianUid: nextUids[0], guardianUids: nextUids },
+              user
+            );
+            await setDoc(stRef, payload);
+            continue;
+          }
+          const stData = stSnap.data();
+          const curUids = Array.isArray(stData?.guardianUids)
+            ? stData.guardianUids.filter((u: unknown) => typeof u === 'string')
+            : [];
+          if (typeof stData?.guardianUid === 'string' && stData.guardianUid.trim()) {
+            if (!nextUids.includes(stData.guardianUid.trim()) && nextUids.length < 10) {
+              nextUids.push(stData.guardianUid.trim());
+            }
+          }
+          const needsUpdate =
+            nextUids.some((u) => !curUids.includes(u)) ||
+            (!stData?.guardianUid && nextUids.length > 0);
+          if (needsUpdate) {
+            await updateDoc(stRef, {
+              guardianUid: stData?.guardianUid || nextUids[0],
+              guardianUids: nextUids.slice(0, 10),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch {
+          // Non-fatal mirror skip
+        }
+      }
+    },
+    () => {
+      // Non-fatal listener guard
+    }
+  );
 }
 
 export async function registerGuardianSubscription(
@@ -580,6 +677,12 @@ export function subscribeCloudSecurityLogs(
 
   const mapDoc = (d: any): SecurityGatepassLog => {
     const data = d.data();
+    const fallbackServerTs =
+      typeof data.serverTimestamp === 'number'
+        ? data.serverTimestamp
+        : data.createdAt && typeof data.createdAt.toMillis === 'function'
+        ? data.createdAt.toMillis()
+        : undefined;
     return {
       id: data.id || d.id,
       studentId: data.studentId,
@@ -590,7 +693,7 @@ export function subscribeCloudSecurityLogs(
       classNameBn: data.classNameBn,
       action: data.action === 'exit' ? 'exit' : 'entry',
       timestamp: data.timestamp,
-      serverTimestamp: typeof data.serverTimestamp === 'number' ? data.serverTimestamp : undefined,
+      serverTimestamp: fallbackServerTs,
       guardianPhone: '',
       voiceDispatched: Boolean(data.voiceDispatched),
       smsDispatched: Boolean(data.smsDispatched),
@@ -636,7 +739,7 @@ export function subscribeCloudSecurityLogs(
   };
 
   const unsubOwner = onSnapshot(
-    query(colRef, where('ownerUid', '==', uid), limit(100)),
+    query(colRef, where('ownerUid', '==', uid), limit(500)),
     (snapshot) => {
       ownerMap.clear();
       for (const d of snapshot.docs) {
@@ -649,7 +752,7 @@ export function subscribeCloudSecurityLogs(
   );
 
   const unsubGuardian = onSnapshot(
-    query(colRef, where('guardianUid', '==', uid), limit(100)),
+    query(colRef, where('guardianUid', '==', uid), limit(500)),
     (snapshot) => {
       guardianMap.clear();
       for (const d of snapshot.docs) {
@@ -662,7 +765,7 @@ export function subscribeCloudSecurityLogs(
   );
 
   const unsubGuardianArray = onSnapshot(
-    query(colRef, where('guardianUids', 'array-contains', uid), limit(100)),
+    query(colRef, where('guardianUids', 'array-contains', uid), limit(500)),
     (snapshot) => {
       guardianArrayMap.clear();
       for (const d of snapshot.docs) {
@@ -679,6 +782,80 @@ export function subscribeCloudSecurityLogs(
     unsubGuardian();
     unsubGuardianArray();
   };
+}
+
+export async function pullLatestCloudSecurityLogs(
+  user: User
+): Promise<SecurityGatepassLog[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/securityLogs`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'securityLogs');
+
+  const mapDoc = (d: any): SecurityGatepassLog => {
+    const data = d.data();
+    const fallbackServerTs =
+      typeof data.serverTimestamp === 'number'
+        ? data.serverTimestamp
+        : data.createdAt && typeof data.createdAt.toMillis === 'function'
+        ? data.createdAt.toMillis()
+        : undefined;
+    return {
+      id: data.id || d.id,
+      studentId: data.studentId,
+      portalUserId: typeof data.portalUserId === 'string' ? data.portalUserId : undefined,
+      classId: typeof data.classId === 'string' ? data.classId : undefined,
+      studentNameBn: data.studentNameBn,
+      studentRoll: Number(data.studentRoll) || 0,
+      classNameBn: data.classNameBn,
+      action: data.action === 'exit' ? 'exit' : 'entry',
+      timestamp: data.timestamp,
+      serverTimestamp: fallbackServerTs,
+      guardianPhone: '',
+      voiceDispatched: Boolean(data.voiceDispatched),
+      smsDispatched: Boolean(data.smsDispatched),
+      status: data.status === 'flagged' ? 'flagged' : 'verified',
+      guardianAcknowledged: Boolean(data.guardianAcknowledged),
+      guardianResponse: data.guardianResponse,
+      acknowledgedAt: data.acknowledgedAt,
+      acknowledgedBy: data.acknowledgedBy,
+    };
+  };
+
+  const runServerFirst = async (q: ReturnType<typeof query>) => {
+    try {
+      return await getDocsFromServer(q);
+    } catch {
+      return await getDocs(q);
+    }
+  };
+
+  try {
+    if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+      const snap = await runServerFirst(query(colRef, orderBy('timestamp', 'desc'), limit(100)));
+      return snap.docs
+        .map(mapDoc)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+
+    const uid = safeId(user.uid);
+    const merged = new Map<string, SecurityGatepassLog>();
+    const [ownerSnap, gSnap, gArrSnap] = await Promise.all([
+      runServerFirst(query(colRef, where('ownerUid', '==', uid), limit(500))),
+      runServerFirst(query(colRef, where('guardianUid', '==', uid), limit(500))),
+      runServerFirst(query(colRef, where('guardianUids', 'array-contains', uid), limit(500))),
+    ]);
+    for (const snap of [ownerSnap, gSnap, gArrSnap]) {
+      for (const d of snap.docs) {
+        const log = mapDoc(d);
+        if (log.id) merged.set(log.id, log);
+      }
+    }
+    return Array.from(merged.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
 export async function syncLibraryMaterialToFirestore(

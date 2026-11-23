@@ -702,10 +702,12 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     broadcastLocalGatepassScan(newLogRecord);
 
     // 2c. Broadcast to central server (WebSocket + SSE push + authoritative main-DB attendance record) + Cloud Firestore
-    const cloudPushPromise = broadcastSecurityLogToCloud(newLogRecord).catch(() => ({
-      ok: false,
-      error: 'Google ক্লাউডে স্ক্যান পাঠাতে ব্যর্থ হয়েছে।',
-    }));
+    const cloudPushPromise: Promise<{ ok: boolean; guardianCount?: number; error?: string }> =
+      broadcastSecurityLogToCloud(newLogRecord).catch(() => ({
+        ok: false,
+        guardianCount: 0,
+        error: 'Google ক্লাউডে স্ক্যান পাঠাতে ব্যর্থ হয়েছে।',
+      }));
     const currentServerHost = typeof window !== 'undefined' ? window.location.host : '';
     const siblingPreOrigin =
       typeof window !== 'undefined' && window.location.origin.includes('://ais-dev-')

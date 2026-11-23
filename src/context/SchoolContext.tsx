@@ -81,9 +81,11 @@ import {
   deleteLibraryMaterialFromFirestore,
   ensureSchoolDocument,
   pullLibraryMaterialsFromFirestore,
+  pullLatestCloudSecurityLogs,
   pullStudentsFromFirestore,
   pushSecurityLogToFirestore,
   registerGuardianSubscription,
+  subscribeBootstrapGuardianSubscribersMirror,
   subscribeCloudSecurityLogs,
   syncLibraryMaterialToFirestore,
   syncStudentRecordToFirestore,
@@ -371,6 +373,7 @@ interface SchoolContextType {
   broadcastSecurityLogToCloud: (
     log: SecurityGatepassLog
   ) => Promise<{ ok: boolean; guardianCount?: number; error?: string }>;
+  pullCloudSecurityLogsNow: () => Promise<SecurityGatepassLog[]>;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -933,6 +936,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (!cancelled) setCloudPushAuthorized(false);
       });
 
+    const unsubMirror = subscribeBootstrapGuardianSubscribersMirror(cloudUser, () =>
+      latestStateRef.current.students.map((s) => ({
+        ...s,
+        portalUserId: getStudentPortalId(s),
+      }))
+    );
+
     const unsub = subscribeCloudSecurityLogs(
       cloudUser,
       (cloudLogs) => {
@@ -987,6 +997,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => {
       cancelled = true;
       unsub();
+      unsubMirror();
     };
   }, [cloudUser, syncAllPhotosToCloudWithUser]);
 
@@ -2493,6 +2504,47 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     },
     [cloudUser]
   );
+
+  const pullCloudSecurityLogsNow = useCallback(async (): Promise<SecurityGatepassLog[]> => {
+    if (!cloudUser || !cloudUser.emailVerified) return [];
+    try {
+      const cloudLogs = await pullLatestCloudSecurityLogs(cloudUser);
+      if (cloudLogs.length > 0) {
+        setSecurityLogs((prev) => {
+          const mergedMap = new Map<string, SecurityGatepassLog>();
+          for (const item of prev) {
+            if (item && item.id) mergedMap.set(item.id, item);
+          }
+          for (const item of cloudLogs) {
+            if (item && item.id) {
+              const existing = mergedMap.get(item.id);
+              if (existing) {
+                mergedMap.set(item.id, {
+                  ...existing,
+                  ...item,
+                  portalUserId: item.portalUserId || existing.portalUserId,
+                  classId: item.classId || existing.classId,
+                  guardianPhone: existing.guardianPhone || item.guardianPhone,
+                  guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+                  acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+                  guardianResponse: item.guardianResponse || existing.guardianResponse,
+                  acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+                });
+              } else {
+                mergedMap.set(item.id, item);
+              }
+            }
+          }
+          return Array.from(mergedMap.values())
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+            .slice(0, 1000);
+        });
+      }
+      return cloudLogs;
+    } catch {
+      return [];
+    }
+  }, [cloudUser]);
 
   const acknowledgeSecurityLog = useCallback(
     async (logId: string, guardianResponse: string, acknowledgedBy?: string) => {
@@ -4595,6 +4647,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         registerGuardianCloudSubscription,
         authorizeScannerUid,
         broadcastSecurityLogToCloud,
+        pullCloudSecurityLogsNow,
       }}
     >
       {children}

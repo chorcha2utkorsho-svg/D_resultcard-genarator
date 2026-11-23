@@ -184,6 +184,7 @@ export function useGatepassRealtime({
     securityLogs,
     addSecurityLog,
     upsertAttendanceRecordFromServer,
+    pullCloudSecurityLogsNow,
   } = useSchool();
   const [liveRingingAlert, setLiveRingingAlert] = useState<{
     log: SecurityGatepassLog;
@@ -486,6 +487,8 @@ export function useGatepassRealtime({
   addSecurityLogRef.current = addSecurityLog;
   const upsertAttendanceRecordFromServerRef = useRef(upsertAttendanceRecordFromServer);
   upsertAttendanceRecordFromServerRef.current = upsertAttendanceRecordFromServer;
+  const pullCloudSecurityLogsNowRef = useRef(pullCloudSecurityLogsNow);
+  pullCloudSecurityLogsNowRef.current = pullCloudSecurityLogsNow;
 
   // Pre-warm Bengali voice MP3 cache so incoming alerts play instantaneously (0ms fetch delay)
   useEffect(() => {
@@ -576,7 +579,7 @@ export function useGatepassRealtime({
           typeof item.serverTimestamp === 'number'
             ? item.serverTimestamp
             : new Date(item.timestamp).getTime() || 0;
-        const postBaselineWindowMs = hasServerClock ? 15 * 60 * 1000 : 60 * 60 * 1000;
+        const postBaselineWindowMs = hasServerClock ? 20 * 60 * 1000 : 2 * 60 * 60 * 1000;
         // Post-baseline newly arrived logs: generous window prevents phone-clock skew from silencing live scans
         if (logMs >= nowMs - postBaselineWindowMs && !item.guardianAcknowledged) {
           if (!freshUnplayed) {
@@ -1192,6 +1195,7 @@ export function useGatepassRealtime({
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       consecutivePollFailures = 0;
       void pollLatestLogs();
+      void pullCloudSecurityLogsNowRef.current();
       if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
         wsReconnectAttempts = 0;
         connectWebSocket();
@@ -1201,6 +1205,7 @@ export function useGatepassRealtime({
       consecutivePollFailures = 0;
       wsReconnectAttempts = 0;
       void pollLatestLogs();
+      void pullCloudSecurityLogsNowRef.current();
       if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
         connectWebSocket();
       }
@@ -1256,6 +1261,45 @@ export function useGatepassRealtime({
         setGuardianLiveWatchActive(true);
       }
     }
+    let cloudPulledLogs: SecurityGatepassLog[] = [];
+    const cloudPullPromise = pullCloudSecurityLogsNow()
+      .then((logs) => {
+        cloudPulledLogs = logs;
+        return logs;
+      })
+      .catch(() => [] as SecurityGatepassLog[]);
+
+    const evaluateCloudFallbackLogs = (): {
+      foundCount: number;
+      latestLog: SecurityGatepassLog | null;
+    } => {
+      if (role !== 'student' || cloudPulledLogs.length === 0) {
+        return { foundCount: 0, latestLog: null };
+      }
+      const matching = cloudPulledLogs.filter((l) => isMatchingStudentLog(l));
+      const nowMs = Date.now() + (clockOffsetRef.current ?? 0);
+      let unplayed: SecurityGatepassLog | null = null;
+      for (const item of matching) {
+        markGatepassLogSeen(item.id);
+        const logMs =
+          typeof item.serverTimestamp === 'number'
+            ? item.serverTimestamp
+            : new Date(item.timestamp).getTime() || 0;
+        if (
+          !unplayed &&
+          !item.guardianAcknowledged &&
+          !hasPlayedGuardianVoiceLog(item.id) &&
+          logMs >= nowMs - 20 * 60 * 1000
+        ) {
+          unplayed = item;
+        }
+      }
+      if (unplayed) {
+        triggerAlertForStudent(unplayed, 'firestore');
+      }
+      return { foundCount: matching.length, latestLog: matching[0] || null };
+    };
+
     try {
       const params = new URLSearchParams();
       params.set('since', '0');
@@ -1278,20 +1322,20 @@ export function useGatepassRealtime({
       } finally {
         clearTimeout(timeoutId);
       }
-      const parsed = await parseJsonApiResponse<any>(res);
+      const [parsed] = await Promise.all([parseJsonApiResponse<any>(res), cloudPullPromise]);
       if (parsed.staticHostNoBackend) {
         setSyncHealth('static_host');
-        return { foundCount: 0, latestLog: null };
+        return evaluateCloudFallbackLogs();
       }
       if (parsed.authRedirected) {
         setSyncHealth('auth_redirect');
-        return { foundCount: 0, latestLog: null };
+        return evaluateCloudFallbackLogs();
       }
       if (!parsed.ok || !parsed.data) {
         setSyncHealth((prev) =>
           prev === 'verified_ws' || prev === 'verified_sse' ? prev : 'unreachable'
         );
-        return { foundCount: 0, latestLog: null };
+        return evaluateCloudFallbackLogs();
       }
       const data = parsed.data;
       setLastSyncServerTime(Date.now());
@@ -1302,26 +1346,41 @@ export function useGatepassRealtime({
         setServerInstanceId(data.serverInstanceId);
       }
       const serverLogs: SecurityGatepassLog[] = Array.isArray(data?.logs) ? data.logs : [];
+      const mergedCheckLogs = new Map<string, SecurityGatepassLog>();
+      for (const item of serverLogs) {
+        if (item?.id) mergedCheckLogs.set(item.id, item);
+      }
+      for (const item of cloudPulledLogs) {
+        if (item?.id && !mergedCheckLogs.has(item.id)) {
+          mergedCheckLogs.set(item.id, item);
+        }
+      }
       const serverNow = typeof data?.serverTime === 'number' ? data.serverTime : Date.now();
       let matchingCount = 0;
       let newestMatching: SecurityGatepassLog | null = null;
       let unplayedRecent: SecurityGatepassLog | null = null;
 
-      for (const item of serverLogs) {
+      for (const item of mergedCheckLogs.values()) {
         if (!item || !item.id) continue;
         addSecurityLog(item, { suppressAutoPush: true });
         markGatepassLogSeen(item.id);
         if (role === 'student' && isMatchingStudentLog(item)) {
           matchingCount += 1;
-          if (!newestMatching) newestMatching = item;
+          if (
+            !newestMatching ||
+            new Date(item.timestamp).getTime() > new Date(newestMatching.timestamp).getTime()
+          ) {
+            newestMatching = item;
+          }
           const logMs =
             typeof item.serverTimestamp === 'number'
               ? item.serverTimestamp
               : new Date(item.timestamp).getTime() || 0;
           if (
             !unplayedRecent &&
+            !item.guardianAcknowledged &&
             !hasPlayedGuardianVoiceLog(item.id) &&
-            logMs >= serverNow - 15 * 60 * 1000
+            logMs >= serverNow - 20 * 60 * 1000
           ) {
             unplayedRecent = item;
           }
@@ -1333,10 +1392,11 @@ export function useGatepassRealtime({
       }
       return { foundCount: matchingCount, latestLog: newestMatching };
     } catch {
+      await cloudPullPromise;
       setSyncHealth((prev) =>
         prev === 'verified_ws' || prev === 'verified_sse' ? prev : 'unreachable'
       );
-      return { foundCount: 0, latestLog: null };
+      return evaluateCloudFallbackLogs();
     }
   }, [
     role,
@@ -1347,6 +1407,7 @@ export function useGatepassRealtime({
     addSecurityLog,
     isMatchingStudentLog,
     triggerAlertForStudent,
+    pullCloudSecurityLogsNow,
   ]);
 
   const sendDiagnosticPing = useCallback(async (): Promise<number | null> => {

@@ -93,6 +93,7 @@ import {
   isMobileAudioUnlocked,
   PendingBlockedSpeechAlert,
   replayPendingBlockedSpeech,
+  requestGuardianNotificationPermission,
   setGuardianLiveWatchActive,
   stopBengaliSpeech,
   subscribeGuardianAudioStatus,
@@ -230,6 +231,34 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       void registerGuardianCloudSubscription(student);
     }
   }, [cloudUser?.uid, cloudUser?.emailVerified, student?.id, registerGuardianCloudSubscription]);
+
+  useEffect(() => {
+    if (
+      !cloudUser?.emailVerified ||
+      !student?.id ||
+      cloudGuardianBindingState.status !== 'needs_official_init'
+    ) {
+      return;
+    }
+    const retry = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void registerGuardianCloudSubscription(student);
+    };
+    const timer = setInterval(retry, 15000);
+    window.addEventListener('focus', retry);
+    document.addEventListener('visibilitychange', retry);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', retry);
+      document.removeEventListener('visibilitychange', retry);
+    };
+  }, [
+    cloudUser?.uid,
+    cloudUser?.emailVerified,
+    student?.id,
+    cloudGuardianBindingState.status,
+    registerGuardianCloudSubscription,
+  ]);
 
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
@@ -1018,6 +1047,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 type="button"
                 disabled={cloudConnecting}
                 onClick={async () => {
+                  unlockMobileAudioAndSpeech(true);
+                  void requestGuardianNotificationPermission();
                   setCloudConnecting(true);
                   try {
                     await connectCloudSync();
@@ -1292,6 +1323,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                       type="button"
                       disabled={cloudConnecting}
                       onClick={async () => {
+                        unlockMobileAudioAndSpeech(true);
+                        void requestGuardianNotificationPermission();
                         setCloudConnecting(true);
                         try {
                           await connectCloudSync();

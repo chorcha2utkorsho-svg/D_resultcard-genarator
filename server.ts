@@ -4,6 +4,18 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { mergeCanonicalStaffRoster } from './src/utils/staffDirectorySeed.ts';
+import {
+  getDesignationMeta,
+  normalizeStaffDesignation,
+  resolveStaffCategoryKey,
+} from './src/utils/staffDesignations.ts';
+import {
+  ensureUniqueStudentCredentials,
+  generateStaffPassword,
+  generateUniquePin6,
+  isWeakOrDefaultPin,
+} from './src/utils/credentialGenerator.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,12 +35,44 @@ if (!fs.existsSync(DATA_DIR)) {
 // In-memory cache for fast response and concurrency safety
 let memoryDb: any = null;
 
+function normalizeServerDb(db: any): any {
+  if (!db || typeof db !== 'object') return db;
+  const schoolInfo = {
+    ...(db.schoolInfo && typeof db.schoolInfo === 'object' ? db.schoolInfo : {}),
+    alwaysLockDevices:
+      db.schoolInfo && typeof db.schoolInfo.alwaysLockDevices === 'boolean'
+        ? db.schoolInfo.alwaysLockDevices
+        : true,
+  };
+  const students = Array.isArray(db.students)
+    ? ensureUniqueStudentCredentials(
+        db.students.map((s: any) =>
+          s && typeof s === 'object'
+            ? {
+                ...s,
+                unlockEpoch: Number.isFinite(Number(s.unlockEpoch)) ? Number(s.unlockEpoch) : 0,
+              }
+            : s
+        )
+      )
+    : db.students;
+  const staffAccounts = mergeCanonicalStaffRoster(
+    Array.isArray(db.staffAccounts) ? db.staffAccounts : []
+  );
+  return {
+    ...db,
+    schoolInfo,
+    ...(students !== undefined ? { students } : {}),
+    staffAccounts,
+  };
+}
+
 function loadDatabaseFromFile(): any {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       if (raw && raw.trim().length > 0) {
-        memoryDb = JSON.parse(raw);
+        memoryDb = normalizeServerDb(JSON.parse(raw));
         return memoryDb;
       }
     }
@@ -37,7 +81,7 @@ function loadDatabaseFromFile(): any {
     try {
       if (fs.existsSync(DB_BAK_FILE)) {
         const rawBak = fs.readFileSync(DB_BAK_FILE, 'utf-8');
-        memoryDb = JSON.parse(rawBak);
+        memoryDb = normalizeServerDb(JSON.parse(rawBak));
         return memoryDb;
       }
     } catch {
@@ -578,6 +622,148 @@ async function startServer() {
     }
   };
 
+  const toBengaliDigitsServer = (val: number | string): string => {
+    const map = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    return String(val).replace(/[0-9]/g, (d) => map[parseInt(d, 10)] || d);
+  };
+
+  const formatDurationBnServer = (totalMinutes: number): string => {
+    const mins = Math.max(0, Math.round(totalMinutes));
+    const hours = Math.floor(mins / 60);
+    const rem = mins % 60;
+    if (hours === 0) return `${toBengaliDigitsServer(rem)} মিনিট`;
+    if (rem === 0) return `${toBengaliDigitsServer(hours)} ঘণ্টা`;
+    return `${toBengaliDigitsServer(hours)} ঘণ্টা ${toBengaliDigitsServer(rem)} মিনিট`;
+  };
+
+  const computeStaffAttendanceSummary = (
+    accounts: any[],
+    attendanceList: any[],
+    targetDate?: string
+  ): { totalStaffCount: number; presentCount: number; pendingCount: number; date: string } => {
+    const dateStr = targetDate || getSchoolTodayDateStr();
+    const activeStaff = accounts.filter((a) => a && a.status !== 'pending');
+    const todayRecords = attendanceList.filter((r) => r && r.date === dateStr);
+    const presentIds = new Set(todayRecords.filter((r) => r.staffId).map((r) => r.staffId));
+    const presentCount = presentIds.size;
+    const totalStaffCount = Math.max(activeStaff.length, presentCount);
+    const pendingCount = Math.max(0, totalStaffCount - presentCount);
+    return { totalStaffCount, presentCount, pendingCount, date: dateStr };
+  };
+
+  const getTodayStudentAttendanceList = (db: any, dateStr?: string): any[] => {
+    const target = dateStr || getSchoolTodayDateStr();
+    const attMap = db?.attendanceRecords;
+    if (!attMap || typeof attMap !== 'object') return [];
+    return Object.values(attMap).filter((rec: any) => rec && rec.date === target);
+  };
+
+  const broadcastStaffAttendanceEvent = (
+    record: any,
+    action: 'checkin' | 'checkout',
+    summary: { totalStaffCount: number; presentCount: number; pendingCount: number }
+  ) => {
+    const payloadObj = {
+      type: 'staff:attendance',
+      action,
+      record,
+      totalStaffCount: summary.totalStaffCount,
+      presentCount: summary.presentCount,
+      pendingCount: summary.pendingCount,
+      serverTime: Date.now(),
+      serverInstanceId: SERVER_INSTANCE_ID,
+    };
+    const serialized = JSON.stringify(payloadObj);
+
+    for (const client of gatepassWsClients) {
+      if (client.ws.readyState === WebSocket.OPEN && client.role === 'official') {
+        try {
+          client.ws.send(serialized);
+        } catch {
+          // Ignore broken socket
+        }
+      }
+    }
+
+    for (const sseClient of gatepassSseClients) {
+      if (sseClient.role === 'official') {
+        try {
+          sseClient.res.write(`event: gatepass\ndata: ${serialized}\n\n`);
+        } catch {
+          gatepassSseClients.delete(sseClient);
+        }
+      }
+    }
+  };
+
+  const broadcastAttendanceUpdateEvent = (attendanceRecord: any) => {
+    if (!attendanceRecord || !attendanceRecord.id) return;
+    const serialized = JSON.stringify({
+      type: 'attendance:updated',
+      attendanceRecord,
+      serverTime: Date.now(),
+      serverInstanceId: SERVER_INSTANCE_ID,
+    });
+
+    for (const client of gatepassWsClients) {
+      if (client.ws.readyState === WebSocket.OPEN && (client.role === 'official' || client.role === 'employee')) {
+        try {
+          client.ws.send(serialized);
+        } catch {
+          // Ignore broken socket
+        }
+      }
+    }
+
+    for (const sseClient of gatepassSseClients) {
+      if (sseClient.role === 'official' || sseClient.role === 'employee') {
+        try {
+          sseClient.res.write(`event: gatepass\ndata: ${serialized}\n\n`);
+        } catch {
+          gatepassSseClients.delete(sseClient);
+        }
+      }
+    }
+  };
+
+  const broadcastStaffLeavesEvent = (
+    staffLeaves: any[],
+    action: 'submitted' | 'approved' | 'rejected' | 'cancelled',
+    leave?: any
+  ) => {
+    const serialized = JSON.stringify({
+      type: 'staff:leaves',
+      action,
+      leave: leave || null,
+      staffLeaves,
+      serverTime: Date.now(),
+      serverInstanceId: SERVER_INSTANCE_ID,
+    });
+
+    for (const client of gatepassWsClients) {
+      if (
+        client.ws.readyState === WebSocket.OPEN &&
+        (client.role === 'official' || client.role === 'employee')
+      ) {
+        try {
+          client.ws.send(serialized);
+        } catch {
+          // Ignore broken socket
+        }
+      }
+    }
+
+    for (const sseClient of gatepassSseClients) {
+      if (sseClient.role === 'official' || sseClient.role === 'employee') {
+        try {
+          sseClient.res.write(`event: gatepass\ndata: ${serialized}\n\n`);
+        } catch {
+          gatepassSseClients.delete(sseClient);
+        }
+      }
+    }
+  };
+
   // =========================================================================
   // API ROUTES
   // =========================================================================
@@ -678,6 +864,7 @@ async function startServer() {
       loadDatabaseFromFile();
     }
     if (memoryDb) {
+      memoryDb = normalizeServerDb(memoryDb);
       return res.json({
         success: true,
         exists: true,
@@ -824,9 +1011,18 @@ async function startServer() {
 
       const existingStaffAccounts = Array.isArray(memoryDb?.staffAccounts) ? memoryDb.staffAccounts : [];
       const incomingStaffAccounts = Array.isArray(incoming.staffAccounts) ? incoming.staffAccounts : existingStaffAccounts;
+      const mergedStaffAccounts = mergeCanonicalStaffRoster(
+        incomingStaffAccounts.length > 0 ? incomingStaffAccounts : existingStaffAccounts
+      );
 
       const existingStaffAttendance = Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
       const incomingStaffAttendance = Array.isArray(incoming.staffAttendance) ? incoming.staffAttendance : existingStaffAttendance;
+
+      const existingStaffLeaves = Array.isArray(memoryDb?.staffLeaves) ? memoryDb.staffLeaves : [];
+      const incomingStaffLeaves = Array.isArray(incoming.staffLeaves) ? incoming.staffLeaves : existingStaffLeaves;
+
+      const existingStaffActivities = Array.isArray(memoryDb?.staffActivities) ? memoryDb.staffActivities : [];
+      const incomingStaffActivities = Array.isArray(incoming.staffActivities) ? incoming.staffActivities : existingStaffActivities;
 
       const existingAdmissionReqs = Array.isArray(memoryDb?.admissionRequests) ? memoryDb.admissionRequests : [];
       const incomingAdmissionReqs = Array.isArray(incoming.admissionRequests) ? incoming.admissionRequests : existingAdmissionReqs;
@@ -862,11 +1058,35 @@ async function startServer() {
         ? memoryDb.scannerAuditLogs
         : [];
 
-      const updatedPhotoRegistry = syncStudentPhotoRegistry(studentsToSave, existingRegistry);
+      const normalizedIncomingStudents = Array.isArray(studentsToSave)
+        ? ensureUniqueStudentCredentials(
+            studentsToSave.map((s: any) =>
+              s && typeof s === 'object'
+                ? {
+                    ...s,
+                    unlockEpoch: Number.isFinite(Number(s.unlockEpoch)) ? Number(s.unlockEpoch) : 0,
+                  }
+                : s
+            )
+          )
+        : [];
+
+      const updatedPhotoRegistry = syncStudentPhotoRegistry(normalizedIncomingStudents, existingRegistry);
+      const resolvedSchoolInfo = {
+        ...(memoryDb?.schoolInfo && typeof memoryDb.schoolInfo === 'object' ? memoryDb.schoolInfo : {}),
+        ...(incoming.schoolInfo && typeof incoming.schoolInfo === 'object' ? incoming.schoolInfo : {}),
+        alwaysLockDevices:
+          typeof incoming.schoolInfo?.alwaysLockDevices === 'boolean'
+            ? incoming.schoolInfo.alwaysLockDevices
+            : typeof memoryDb?.schoolInfo?.alwaysLockDevices === 'boolean'
+            ? memoryDb.schoolInfo.alwaysLockDevices
+            : true,
+      };
 
       const payload = {
         ...incoming,
-        students: studentsToSave,
+        schoolInfo: resolvedSchoolInfo,
+        students: normalizedIncomingStudents,
         studentPhotoRegistry: updatedPhotoRegistry,
         securityLogs: mergedSecurityLogs,
         scannerAuditLogs: incoming.isExplicitClearScannerAudit
@@ -876,8 +1096,10 @@ async function startServer() {
           incomingLib.length === 0 && serverLib.length > 0 && !incoming.isExplicitClearLibrary
             ? serverLib
             : mergedLibraryMaterials,
-        staffAccounts: incomingStaffAccounts.length > 0 ? incomingStaffAccounts : existingStaffAccounts,
+        staffAccounts: mergedStaffAccounts,
         staffAttendance: incomingStaffAttendance.length > 0 ? incomingStaffAttendance : existingStaffAttendance,
+        staffLeaves: incomingStaffLeaves.length > 0 ? incomingStaffLeaves : existingStaffLeaves,
+        staffActivities: incomingStaffActivities.length > 0 ? incomingStaffActivities : existingStaffActivities,
         admissionRequests: incomingAdmissionReqs.length > 0 ? incomingAdmissionReqs : existingAdmissionReqs,
         _lastUpdated: new Date().toISOString(),
       };
@@ -967,10 +1189,12 @@ async function startServer() {
         currentStudents = [...currentStudents, ...reconciledIncoming];
       }
 
+      const normalizedStudents = ensureUniqueStudentCredentials(currentStudents);
+
       const updatedDb = {
         ...(memoryDb || {}),
-        students: currentStudents,
-        studentPhotoRegistry: syncStudentPhotoRegistry(currentStudents, existingRegistry),
+        students: normalizedStudents,
+        studentPhotoRegistry: syncStudentPhotoRegistry(normalizedStudents, existingRegistry),
         _lastUpdated: new Date().toISOString(),
       };
 
@@ -1052,11 +1276,13 @@ async function startServer() {
         return res.status(404).json({ success: false, message: 'Student not found' });
       }
 
+      const normalizedNextStudents = ensureUniqueStudentCredentials(nextStudents);
+      updatedStudent = normalizedNextStudents.find((s) => s.id === studentId) || updatedStudent;
       const updatedRegistry = syncStudentPhotoRegistry([updatedStudent], existingRegistry);
 
       const updatedDb = {
         ...(memoryDb || {}),
-        students: nextStudents,
+        students: normalizedNextStudents,
         studentPhotoRegistry: updatedRegistry,
         _lastUpdated: new Date().toISOString(),
       };
@@ -1590,6 +1816,19 @@ async function startServer() {
         ? logs.filter((l) => logMatchesTargetStudent(l, studentId, portalId, classId, roll)).slice(0, 10)
         : logs.slice(0, 20);
 
+    const accounts = role === 'official' ? ensureStarterStaffAccounts(memoryDb) : [];
+    const allStaffAtt: any[] =
+      role === 'official' && Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
+    const todayDateStr = getSchoolTodayDateStr();
+    const todayStaffAtt =
+      role === 'official' ? allStaffAtt.filter((r) => r && r.date === todayDateStr).slice(0, 50) : undefined;
+    const staffSummary =
+      role === 'official'
+        ? computeStaffAttendanceSummary(accounts, allStaffAtt, todayDateStr)
+        : undefined;
+    const todayStudentAttendance =
+      role === 'official' ? getTodayStudentAttendanceList(memoryDb, todayDateStr) : undefined;
+
     try {
       res.write(
         `event: gatepass\ndata: ${JSON.stringify({
@@ -1597,6 +1836,14 @@ async function startServer() {
           serverTime: Date.now(),
           serverInstanceId: SERVER_INSTANCE_ID,
           logs: recentLogs,
+          ...(role === 'official'
+            ? {
+                staffAccounts: accounts,
+                staffAttendance: todayStaffAtt,
+                staffSummary,
+                todayStudentAttendance,
+              }
+            : {}),
         })}\n\n`
       );
     } catch {
@@ -1665,12 +1912,32 @@ async function startServer() {
       });
 
       const totalAcknowledgedCount = logs.filter((l) => l.guardianAcknowledged).length;
+      const accounts = role === 'official' ? ensureStarterStaffAccounts(memoryDb) : [];
+      const allStaffAtt: any[] =
+        role === 'official' && Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
+      const todayDateStr = getSchoolTodayDateStr();
+      const todayStaffAtt =
+        role === 'official' ? allStaffAtt.filter((r) => r && r.date === todayDateStr).slice(0, 50) : undefined;
+      const staffSummary =
+        role === 'official'
+          ? computeStaffAttendanceSummary(accounts, allStaffAtt, todayDateStr)
+          : undefined;
+      const todayStudentAttendance =
+        role === 'official' ? getTodayStudentAttendanceList(memoryDb, todayDateStr) : undefined;
 
       return res.json({
         success: true,
         logs: filtered,
         allLogsCount: logs.length,
         totalAcknowledgedCount,
+        ...(role === 'official'
+          ? {
+              staffAccounts: accounts,
+              staffAttendance: todayStaffAtt,
+              staffSummary,
+              todayStudentAttendance,
+            }
+          : {}),
         serverTime: Date.now(),
         serverInstanceId: SERVER_INSTANCE_ID,
         lastEvent: memoryDb?._lastSecurityEvent || null,
@@ -2027,37 +2294,7 @@ async function startServer() {
 
   const ensureStarterStaffAccounts = (db: any): any[] => {
     const existing: any[] = Array.isArray(db?.staffAccounts) ? db.staffAccounts : [];
-    if (existing.length > 0) return existing;
-    const now = new Date().toISOString();
-    return [
-      {
-        id: 'staff_admin_default',
-        staffCode: 'DL-ADMIN',
-        role: 'official',
-        nameBn: 'প্রধান প্রশাসক ও অধ্যক্ষ',
-        designationBn: 'প্রধান শিক্ষক / পরিচালক',
-        phone: db?.schoolInfo?.phone || '01313159459',
-        email: db?.schoolInfo?.email || 'contact.dlikonmodelacademy@gmail.com',
-        password: 'admin123',
-        department: 'administration',
-        status: 'active',
-        createdAt: now,
-      },
-      {
-        id: 'staff_emp_default',
-        staffCode: 'DL-EMP-01',
-        role: 'employee',
-        nameBn: 'সহকারী শিক্ষক (একাডেমিক ও গেট)',
-        designationBn: 'সহকারী শিক্ষক',
-        phone: '01711000001',
-        email: 'teacher@dlikon.edu.bd',
-        password: 'emp123',
-        department: 'academic',
-        assignedClassIds: ['class_play', 'class_nursery', 'class_kg', 'class_1', 'class_2', 'class_3', 'class_4', 'class_5'],
-        status: 'active',
-        createdAt: now,
-      },
-    ];
+    return mergeCanonicalStaffRoster(existing);
   };
 
   // POST login for Official / Employee / Student
@@ -2074,27 +2311,36 @@ async function startServer() {
       }
 
       if (role === 'official' || role === 'employee') {
+        const existingRaw: any[] = Array.isArray(memoryDb?.staffAccounts) ? memoryDb.staffAccounts : [];
         const accounts = ensureStarterStaffAccounts(memoryDb);
-        if (!Array.isArray(memoryDb?.staffAccounts) || memoryDb.staffAccounts.length === 0) {
-          saveDatabaseToFile({ ...(memoryDb || {}), staffAccounts: accounts });
+        if (existingRaw.length !== accounts.length || existingRaw.some((e: any, i: number) => e?.id !== accounts[i]?.id)) {
+          saveDatabaseToFile({ ...(memoryDb || {}), staffAccounts: accounts }, { skipBackup: true });
         }
         const matched = accounts.find((acc: any) => {
           if (acc.role !== role) return false;
           const codeMatch = String(acc.staffCode || '').toLowerCase() === normId;
           const emailMatch = acc.email && String(acc.email).toLowerCase() === normId;
+          const nameMatch = acc.nameBn && String(acc.nameBn).trim().toLowerCase() === normId;
           const phoneMatch =
             normId.replace(/\D/g, '').length >= 6 &&
             normalizeDigitsServer(acc.phone || '').replace(/\D/g, '').endsWith(normId.replace(/\D/g, '').slice(-8));
-          const adminAlias = role === 'official' && normId === 'admin' && String(acc.staffCode).toLowerCase() === 'dl-admin';
-          return codeMatch || emailMatch || phoneMatch || adminAlias;
+          const adminAlias =
+            role === 'official' &&
+            (normId === 'admin' || normId === 'dl-admin') &&
+            (String(acc.staffCode).toLowerCase() === 'dl-prn-01' || String(acc.staffCode).toLowerCase() === 'dl-admin');
+          const legacyEmpAlias =
+            role === 'employee' &&
+            normId === 'dl-emp-01' &&
+            String(acc.staffCode).toLowerCase() === 'dl-tch-01';
+          return codeMatch || emailMatch || phoneMatch || nameMatch || adminAlias || legacyEmpAlias;
         });
 
         if (!matched) {
           return res.status(401).json({
             success: false,
             message: role === 'official'
-              ? 'সঠিক অফিসিয়াল আইডি বা মোবাইল পাওয়া যায়নি।'
-              : 'সঠিক এমপ্লয়ী আইডি বা মোবাইল পাওয়া যায়নি। নতুন হলে সাইন আপ করুন।',
+              ? 'সঠিক অফিসিয়াল আইডি, নাম বা মোবাইল পাওয়া যায়নি।'
+              : 'সঠিক এমপ্লয়ী আইডি, নাম বা মোবাইল পাওয়া যায়নি। নতুন হলে সাইন আপ করুন।',
           });
         }
         if (matched.status === 'pending') {
@@ -2110,21 +2356,35 @@ async function startServer() {
 
         const safeStaff = { ...matched };
         delete safeStaff.password;
+        const normalizedDes = normalizeStaffDesignation(matched.designationBn);
+        const categoryKey = resolveStaffCategoryKey(matched, normalizedDes);
+        const alwaysLockDevices = memoryDb?.schoolInfo?.alwaysLockDevices !== false;
         return res.json({
           success: true,
+          alwaysLockDevices,
           session: {
             role: matched.role,
             accountId: matched.id,
             displayName: matched.nameBn,
-            subLabel: matched.designationBn,
+            subLabel: normalizedDes,
             staffCode: matched.staffCode,
+            designationBn: normalizedDes,
+            categoryKey,
+            lockVersion: Number.isFinite(Number(matched.unlockEpoch)) ? Number(matched.unlockEpoch) : 0,
           },
           staff: safeStaff,
         });
       }
 
       if (role === 'student') {
-        const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+        const rawStudentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+        const studentsList = ensureUniqueStudentCredentials(rawStudentsList);
+        if (
+          rawStudentsList.length === studentsList.length &&
+          studentsList.some((s, i) => s?.guardianPin !== rawStudentsList[i]?.guardianPin || s?.portalUserId !== rawStudentsList[i]?.portalUserId)
+        ) {
+          saveDatabaseToFile({ ...(memoryDb || {}), students: studentsList }, { skipBackup: true });
+        }
         const pool = classId && classId !== 'all'
           ? studentsList.filter((s) => s.classId === classId)
           : studentsList;
@@ -2167,25 +2427,28 @@ async function startServer() {
           });
         }
 
-        const expectedPin = normalizeDigitsServer(matchedStudent.guardianPin || '1234').toLowerCase();
-        if (normPass.toLowerCase() !== expectedPin) {
+        const expectedPin = normalizeDigitsServer(matchedStudent.guardianPin || '').toLowerCase();
+        if (!expectedPin || normPass.toLowerCase() !== expectedPin) {
           return res.status(401).json({
             success: false,
-            message: 'ভুল পাসওয়ার্ড/পিন কোড! প্রথমবার হলে ডিফল্ট পিন 1234 দিন অথবা "সাইন আপ / পাসওয়ার্ড সেট" ট্যাবে পিন তৈরি করুন।',
+            message: 'ভুল পাসওয়ার্ড/পিন কোড! স্কুল অফিস থেকে প্রদত্ত আপনার ইউনিক পাসওয়ার্ড দিন অথবা অফিসের সহায়তা নিন।',
           });
         }
 
         const classesList: any[] = Array.isArray(memoryDb?.classes) ? memoryDb.classes : [];
         const clsObj = classesList.find((c) => c.id === matchedStudent.classId);
+        const alwaysLockDevices = memoryDb?.schoolInfo?.alwaysLockDevices !== false;
 
         return res.json({
           success: true,
+          alwaysLockDevices,
           session: {
             role: 'student',
             accountId: matchedStudent.id,
             displayName: matchedStudent.nameBn,
             subLabel: `${clsObj?.nameBn || matchedStudent.classId} • রোল ${matchedStudent.roll}`,
             staffCode: getStudentPortalIdServer(matchedStudent),
+            lockVersion: Number.isFinite(Number(matchedStudent.unlockEpoch)) ? Number(matchedStudent.unlockEpoch) : 0,
           },
           student: matchedStudent,
         });
@@ -2244,19 +2507,27 @@ async function startServer() {
       const prefix = role === 'official' ? 'DL-OFF' : 'DL-EMP';
       const staffCode = `${prefix}-${String(countForRole).padStart(2, '0')}`;
 
+      const normalizedDesignation = normalizeStaffDesignation(
+        designationBn || (role === 'official' ? 'সহ অধ্যক্ষ' : 'শিক্ষক')
+      );
+      const desMeta = getDesignationMeta(normalizedDesignation);
       const newStaff = {
         id: `staff_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         staffCode,
         role: role === 'official' ? 'official' : 'employee',
+        categoryKey: desMeta.key,
         nameBn: String(nameBn).trim(),
-        designationBn: String(designationBn || (role === 'official' ? 'অফিস প্রশাসক' : 'সহকারী শিক্ষক')).trim(),
+        designationBn: desMeta.labelBn,
         phone: String(phone).trim(),
         email: email ? String(email).trim() : '',
         password: String(password).trim(),
-        department: department || (role === 'official' ? 'administration' : 'academic'),
+        department: department || desMeta.defaultDepartment,
         assignedClassIds: Array.isArray(assignedClassIds) && assignedClassIds.length > 0
           ? assignedClassIds
           : ['class_play', 'class_nursery', 'class_kg', 'class_1', 'class_2', 'class_3', 'class_4', 'class_5'],
+        baseMonthlySalary: desMeta.defaultBaseSalary,
+        dailyShiftHours: desMeta.defaultShiftHours,
+        overtimeHourlyRate: desMeta.defaultOvertimeRatePerHour,
         status: 'active',
         createdAt: new Date().toISOString(),
       };
@@ -2280,6 +2551,8 @@ async function startServer() {
           displayName: newStaff.nameBn,
           subLabel: newStaff.designationBn,
           staffCode: newStaff.staffCode,
+          designationBn: newStaff.designationBn,
+          categoryKey: newStaff.categoryKey,
         },
         staff: safeStaff,
       });
@@ -2297,6 +2570,12 @@ async function startServer() {
         return res.status(400).json({
           success: false,
           message: 'শ্রেণি, রোল নম্বর এবং কমপক্ষে ৪ অক্ষরের নতুন পাসওয়ার্ড দিন।',
+        });
+      }
+      if (isWeakOrDefaultPin(String(newPassword).trim())) {
+        return res.status(400).json({
+          success: false,
+          message: 'অতিরিক্ত সহজ বা ডিফল্ট পিন (যেমন 1234) ব্যবহার করা যাবে না — অন্য নিরাপদ পিন দিন।',
         });
       }
 
@@ -2330,11 +2609,13 @@ async function startServer() {
       }
 
       const portalCode = getStudentPortalIdServer(student);
+      const currentUnlockEpoch = Number.isFinite(Number(student.unlockEpoch)) ? Number(student.unlockEpoch) : 0;
       const updatedStudent = {
         ...student,
         portalUserId: portalCode,
         guardianPin: String(newPassword).trim(),
         guardianPhone: student.guardianPhone || (guardianPhone ? String(guardianPhone).trim() : ''),
+        unlockEpoch: currentUnlockEpoch,
       };
 
       const nextStudents = [...studentsList];
@@ -2348,9 +2629,11 @@ async function startServer() {
 
       const classesList: any[] = Array.isArray(memoryDb?.classes) ? memoryDb.classes : [];
       const clsObj = classesList.find((c) => c.id === updatedStudent.classId);
+      const alwaysLockDevices = memoryDb?.schoolInfo?.alwaysLockDevices !== false;
 
       return res.json({
         success: true,
+        alwaysLockDevices,
         message: 'শিক্ষার্থীর পোর্টাল অ্যাকাউন্ট সক্রিয় ও পাসওয়ার্ড সেট হয়েছে!',
         session: {
           role: 'student',
@@ -2358,6 +2641,7 @@ async function startServer() {
           displayName: updatedStudent.nameBn,
           subLabel: `${clsObj?.nameBn || updatedStudent.classId} • রোল ${updatedStudent.roll}`,
           staffCode: portalCode,
+          lockVersion: currentUnlockEpoch,
         },
         student: updatedStudent,
       });
@@ -2404,63 +2688,140 @@ async function startServer() {
     }
   });
 
-  // GET Staff accounts, staff attendance & pending admission requests (for Official & Employee dashboards)
+  // GET Staff accounts, staff attendance, leaves, activities & pending admission requests
   app.get('/api/staff/overview', (_req, res) => {
     try {
       if (!memoryDb) loadDatabaseFromFile();
+      const existingRaw: any[] = Array.isArray(memoryDb?.staffAccounts) ? memoryDb.staffAccounts : [];
       const accounts = ensureStarterStaffAccounts(memoryDb);
-      if (!Array.isArray(memoryDb?.staffAccounts) || memoryDb.staffAccounts.length === 0) {
-        saveDatabaseToFile({ ...(memoryDb || {}), staffAccounts: accounts });
+      if (
+        existingRaw.length !== accounts.length ||
+        existingRaw.some((e: any, i: number) => e?.id !== accounts[i]?.id)
+      ) {
+        saveDatabaseToFile({ ...(memoryDb || {}), staffAccounts: accounts }, { skipBackup: true });
       }
       const staffAttendance: any[] = Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
+      const staffLeaves: any[] = Array.isArray(memoryDb?.staffLeaves) ? memoryDb.staffLeaves : [];
+      const staffActivities: any[] = Array.isArray(memoryDb?.staffActivities) ? memoryDb.staffActivities : [];
       const admissionRequests: any[] = Array.isArray(memoryDb?.admissionRequests) ? memoryDb.admissionRequests : [];
+      const summary = computeStaffAttendanceSummary(accounts, staffAttendance);
       return res.json({
         success: true,
+        alwaysLockDevices: memoryDb?.schoolInfo?.alwaysLockDevices !== false,
         staffAccounts: accounts,
         staffAttendance,
+        staffLeaves,
+        staffActivities,
         admissionRequests,
+        summary,
+        serverTime: Date.now(),
+        serverInstanceId: SERVER_INSTANCE_ID,
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Error fetching staff overview' });
     }
   });
 
-  // POST Record Employee Self Check-in / Check-out
+  // POST Record Employee / Official Check-in / Check-out with overnight shift & worked duration support
   app.post('/api/staff/attendance', (req, res) => {
     try {
       if (!memoryDb) loadDatabaseFromFile();
-      const { staffId, staffNameBn, designationBn, action, note } = req.body || {};
+      const { staffId, staffCode, staffNameBn, designationBn, action, note, date: requestedDate } = req.body || {};
       if (!staffId) {
         return res.status(400).json({ success: false, message: 'staffId required' });
       }
 
-      const today = new Date().toISOString().split('T')[0];
-      const nowTime = new Date().toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit', hour12: true });
+      const accounts = ensureStarterStaffAccounts(memoryDb);
+      const matchedAccount = accounts.find(
+        (a: any) => a.id === staffId || (staffCode && a.staffCode === staffCode)
+      );
+      const resolvedAction: 'checkin' | 'checkout' = action === 'checkout' ? 'checkout' : 'checkin';
+      const today = typeof requestedDate === 'string' && requestedDate.trim() ? requestedDate.trim() : getSchoolTodayDateStr();
+      const nowTime = getSchoolTimeLabelBn();
+      const nowMs = Date.now();
       const recordId = `${staffId}_${today}`;
 
       const list: any[] = Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
-      const existingIdx = list.findIndex((r) => r.id === recordId);
+      let existingIdx = list.findIndex((r) => r.id === recordId);
+
+      // Overnight shift support (e.g. নৈশ প্রহরী checks in last night and checks out this morning)
+      if (existingIdx === -1 && resolvedAction === 'checkout') {
+        const openOvernightIdx = list.findIndex(
+          (r) =>
+            r &&
+            r.staffId === staffId &&
+            !r.checkOutTime &&
+            typeof r.checkInMs === 'number' &&
+            nowMs - r.checkInMs > 0 &&
+            nowMs - r.checkInMs <= 18 * 3600 * 1000
+        );
+        if (openOvernightIdx !== -1) {
+          existingIdx = openOvernightIdx;
+        }
+      }
 
       let savedRecord: any;
       let nextList = [...list];
 
       if (existingIdx !== -1) {
+        const prev = list[existingIdx];
+        const effectiveCheckInMs =
+          typeof prev.checkInMs === 'number' && prev.checkInMs > 0 ? prev.checkInMs : nowMs;
+        const nextWorkedMinutes =
+          resolvedAction === 'checkout'
+            ? Math.max(0, Math.round((nowMs - effectiveCheckInMs) / 60000))
+            : prev.workedMinutes;
+        const nextWorkedDurationBn =
+          resolvedAction === 'checkout'
+            ? formatDurationBnServer(nextWorkedMinutes || 0)
+            : prev.workedDurationBn;
+
         savedRecord = {
-          ...list[existingIdx],
-          ...(action === 'checkout' ? { checkOutTime: nowTime } : { checkInTime: list[existingIdx].checkInTime || nowTime }),
-          note: note || list[existingIdx].note,
+          ...prev,
+          staffCode: staffCode || matchedAccount?.staffCode || prev.staffCode || '',
+          staffNameBn: staffNameBn || matchedAccount?.nameBn || prev.staffNameBn || 'এমপ্লয়ী',
+          designationBn: normalizeStaffDesignation(
+            designationBn || matchedAccount?.designationBn || prev.designationBn || 'শিক্ষক'
+          ),
+          checkInTime: prev.checkInTime || nowTime,
+          checkInMs: effectiveCheckInMs,
+          ...(resolvedAction === 'checkout'
+            ? {
+                checkOutTime: nowTime,
+                checkOutMs: nowMs,
+                workedMinutes: nextWorkedMinutes,
+                workedDurationBn: nextWorkedDurationBn,
+              }
+            : {}),
+          action: resolvedAction,
+          note: note ?? prev.note ?? '',
+          serverTimestamp: nowMs,
         };
         nextList[existingIdx] = savedRecord;
       } else {
         savedRecord = {
           id: recordId,
           staffId,
-          staffNameBn: staffNameBn || 'এমপ্লয়ী',
-          designationBn: designationBn || 'শিক্ষক/স্টাফ',
+          staffCode: staffCode || matchedAccount?.staffCode || '',
+          staffNameBn: staffNameBn || matchedAccount?.nameBn || 'এমপ্লয়ী',
+          designationBn: normalizeStaffDesignation(
+            designationBn || matchedAccount?.designationBn || 'শিক্ষক'
+          ),
           date: today,
           checkInTime: nowTime,
+          checkInMs: nowMs,
+          ...(resolvedAction === 'checkout'
+            ? {
+                checkOutTime: nowTime,
+                checkOutMs: nowMs,
+                workedMinutes: 0,
+                workedDurationBn: formatDurationBnServer(0),
+              }
+            : {}),
+          action: resolvedAction,
           status: 'present',
           note: note || '',
+          serverTimestamp: nowMs,
         };
         nextList = [savedRecord, ...nextList];
       }
@@ -2471,13 +2832,224 @@ async function startServer() {
         _lastUpdated: new Date().toISOString(),
       });
 
+      const summary = computeStaffAttendanceSummary(accounts, nextList, today);
+      broadcastStaffAttendanceEvent(savedRecord, resolvedAction, summary);
+
       return res.json({
         success: true,
         record: savedRecord,
         staffAttendance: nextList.slice(0, 500),
+        summary,
+        serverTime: nowMs,
+        serverInstanceId: SERVER_INSTANCE_ID,
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Attendance error' });
+    }
+  });
+
+  // POST Staff Leave Requests (submit, review/approve/reject, or cancel pending)
+  app.post('/api/staff/leaves', (req, res) => {
+    try {
+      if (!memoryDb) loadDatabaseFromFile();
+      const { type, payload } = req.body || {};
+      const leaves: any[] = Array.isArray(memoryDb?.staffLeaves) ? memoryDb.staffLeaves : [];
+
+      if (type === 'submit_leave') {
+        if (!payload?.staffId || !payload?.startDate || !payload?.endDate || !payload?.reason) {
+          return res.status(400).json({ success: false, message: 'ছুটির তারিখ ও কারণ আবশ্যক।' });
+        }
+        const startMs = Date.parse(`${payload.startDate}T00:00:00Z`);
+        const endMs = Date.parse(`${payload.endDate}T00:00:00Z`);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'শেষ তারিখ অবশ্যই শুরুর তারিখের সমান বা পরের হতে হবে।' });
+        }
+        const daysCount = Math.min(60, Math.floor((endMs - startMs) / 86400000) + 1);
+        const nowIso = new Date().toISOString();
+        const leaveObj = {
+          id: payload.id || `leave_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          staffId: String(payload.staffId),
+          staffCode: payload.staffCode ? String(payload.staffCode) : '',
+          staffNameBn: String(payload.staffNameBn || 'এমপ্লয়ী'),
+          designationBn: normalizeStaffDesignation(payload.designationBn),
+          startDate: String(payload.startDate),
+          endDate: String(payload.endDate),
+          daysCount,
+          leaveType: ['casual', 'sick', 'earned', 'emergency'].includes(payload.leaveType)
+            ? payload.leaveType
+            : 'casual',
+          reason: String(payload.reason).trim().slice(0, 500),
+          status: 'pending',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        const nextLeaves = [leaveObj, ...leaves].slice(0, 500);
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffLeaves: nextLeaves,
+          _lastUpdated: nowIso,
+        });
+        broadcastStaffLeavesEvent(nextLeaves, 'submitted', leaveObj);
+        return res.json({ success: true, leave: leaveObj, staffLeaves: nextLeaves });
+      }
+
+      if (type === 'review_leave') {
+        const { leaveId, status, reviewedBy, reviewNote } = payload || {};
+        if (!leaveId || !['approved', 'rejected'].includes(status)) {
+          return res.status(400).json({ success: false, message: 'বৈধ leaveId ও status দিন।' });
+        }
+        const cleanNote =
+          typeof reviewNote === 'string' && reviewNote.trim()
+            ? reviewNote.trim().slice(0, 500)
+            : undefined;
+        const nowIso = new Date().toISOString();
+        let updatedLeave: any = null;
+        const nextLeaves = leaves.map((l) => {
+          if (l.id === leaveId) {
+            updatedLeave = {
+              ...l,
+              status,
+              reviewedBy: reviewedBy || 'প্রিন্সিপাল',
+              ...(cleanNote ? { reviewNote: cleanNote } : { reviewNote: undefined }),
+              updatedAt: nowIso,
+            };
+            return updatedLeave;
+          }
+          return l;
+        });
+        if (!updatedLeave) {
+          return res.status(404).json({ success: false, message: 'ছুটির আবেদন পাওয়া যায়নি।' });
+        }
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffLeaves: nextLeaves,
+          _lastUpdated: nowIso,
+        });
+        broadcastStaffLeavesEvent(nextLeaves, status, updatedLeave);
+        return res.json({ success: true, leave: updatedLeave, staffLeaves: nextLeaves });
+      }
+
+      if (type === 'cancel_leave') {
+        const { leaveId, staffId } = payload || {};
+        if (!leaveId) {
+          return res.status(400).json({ success: false, message: 'leaveId আবশ্যক।' });
+        }
+        const target = leaves.find((l) => l.id === leaveId);
+        if (!target) {
+          return res.status(404).json({ success: false, message: 'ছুটির আবেদন পাওয়া যায়নি।' });
+        }
+        if (staffId && target.staffId !== String(staffId)) {
+          return res.status(403).json({ success: false, message: 'অন্য স্টাফের আবেদন প্রত্যাহার করা যাবে না।' });
+        }
+        if (target.status !== 'pending') {
+          return res
+            .status(400)
+            .json({ success: false, message: 'ইতিমধ্যে পর্যালোচিত ছুটির আবেদন প্রত্যাহার করা যাবে না।' });
+        }
+        const nowIso = new Date().toISOString();
+        const nextLeaves = leaves.filter((l) => l.id !== leaveId);
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffLeaves: nextLeaves,
+          _lastUpdated: nowIso,
+        });
+        broadcastStaffLeavesEvent(nextLeaves, 'cancelled', target);
+        return res.json({ success: true, leaveId, staffLeaves: nextLeaves });
+      }
+
+      return res.status(400).json({ success: false, message: 'Unknown leave action' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Leave error' });
+    }
+  });
+
+  // POST Staff Daily Category Activity Log
+  app.post('/api/staff/activities', (req, res) => {
+    try {
+      if (!memoryDb) loadDatabaseFromFile();
+      const { type, payload } = req.body || {};
+      const activities: any[] = Array.isArray(memoryDb?.staffActivities) ? memoryDb.staffActivities : [];
+
+      if (type === 'add_activity') {
+        if (!payload?.staffId || !payload?.title) {
+          return res.status(400).json({ success: false, message: 'কার্যক্রমের শিরোনাম আবশ্যক।' });
+        }
+        const nowIso = new Date().toISOString();
+        const actObj = {
+          id: payload.id || `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          staffId: String(payload.staffId),
+          staffNameBn: String(payload.staffNameBn || 'এমপ্লয়ী'),
+          designationBn: normalizeStaffDesignation(payload.designationBn),
+          categoryKey: resolveStaffCategoryKey(
+            { categoryKey: payload.categoryKey, designationBn: payload.designationBn, role: 'employee' },
+            payload.designationBn
+          ),
+          date: payload.date || getSchoolTodayDateStr(),
+          title: String(payload.title).trim(),
+          details: payload.details ? String(payload.details).trim() : '',
+          timestamp: payload.timestamp || nowIso,
+        };
+        const nextActivities = [actObj, ...activities].slice(0, 800);
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffActivities: nextActivities,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, activity: actObj, staffActivities: nextActivities });
+      }
+
+      if (type === 'delete_activity') {
+        const nextActivities = activities.filter((a) => a.id !== payload?.activityId);
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffActivities: nextActivities,
+          _lastUpdated: new Date().toISOString(),
+        });
+        return res.json({ success: true, staffActivities: nextActivities });
+      }
+
+      return res.status(400).json({ success: false, message: 'Unknown activity action' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Activity error' });
+    }
+  });
+
+  // POST Persist Class-wise Daily Student Attendance immediately & broadcast to real-time dashboards
+  app.post('/api/attendance/daily', (req, res) => {
+    try {
+      if (!memoryDb) loadDatabaseFromFile();
+      const record = req.body?.record;
+      if (!record || !record.id || !record.classId || !record.date) {
+        return res.status(400).json({ success: false, message: 'Valid DailyAttendanceRecord required' });
+      }
+      const savedRecord = {
+        ...record,
+        updatedAt: record.updatedAt || new Date().toISOString(),
+      };
+      const currentAttendance: Record<string, any> =
+        memoryDb?.attendanceRecords && typeof memoryDb.attendanceRecords === 'object'
+          ? { ...memoryDb.attendanceRecords }
+          : {};
+      currentAttendance[savedRecord.id] = savedRecord;
+
+      saveDatabaseToFile({
+        ...(memoryDb || {}),
+        attendanceRecords: currentAttendance,
+        _lastUpdated: new Date().toISOString(),
+      });
+
+      broadcastAttendanceUpdateEvent(savedRecord);
+
+      return res.json({
+        success: true,
+        record: savedRecord,
+        serverTime: Date.now(),
+        serverInstanceId: SERVER_INSTANCE_ID,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Daily attendance save error' });
     }
   });
 
@@ -2490,10 +3062,19 @@ async function startServer() {
       const requests: any[] = Array.isArray(memoryDb?.admissionRequests) ? memoryDb.admissionRequests : [];
 
       if (type === 'upsert_staff') {
-        const idx = accounts.findIndex((a: any) => a.id === payload.id);
+        const normalizedDes = normalizeStaffDesignation(payload?.designationBn);
+        const desMeta = getDesignationMeta(normalizedDes);
+        const enrichedPayload = {
+          ...payload,
+          designationBn: normalizedDes,
+          categoryKey: resolveStaffCategoryKey(payload, normalizedDes),
+          role: payload?.role || desMeta.defaultRole,
+          unlockEpoch: Number.isFinite(Number(payload?.unlockEpoch)) ? Number(payload.unlockEpoch) : 0,
+        };
+        const idx = accounts.findIndex((a: any) => a.id === enrichedPayload.id);
         const nextAccounts = idx !== -1
-          ? accounts.map((a: any, i: number) => (i === idx ? { ...a, ...payload } : a))
-          : [...accounts, payload];
+          ? accounts.map((a: any, i: number) => (i === idx ? { ...a, ...enrichedPayload } : a))
+          : [...accounts, enrichedPayload];
         saveDatabaseToFile({ ...(memoryDb || {}), staffAccounts: nextAccounts, _lastUpdated: new Date().toISOString() });
         return res.json({ success: true, staffAccounts: nextAccounts });
       }
@@ -2513,6 +3094,14 @@ async function startServer() {
         const classStudents = studentsList.filter((s) => s.classId === targetReq.classId);
         const maxRoll = classStudents.reduce((max, s) => Math.max(max, Number(s.roll) || 0), 0);
         const assignedRoll = targetReq.desiredRoll || maxRoll + 1;
+        const usedPins = new Set<string>(
+          studentsList.map((s) => String(s?.guardianPin || '').trim()).filter(Boolean)
+        );
+        const safeRequestedPass = targetReq.password ? String(targetReq.password).trim() : '';
+        const assignedPin =
+          safeRequestedPass && !isWeakOrDefaultPin(safeRequestedPass)
+            ? safeRequestedPass
+            : generateUniquePin6(usedPins, `${targetReq.classId}-${assignedRoll}-${targetReq.studentNameBn}`);
 
         const newStudent: any = {
           id: `std_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -2525,11 +3114,12 @@ async function startServer() {
           guardianName: targetReq.guardianNameBn,
           guardianPhone: targetReq.guardianPhone,
           fatherPhone: targetReq.guardianPhone,
-          guardianPin: targetReq.password || '1234',
+          guardianPin: assignedPin,
+          unlockEpoch: 0,
         };
         newStudent.portalUserId = getStudentPortalIdServer(newStudent);
 
-        const nextStudents = [...studentsList, newStudent];
+        const nextStudents = ensureUniqueStudentCredentials([...studentsList, newStudent]);
         const nextRequests = requests.map((r) => (r.id === payload.requestId ? { ...r, status: 'approved' } : r));
 
         saveDatabaseToFile({
@@ -2539,7 +3129,8 @@ async function startServer() {
           _lastUpdated: new Date().toISOString(),
         });
 
-        return res.json({ success: true, student: newStudent, admissionRequests: nextRequests });
+        const created = nextStudents.find((s) => s.id === newStudent.id) || newStudent;
+        return res.json({ success: true, student: created, admissionRequests: nextRequests });
       }
 
       if (type === 'reject_admission') {
@@ -2551,6 +3142,270 @@ async function startServer() {
       return res.status(400).json({ success: false, message: 'Unknown staff management action' });
     } catch (err: any) {
       return res.status(500).json({ success: false, message: err?.message || 'Staff management error' });
+    }
+  });
+
+  // GET Check Device Lock Status & Remote Unlock Epoch for a locked smartphone
+  app.get('/api/auth/device-lock-status', (req, res) => {
+    try {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      if (!memoryDb) loadDatabaseFromFile();
+      const role = String(req.query.role || 'student').trim();
+      const accountId = String(req.query.accountId || '').trim();
+      const alwaysLockDevices = memoryDb?.schoolInfo?.alwaysLockDevices !== false;
+
+      let unlockEpoch = 0;
+      if (accountId) {
+        if (role === 'student') {
+          const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+          const found = studentsList.find((s) => s && s.id === accountId);
+          unlockEpoch = Number.isFinite(Number(found?.unlockEpoch)) ? Number(found.unlockEpoch) : 0;
+        } else {
+          const accounts = ensureStarterStaffAccounts(memoryDb);
+          const found = accounts.find((a) => a && a.id === accountId);
+          unlockEpoch = Number.isFinite(Number(found?.unlockEpoch)) ? Number(found.unlockEpoch) : 0;
+        }
+      }
+
+      return res.json({
+        success: true,
+        alwaysLockDevices,
+        unlockEpoch,
+        serverTime: Date.now(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Lock status check failed' });
+    }
+  });
+
+  // POST Verify Principal / Education Entrepreneur Password ONLY for In-Person Smartphone Unlock
+  app.post('/api/auth/verify-office-unlock', (req, res) => {
+    try {
+      if (!memoryDb) loadDatabaseFromFile();
+      const rawPassword = String(req.body?.password || '');
+      const normPass = normalizeDigitsServer(rawPassword).trim();
+      if (!normPass) {
+        return res.status(400).json({ success: false, message: 'অফিস প্রিন্সিপাল/উদ্যোক্তা পাসওয়ার্ড দিন।' });
+      }
+
+      const accounts = ensureStarterStaffAccounts(memoryDb);
+      const isOfficeAuthorizer = (acc: any): boolean => {
+        if (!acc || acc.status === 'pending' || acc.role !== 'official') return false;
+        const cat = String(acc.categoryKey || '');
+        const code = String(acc.staffCode || '').toUpperCase();
+        return (
+          cat === 'principal' ||
+          cat === 'education_entrepreneur' ||
+          acc.id === 'staff_principal_mitu' ||
+          code === 'DL-PRN-01'
+        );
+      };
+
+      const verifier = accounts.find((acc: any) => {
+        if (!isOfficeAuthorizer(acc)) return false;
+        const expected = normalizeDigitsServer(acc.password || '').trim();
+        return expected.length > 0 && (normPass === expected || normPass.toLowerCase() === expected.toLowerCase());
+      });
+
+      if (!verifier) {
+        return res.status(401).json({
+          success: false,
+          message: 'অফিস প্রিন্সিপাল বা শিক্ষা উদ্যোক্তার পাসওয়ার্ড মেলেনি!',
+        });
+      }
+
+      return res.json({
+        success: true,
+        verifiedBy: {
+          id: verifier.id,
+          nameBn: verifier.nameBn,
+          designationBn: normalizeStaffDesignation(verifier.designationBn),
+          staffCode: verifier.staffCode,
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Verification failed' });
+    }
+  });
+
+  // POST Admin Device Lock Policy, Remote Unlock, & Credential Regeneration Controls
+  app.post('/api/auth/device-lock', (req, res) => {
+    try {
+      if (!memoryDb) loadDatabaseFromFile();
+      const { action, payload } = req.body || {};
+      const nowIso = new Date().toISOString();
+
+      if (action === 'set_global_policy') {
+        const alwaysLockDevices = Boolean(payload?.alwaysLockDevices);
+        const nextInfo = {
+          ...(memoryDb?.schoolInfo && typeof memoryDb.schoolInfo === 'object' ? memoryDb.schoolInfo : {}),
+          alwaysLockDevices,
+          lockUpdatedAt: nowIso,
+        };
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          schoolInfo: nextInfo,
+          _lastUpdated: nowIso,
+        });
+        return res.json({
+          success: true,
+          alwaysLockDevices,
+          lockUpdatedAt: nowIso,
+        });
+      }
+
+      if (action === 'remote_unlock_account') {
+        const targetType = payload?.targetType === 'staff' ? 'staff' : 'student';
+        const accountId = String(payload?.accountId || '').trim();
+        if (!accountId) {
+          return res.status(400).json({ success: false, message: 'accountId required' });
+        }
+
+        if (targetType === 'staff') {
+          const accounts = ensureStarterStaffAccounts(memoryDb);
+          let newEpoch = 1;
+          const nextAccounts = accounts.map((a: any) => {
+            if (a && a.id === accountId) {
+              newEpoch = (Number.isFinite(Number(a.unlockEpoch)) ? Number(a.unlockEpoch) : 0) + 1;
+              return { ...a, unlockEpoch: newEpoch };
+            }
+            return a;
+          });
+          saveDatabaseToFile({
+            ...(memoryDb || {}),
+            staffAccounts: nextAccounts,
+            _lastUpdated: nowIso,
+          });
+          return res.json({ success: true, targetType: 'staff', accountId, unlockEpoch: newEpoch, staffAccounts: nextAccounts });
+        }
+
+        const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+        let newEpoch = 1;
+        const nextStudents = studentsList.map((s: any) => {
+          if (s && s.id === accountId) {
+            newEpoch = (Number.isFinite(Number(s.unlockEpoch)) ? Number(s.unlockEpoch) : 0) + 1;
+            return { ...s, unlockEpoch: newEpoch };
+          }
+          return s;
+        });
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          students: nextStudents,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, targetType: 'student', accountId, unlockEpoch: newEpoch, students: nextStudents });
+      }
+
+      if (action === 'regenerate_staff_password') {
+        const staffId = String(payload?.staffId || '').trim();
+        if (!staffId) {
+          return res.status(400).json({ success: false, message: 'staffId required' });
+        }
+        const accounts = ensureStarterStaffAccounts(memoryDb);
+        const usedPasswords = new Set<string>(
+          accounts.filter((a: any) => a?.id !== staffId).map((a: any) => String(a?.password || '').trim())
+        );
+        let updatedStaff: any = null;
+        const nextAccounts = accounts.map((a: any) => {
+          if (a && a.id === staffId) {
+            const nextPass = generateStaffPassword(a, usedPasswords);
+            updatedStaff = { ...a, password: nextPass };
+            return updatedStaff;
+          }
+          return a;
+        });
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffAccounts: nextAccounts,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, staff: updatedStaff, staffAccounts: nextAccounts });
+      }
+
+      if (action === 'regenerate_all_staff_passwords') {
+        const accounts = ensureStarterStaffAccounts(memoryDb);
+        const principalAcc = accounts.find(
+          (a: any) => a && (a.id === 'staff_principal_mitu' || String(a.staffCode || '').toUpperCase() === 'DL-PRN-01')
+        );
+        const usedPasswords = new Set<string>(
+          principalAcc?.password ? [String(principalAcc.password).trim()] : ['admin123']
+        );
+        const nextAccounts = accounts.map((a: any) => {
+          if (!a) return a;
+          if (a.id === 'staff_principal_mitu' || String(a.staffCode || '').toUpperCase() === 'DL-PRN-01') {
+            return a;
+          }
+          const nextPass = generateStaffPassword(a, usedPasswords);
+          return { ...a, password: nextPass };
+        });
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          staffAccounts: nextAccounts,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, staffAccounts: nextAccounts });
+      }
+
+      if (action === 'regenerate_student_pin') {
+        const studentId = String(payload?.studentId || '').trim();
+        if (!studentId) {
+          return res.status(400).json({ success: false, message: 'studentId required' });
+        }
+        const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+        const usedPins = new Set<string>(
+          studentsList.filter((s: any) => s?.id !== studentId).map((s: any) => String(s?.guardianPin || '').trim())
+        );
+        let updatedStudent: any = null;
+        const nextStudents = ensureUniqueStudentCredentials(
+          studentsList.map((s: any) => {
+            if (s && s.id === studentId) {
+              const newPin = generateUniquePin6(usedPins, `${s.id}-${Date.now()}-${Math.random()}`);
+              updatedStudent = { ...s, guardianPin: newPin };
+              return updatedStudent;
+            }
+            return s;
+          })
+        );
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          students: nextStudents,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, student: updatedStudent, students: nextStudents });
+      }
+
+      if (action === 'regenerate_all_student_pins') {
+        const classIdFilter = payload?.classId && payload.classId !== 'all' ? String(payload.classId) : null;
+        const studentsList: any[] = Array.isArray(memoryDb?.students) ? memoryDb.students : [];
+        const usedPins = new Set<string>();
+        if (classIdFilter) {
+          for (const s of studentsList) {
+            if (s && s.classId !== classIdFilter && s.guardianPin) {
+              usedPins.add(String(s.guardianPin).trim());
+            }
+          }
+        }
+        let updatedCount = 0;
+        const nextStudents = ensureUniqueStudentCredentials(
+          studentsList.map((s: any, idx: number) => {
+            if (!s) return s;
+            if (classIdFilter && s.classId !== classIdFilter) return s;
+            updatedCount++;
+            const newPin = generateUniquePin6(usedPins, `${s.id}-${idx}-${Date.now()}`);
+            return { ...s, guardianPin: newPin };
+          })
+        );
+        saveDatabaseToFile({
+          ...(memoryDb || {}),
+          students: nextStudents,
+          _lastUpdated: nowIso,
+        });
+        return res.json({ success: true, students: nextStudents, updatedCount });
+      }
+
+      return res.status(400).json({ success: false, message: 'Unknown device-lock action' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: err?.message || 'Device lock action error' });
     }
   });
 
@@ -3200,6 +4055,23 @@ async function startServer() {
             .slice(0, 10)
         : logs.slice(0, 20);
 
+    const wsInitAccounts = clientEntry.role === 'official' ? ensureStarterStaffAccounts(memoryDb) : [];
+    const wsInitAllStaffAtt: any[] =
+      clientEntry.role === 'official' && Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
+    const wsTodayDateStr = getSchoolTodayDateStr();
+    const wsInitStaffAtt =
+      clientEntry.role === 'official'
+        ? wsInitAllStaffAtt.filter((r) => r && r.date === wsTodayDateStr).slice(0, 50)
+        : undefined;
+    const wsInitStaffSummary =
+      clientEntry.role === 'official'
+        ? computeStaffAttendanceSummary(wsInitAccounts, wsInitAllStaffAtt, wsTodayDateStr)
+        : undefined;
+    const wsInitStudentAtt =
+      clientEntry.role === 'official'
+        ? getTodayStudentAttendanceList(memoryDb, wsTodayDateStr)
+        : undefined;
+
     try {
       ws.send(
         JSON.stringify({
@@ -3207,6 +4079,14 @@ async function startServer() {
           serverTime: Date.now(),
           serverInstanceId: SERVER_INSTANCE_ID,
           logs: recentLogs,
+          ...(clientEntry.role === 'official'
+            ? {
+                staffAccounts: wsInitAccounts,
+                staffAttendance: wsInitStaffAtt,
+                staffSummary: wsInitStaffSummary,
+                todayStudentAttendance: wsInitStudentAtt,
+              }
+            : {}),
         })
       );
     } catch {
@@ -3243,12 +4123,24 @@ async function startServer() {
                   )
                   .slice(0, 10)
               : currentLogs.slice(0, 20);
+          const subAccounts = clientEntry.role === 'official' ? ensureStarterStaffAccounts(memoryDb) : [];
+          const subStaffAttAll: any[] =
+            clientEntry.role === 'official' && Array.isArray(memoryDb?.staffAttendance) ? memoryDb.staffAttendance : [];
+          const subDate = getSchoolTodayDateStr();
           ws.send(
             JSON.stringify({
               type: 'gatepass:init',
               serverTime: Date.now(),
               serverInstanceId: SERVER_INSTANCE_ID,
               logs: subLogs,
+              ...(clientEntry.role === 'official'
+                ? {
+                    staffAccounts: subAccounts,
+                    staffAttendance: subStaffAttAll.filter((r) => r && r.date === subDate).slice(0, 50),
+                    staffSummary: computeStaffAttendanceSummary(subAccounts, subStaffAttAll, subDate),
+                    todayStudentAttendance: getTodayStudentAttendanceList(memoryDb, subDate),
+                  }
+                : {}),
             })
           );
         } else if (parsed && parsed.type === 'ping') {

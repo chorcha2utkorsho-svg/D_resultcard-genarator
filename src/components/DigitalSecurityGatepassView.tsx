@@ -136,7 +136,6 @@ interface DigitalSecurityGatepassViewProps {
   isDeviceLocked?: boolean;
   onInstallLockedDashboard?: (student: Student) => Promise<void> | void;
   onAdminUnlockDevice?: (adminPin: string) => Promise<boolean>;
-  onUnlockDevice?: () => Promise<void> | void;
 }
 
 export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewProps> = ({
@@ -155,8 +154,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
   onRoleLogout,
   isDeviceLocked = false,
   onInstallLockedDashboard,
-  onAdminUnlockDevice,
-  onUnlockDevice,
 }) => {
   const {
     schoolInfo,
@@ -1600,7 +1597,7 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
     setLoggedInGuardianStudent(std);
     setGuardianLoginClassId(std.classId);
     setGuardianLoginIdentifier(std.guardianPhone || String(std.roll));
-    setGuardianLoginPin(std.guardianPin || '1234');
+    setGuardianLoginPin(std.guardianPin || '');
     if (typeof window !== 'undefined') {
       localStorage.setItem('dlikon_guardian_paired_student_id', std.id);
       localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
@@ -4111,8 +4108,8 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                                   <div className="font-bold text-slate-900">
                                     রোল {toBengaliRoll(std.roll)}: {std.nameBn}
                                   </div>
-                                  <div className="text-[11px] text-slate-600 font-mono mt-0.5">
-                                    ইউনিক আইডি: <strong className="text-indigo-800">{portalId}</strong> · পাসওয়ার্ড: <strong>{std.guardianPin || '1234'}</strong> · ফোন: {std.guardianPhone || std.fatherPhone || 'নেই'}
+                                  <div className="text-[11px] text-slate-600 font-mono mt-0.5 tabular-nums">
+                                    ইউনিক আইডি: <strong className="text-indigo-800">{portalId}</strong> · পাসওয়ার্ড: <strong>{std.guardianPin || '—'}</strong> · ফোন: {std.guardianPhone || std.fatherPhone || 'নেই'}
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-1.5">
@@ -4211,8 +4208,6 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                   ? () => onInstallLockedDashboard(activeSignedInStudent)
                   : undefined
               }
-              onAdminUnlockDevice={onAdminUnlockDevice}
-              onUnlockDevice={onUnlockDevice}
             />
           )}
         </div>
@@ -5831,14 +5826,14 @@ export const DigitalSecurityGatepassView: React.FC<DigitalSecurityGatepassViewPr
                     </label>
                     <input
                       type="text"
-                      value={quickEditStudent.guardianPin || '1234'}
+                      value={quickEditStudent.guardianPin || ''}
                       onChange={(e) =>
                         setQuickEditStudent({
                           ...quickEditStudent,
                           guardianPin: e.target.value.trim(),
                         })
                       }
-                      placeholder="উদা: 1234 বা 4401"
+                      placeholder="উদা: 482913"
                       className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50/50 font-mono font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     />
                   </div>

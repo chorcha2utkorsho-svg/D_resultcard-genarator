@@ -22,6 +22,8 @@ export interface SchoolInfo {
   sealUrl?: string;
   dailySchedule?: SchoolDailySchedule;
   scannerVoiceSettings?: ScannerVoiceSettings;
+  alwaysLockDevices?: boolean;
+  lockUpdatedAt?: string;
 }
 
 export interface Student {
@@ -67,6 +69,7 @@ export interface Student {
   guardianNid?: string;
   emergencyPhone?: string;
   guardianPin?: string; // অভিভাবকের গোপন পিন বা পাসওয়ার্ড
+  unlockEpoch?: number; // রিমোট আনলক ইপক (অফিস থেকে বাড়ানো হলে ডিভাইস আনলক হবে)
   guardianUid?: string; // অভিভাবকের গুগল অ্যাকাউন্ট UID (ঐচ্ছিক ক্লাউড সিঙ্ক)
   guardianUids?: string[]; // একাধিক অভিভাবক ডিভাইসের গুগল UID তালিকা
 
@@ -613,10 +616,21 @@ export interface StudentDueSummary {
 
 export type PortalRole = 'official' | 'student' | 'employee';
 
+export type StaffCategoryKey =
+  | 'education_entrepreneur'
+  | 'principal'
+  | 'vice_principal'
+  | 'accountant_clerk'
+  | 'teacher'
+  | 'office_assistant'
+  | 'ayah'
+  | 'night_guard';
+
 export interface StaffAccount {
   id: string;
-  staffCode: string; // e.g. 'DL-ADMIN' or 'DL-EMP-01'
+  staffCode: string; // e.g. 'DL-PRN-01' or 'DL-TCH-01'
   role: 'official' | 'employee';
+  categoryKey?: StaffCategoryKey;
   nameBn: string;
   designationBn: string;
   phone: string;
@@ -624,7 +638,11 @@ export interface StaffAccount {
   password: string;
   department?: 'administration' | 'academic' | 'accounts' | 'security' | 'office';
   assignedClassIds?: string[];
+  baseMonthlySalary?: number;
+  dailyShiftHours?: number;
+  overtimeHourlyRate?: number;
   status: 'active' | 'pending';
+  unlockEpoch?: number;
   avatarUrl?: string;
   createdAt: string;
 }
@@ -632,13 +650,63 @@ export interface StaffAccount {
 export interface StaffAttendanceRecord {
   id: string; // `${staffId}_${date}`
   staffId: string;
+  staffCode?: string;
   staffNameBn: string;
   designationBn: string;
   date: string; // YYYY-MM-DD
   checkInTime: string;
+  checkInMs?: number;
   checkOutTime?: string;
+  checkOutMs?: number;
+  workedMinutes?: number;
+  workedDurationBn?: string;
+  action?: 'checkin' | 'checkout';
   status: 'present' | 'late' | 'leave';
   note?: string;
+  serverTimestamp?: number;
+}
+
+export type StaffLeaveType = 'casual' | 'sick' | 'earned' | 'emergency';
+
+export interface StaffLeaveRequest {
+  id: string;
+  staffId: string;
+  staffCode?: string;
+  staffNameBn: string;
+  designationBn: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  daysCount: number;
+  leaveType: StaffLeaveType;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StaffActivityLog {
+  id: string;
+  staffId: string;
+  staffNameBn: string;
+  designationBn: string;
+  categoryKey: StaffCategoryKey;
+  date: string; // YYYY-MM-DD
+  title: string;
+  details?: string;
+  timestamp: string;
+}
+
+export interface StaffAttendanceRealtimeEvent {
+  eventId: string;
+  action: 'checkin' | 'checkout';
+  record: StaffAttendanceRecord;
+  totalStaffCount: number;
+  presentCount: number;
+  pendingCount: number;
+  messageBn: string;
+  receivedAt: number;
 }
 
 export interface AdmissionSignupRequest {
@@ -659,6 +727,9 @@ export interface PortalAuthSession {
   displayName: string;
   subLabel: string;
   staffCode?: string;
+  designationBn?: string;
+  categoryKey?: StaffCategoryKey;
+  lockVersion?: number;
 }
 
 // ==================== DIGITAL LIBRARY MODULE TYPES ====================

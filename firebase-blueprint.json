@@ -48,6 +48,9 @@
           "type": "string",
           "maxLength": 150
         },
+        "alwaysLockDevices": {
+          "type": "boolean"
+        },
         "ownerUid": {
           "type": "string",
           "maxLength": 128,
@@ -104,6 +107,9 @@
         "guardianPin": {
           "type": "string",
           "maxLength": 32
+        },
+        "unlockEpoch": {
+          "type": "number"
         },
         "avatarUrl": {
           "type": "string",
@@ -268,6 +274,19 @@
           "type": "string",
           "maxLength": 120
         },
+        "categoryKey": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "baseMonthlySalary": {
+          "type": "number"
+        },
+        "dailyShiftHours": {
+          "type": "number"
+        },
+        "overtimeHourlyRate": {
+          "type": "number"
+        },
         "phone": {
           "type": "string",
           "maxLength": 32
@@ -276,6 +295,9 @@
           "type": "string",
           "enum": ["active", "pending"],
           "maxLength": 16
+        },
+        "unlockEpoch": {
+          "type": "number"
         },
         "ownerUid": {
           "type": "string",
@@ -297,9 +319,90 @@
       },
       "required": ["id", "staffCode", "role", "nameBn", "designationBn", "phone", "status", "ownerUid", "createdAt", "updatedAt"]
     },
-    "StaffAttendance": {
-      "title": "StaffAttendance",
-      "description": "Daily staff check-in and check-out record.",
+    "StaffLeaveRequest": {
+      "title": "StaffLeaveRequest",
+      "description": "Staff leave request and principal/official approval workflow.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "staffNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "designationBn": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "startDate": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "endDate": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "daysCount": {
+          "type": "number"
+        },
+        "leaveType": {
+          "type": "string",
+          "enum": ["casual", "sick", "earned", "emergency"],
+          "maxLength": 24
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"],
+          "maxLength": 24
+        },
+        "reviewedBy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "reviewNote": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "staffId", "staffNameBn", "designationBn", "startDate", "endDate", "daysCount", "leaveType", "reason", "status", "ownerUid", "staffUid", "createdAt", "updatedAt"]
+    },
+    "StaffActivityLog": {
+      "title": "StaffActivityLog",
+      "description": "Category-specific daily staff activity and duty completion log.",
       "type": "object",
       "properties": {
         "id": {
@@ -320,6 +423,74 @@
           "type": "string",
           "maxLength": 120
         },
+        "categoryKey": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "staffId", "staffNameBn", "designationBn", "categoryKey", "date", "title", "timestamp", "ownerUid", "staffUid", "createdAt", "updatedAt"]
+    },
+    "StaffAttendance": {
+      "title": "StaffAttendance",
+      "description": "Daily staff check-in and check-out record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "staffNameBn": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "designationBn": {
+          "type": "string",
+          "maxLength": 120
+        },
         "date": {
           "type": "string",
           "maxLength": 24
@@ -328,14 +499,39 @@
           "type": "string",
           "maxLength": 40
         },
+        "checkInMs": {
+          "type": "number"
+        },
         "checkOutTime": {
           "type": "string",
           "maxLength": 40
+        },
+        "checkOutMs": {
+          "type": "number"
+        },
+        "workedMinutes": {
+          "type": "number"
+        },
+        "workedDurationBn": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "action": {
+          "type": "string",
+          "enum": ["checkin", "checkout"],
+          "maxLength": 16
         },
         "status": {
           "type": "string",
           "enum": ["present", "late", "leave"],
           "maxLength": 16
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "serverTimestamp": {
+          "type": "number"
         },
         "ownerUid": {
           "type": "string",
@@ -491,6 +687,72 @@
       },
       "required": ["id", "studentId", "guardianUid", "createdAt", "updatedAt"]
     },
+    "DailyAttendance": {
+      "title": "DailyAttendance",
+      "description": "Class-by-class daily student attendance snapshot with summary counters.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "academicYear": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "classId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "section": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "presentCount": {
+          "type": "number"
+        },
+        "absentCount": {
+          "type": "number"
+        },
+        "lateCount": {
+          "type": "number"
+        },
+        "leaveCount": {
+          "type": "number"
+        },
+        "totalStudents": {
+          "type": "number"
+        },
+        "recordsJson": {
+          "type": "string",
+          "maxLength": 120000
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "date", "classId", "presentCount", "absentCount", "lateCount", "leaveCount", "totalStudents", "recordsJson", "ownerUid", "updatedByUid", "createdAt", "updatedAt"]
+    },
     "ConnectionCheck": {
       "title": "ConnectionCheck",
       "description": "Health check document for validating server reachability.",
@@ -527,6 +789,18 @@
     "/schools/{schoolId}/staffAttendance/{attId}": {
       "schema": { "$ref": "#/entities/StaffAttendance" },
       "description": "Stores daily employee check-in and check-out logs."
+    },
+    "/schools/{schoolId}/staffLeaves/{leaveId}": {
+      "schema": { "$ref": "#/entities/StaffLeaveRequest" },
+      "description": "Stores staff leave applications and approval status."
+    },
+    "/schools/{schoolId}/staffActivities/{activityId}": {
+      "schema": { "$ref": "#/entities/StaffActivityLog" },
+      "description": "Stores category-specific daily staff activities."
+    },
+    "/schools/{schoolId}/dailyAttendance/{attId}": {
+      "schema": { "$ref": "#/entities/DailyAttendance" },
+      "description": "Stores class-by-class daily student attendance logs."
     },
     "/schools/{schoolId}/guardianSubscribers/{bindingId}": {
       "schema": { "$ref": "#/entities/GuardianSubscriber" },

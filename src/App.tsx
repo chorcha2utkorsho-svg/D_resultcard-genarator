@@ -4,6 +4,7 @@ import { Navbar } from './components/Navbar';
 import { PortalHomeView } from './components/PortalHomeView';
 import { DashboardView } from './components/DashboardView';
 import { EmployeeDashboardView } from './components/EmployeeDashboardView';
+import { CategoryStaffDashboardView } from './components/CategoryStaffDashboardView';
 import { StaffManagementView } from './components/StaffManagementView';
 import { MarkEntryView } from './components/MarkEntryView';
 import { ResultsView } from './components/ResultsView';
@@ -30,17 +31,19 @@ import { PortalAuthSession, Student } from './types';
 import { getStudentPortalId } from './utils/bengali';
 import {
   clearExplicitUnlockFlag,
+  getLockedDeviceSnapshotSync,
   getLockedStudentIdSync,
-  getLockedStudentSnapshotSync,
-  loadLockedStudentFromStorage,
+  loadLockedDeviceFromStorage,
+  lockDeviceToSession,
   lockDeviceToStudent,
-  unlockDeviceFromStudent,
+  unlockDeviceFromAccount,
 } from './utils/deviceLock';
 import {
   applyStudentPassportAppIcon,
   resetStudentAppIcon,
 } from './utils/studentAppIcon';
 import { getLocalStaffAccounts, safeFetchJson } from './utils/portalAuthFallback';
+import { isOfficialAuthorizerAccount, resolveStaffCategoryKey } from './utils/staffDesignations';
 import { useGatepassRealtime } from './hooks/useGatepassRealtime';
 import {
   playAlarmChime,
@@ -64,26 +67,25 @@ function MainContent() {
     return <StandaloneVoucherPrintView />;
   }
 
-  const { schoolInfo, students, classes } = useSchool();
-  const isUnlockUrlRequested = urlParams.get('unlock') === '1';
-  const urlGuardianParam = !isUnlockUrlRequested ? urlParams.get('guardian') || '' : '';
+  const { schoolInfo, students, classes, staffAccounts } = useSchool();
+  const alwaysLockDevices = schoolInfo.alwaysLockDevices !== false;
+  const urlGuardianParam = urlParams.get('guardian') || '';
   const isSavedGuardianMode =
     typeof window !== 'undefined' &&
-    !isUnlockUrlRequested &&
     localStorage.getItem('dlikon_pwa_guardian_mode') === 'true' &&
     Boolean(localStorage.getItem('dlikon_guardian_paired_student_id'));
 
   const [isDeviceLocked, setIsDeviceLocked] = useState<boolean>(() =>
-    !isUnlockUrlRequested && Boolean(getLockedStudentIdSync() || getLockedStudentSnapshotSync())
+    Boolean(getLockedDeviceSnapshotSync() || getLockedStudentIdSync())
   );
 
   const [preferStudentPortalOnLogin, setPreferStudentPortalOnLogin] = useState<boolean>(() =>
-    Boolean(urlGuardianParam || isUnlockUrlRequested)
+    Boolean(urlGuardianParam)
   );
 
   const [authSession, setAuthSession] = useState<PortalAuthSession | null>(() => {
-    if (typeof window === 'undefined' || isUnlockUrlRequested) return null;
-    const lockedSnap = getLockedStudentSnapshotSync();
+    if (typeof window === 'undefined') return null;
+    const lockedSnap = getLockedDeviceSnapshotSync();
     if (lockedSnap?.session) {
       return lockedSnap.session;
     }
@@ -144,23 +146,18 @@ function MainContent() {
     };
   }, []);
 
-  // Instant ?unlock=1 recovery & permanent device lock restore from IndexedDB
+  // Permanent multi-role device lock restore from IndexedDB / localStorage
   useEffect(() => {
-    if (isUnlockUrlRequested) {
-      void unlockDeviceFromStudent().then(() => {
-        resetStudentAppIcon();
-        setIsDeviceLocked(false);
-        setAuthSession(null);
-      });
-      return;
-    }
     let active = true;
-    loadLockedStudentFromStorage().then((snap) => {
+    loadLockedDeviceFromStorage().then((snap) => {
       if (!active || !snap) return;
       setIsDeviceLocked(true);
       setAuthSession((prev) => {
-        if (prev && prev.role === 'student' && prev.accountId === snap.studentId) {
-          return prev;
+        if (prev && prev.role === snap.role && prev.accountId === snap.accountId) {
+          return {
+            ...prev,
+            lockVersion: typeof prev.lockVersion === 'number' ? prev.lockVersion : snap.lockVersion,
+          };
         }
         return snap.session;
       });
@@ -168,12 +165,18 @@ function MainContent() {
     return () => {
       active = false;
     };
-  }, [isUnlockUrlRequested]);
+  }, []);
 
   // Seamless support for ?guardian=... direct pairing links, locked device IDs, or saved Guardian PWA smartphone sessions
   useEffect(() => {
-    if (students.length === 0 || isUnlockUrlRequested) return;
+    if (students.length === 0) return;
+    const lockedSnap = getLockedDeviceSnapshotSync();
     const lockedId = getLockedStudentIdSync();
+
+    // If device is already locked to another role or another student, never let ?guardian=... overwrite it
+    if (lockedSnap && (lockedSnap.role !== 'student' || (urlGuardianParam && lockedSnap.accountId !== urlGuardianParam))) {
+      return;
+    }
     if (authSession && !lockedId && !urlGuardianParam) return;
 
     const savedPairedId =
@@ -187,12 +190,14 @@ function MainContent() {
       );
       if (matched) {
         const clsName = classes.find((c) => c.id === matched.classId)?.nameBn || matched.classId;
+        const matchedLockVersion = typeof matched.unlockEpoch === 'number' ? matched.unlockEpoch : 0;
         const autoSession: PortalAuthSession = {
           role: 'student',
           accountId: matched.id,
           displayName: matched.nameBn,
           subLabel: `${clsName} • রোল ${matched.roll}`,
           staffCode: getStudentPortalId(matched),
+          lockVersion: matchedLockVersion,
         };
         if (urlGuardianParam) {
           clearExplicitUnlockFlag();
@@ -207,9 +212,12 @@ function MainContent() {
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(autoSession));
           setCurrentTab('dashboard');
         }
-        if (lockedId) {
+        if (lockedId || (urlGuardianParam && alwaysLockDevices)) {
           setIsDeviceLocked(true);
           document.title = `${matched.nameBn} · ডি-লিকন ড্যাশবোর্ড`;
+          if (!lockedId && urlGuardianParam && alwaysLockDevices) {
+            void lockDeviceToStudent(matched, getStudentPortalId(matched), clsName);
+          }
         }
       }
     }
@@ -219,17 +227,109 @@ function MainContent() {
         void applyStudentPassportAppIcon(matched);
       }
     }
-  }, [authSession, students, classes, urlGuardianParam, isSavedGuardianMode]);
+  }, [authSession, students, classes, urlGuardianParam, isSavedGuardianMode, alwaysLockDevices]);
+
+  const handleUnlockDeviceNow = async () => {
+    const prevRole = authSession?.role;
+    setGuardianLiveWatchActive(false);
+    await unlockDeviceFromAccount();
+    resetStudentAppIcon();
+    setIsDeviceLocked(false);
+    setAuthSession(null);
+    setPreferStudentPortalOnLogin(prevRole === 'student');
+    setCurrentTab('dashboard');
+    setIsSettingsOpen(false);
+  };
+
+  // Remote & global auto-unlock monitor:
+  // 1) Reactive check from SchoolContext (global alwaysLockDevices === false OR remote unlockEpoch > local lockVersion)
+  useEffect(() => {
+    if (!isDeviceLocked || !authSession) return;
+    if (authSession.role !== 'student' && authSession.role !== 'employee') return;
+
+    if (!alwaysLockDevices) {
+      void handleUnlockDeviceNow();
+      return;
+    }
+
+    const localVersion = typeof authSession.lockVersion === 'number' ? authSession.lockVersion : 0;
+    if (authSession.role === 'student') {
+      const matchedStd = students.find((s) => s.id === authSession.accountId);
+      if (matchedStd && typeof matchedStd.unlockEpoch === 'number' && matchedStd.unlockEpoch > localVersion) {
+        void handleUnlockDeviceNow();
+      }
+    } else if (authSession.role === 'employee') {
+      const matchedStaff = staffAccounts.find((a) => a.id === authSession.accountId);
+      if (matchedStaff && typeof matchedStaff.unlockEpoch === 'number' && matchedStaff.unlockEpoch > localVersion) {
+        void handleUnlockDeviceNow();
+      }
+    }
+  }, [isDeviceLocked, authSession, alwaysLockDevices, students, staffAccounts]);
+
+  // 2) Lightweight server poll every 20s + window focus/visibility check for instant remote unlock from Principal dashboard
+  useEffect(() => {
+    if (!isDeviceLocked || !authSession) return;
+    if (authSession.role !== 'student' && authSession.role !== 'employee') return;
+
+    let cancelled = false;
+    const localVersion = typeof authSession.lockVersion === 'number' ? authSession.lockVersion : 0;
+
+    const checkLockStatus = async () => {
+      if (cancelled) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      const res = await safeFetchJson(
+        `/api/auth/device-lock-status?role=${encodeURIComponent(authSession.role)}&accountId=${encodeURIComponent(authSession.accountId)}`
+      );
+      if (cancelled || !res.reachable || !res.ok || !res.data?.success) return;
+      if (res.data.alwaysLockDevices === false || Number(res.data.unlockEpoch || 0) > localVersion) {
+        await handleUnlockDeviceNow();
+      }
+    };
+
+    void checkLockStatus();
+    const timer = setInterval(() => {
+      void checkLockStatus();
+    }, 20000);
+
+    const onFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        void checkLockStatus();
+      }
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [isDeviceLocked, authSession?.role, authSession?.accountId, authSession?.lockVersion]);
 
   const handleLoginSuccess = (session: PortalAuthSession, matchedStudent?: Student | null) => {
     clearExplicitUnlockFlag();
-    setAuthSession(session);
+    const matchedStaff =
+      session.role !== 'student' ? staffAccounts.find((a) => a.id === session.accountId) : undefined;
+    const resolvedLockVersion =
+      typeof session.lockVersion === 'number'
+        ? session.lockVersion
+        : session.role === 'student'
+        ? matchedStudent?.unlockEpoch ?? 0
+        : matchedStaff?.unlockEpoch ?? 0;
+
+    const sessionWithVersion: PortalAuthSession = {
+      ...session,
+      lockVersion: resolvedLockVersion,
+    };
+
+    setAuthSession(sessionWithVersion);
     setCurrentTab('dashboard');
     if (typeof window !== 'undefined') {
       if (window.location.search.includes('guardian=') || window.location.search.includes('locked=') || window.location.search.includes('unlock=')) {
         window.history.replaceState({}, '', window.location.pathname);
       }
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionWithVersion));
       if (session.role === 'student' && matchedStudent) {
         localStorage.setItem('dlikon_guardian_paired_student_id', matchedStudent.id);
         localStorage.setItem('dlikon_pwa_guardian_mode', 'true');
@@ -239,6 +339,17 @@ function MainContent() {
         localStorage.removeItem('dlikon_pwa_guardian_mode');
         resetStudentAppIcon();
       }
+    }
+
+    // Automatically lock smartphone for Student & Employee logins when global Always-Lock policy is active
+    if ((sessionWithVersion.role === 'student' || sessionWithVersion.role === 'employee') && alwaysLockDevices) {
+      setIsDeviceLocked(true);
+      void lockDeviceToSession(sessionWithVersion, {
+        student: matchedStudent || null,
+        lockVersion: resolvedLockVersion,
+      }).then((lockedSession) => {
+        setAuthSession(lockedSession);
+      });
     }
   };
 
@@ -251,41 +362,28 @@ function MainContent() {
     setCurrentTab('dashboard');
   };
 
-  const handleUnlockDeviceNow = async () => {
-    setGuardianLiveWatchActive(false);
-    await unlockDeviceFromStudent();
-    resetStudentAppIcon();
-    setIsDeviceLocked(false);
-    setAuthSession(null);
-    setPreferStudentPortalOnLogin(true);
-    setCurrentTab('dashboard');
-    setIsSettingsOpen(false);
-  };
-
   const handleAdminUnlockDevice = async (adminPin: string): Promise<boolean> => {
     const cleanPin = adminPin.trim();
-    const lockedStudent = authSession?.role === 'student'
-      ? students.find((s) => s.id === authSession.accountId)
-      : undefined;
-    const studentPinMatch =
-      Boolean(lockedStudent) &&
-      cleanPin === (lockedStudent?.guardianPin || '1234').trim();
+    if (!cleanPin) return false;
 
-    const localOfficialMatch =
-      cleanPin === 'admin123' ||
-      studentPinMatch ||
-      getLocalStaffAccounts().some((acc) => acc.role === 'official' && acc.password === cleanPin);
+    const serverCheck = await safeFetchJson('/api/auth/verify-office-unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: cleanPin }),
+    });
 
-    let isValidOfficial = localOfficialMatch;
-    if (!isValidOfficial) {
-      const serverCheck = await safeFetchJson('/api/portal/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'official', identifier: 'DL-ADMIN', password: cleanPin }),
-      });
-      if (serverCheck.reachable && serverCheck.ok && serverCheck.data?.success) {
-        isValidOfficial = true;
-      }
+    let isValidOfficial = false;
+    if (serverCheck.reachable) {
+      isValidOfficial = Boolean(serverCheck.ok && serverCheck.data?.success);
+    } else {
+      const candidateAccounts = staffAccounts.length > 0 ? staffAccounts : getLocalStaffAccounts();
+      isValidOfficial = candidateAccounts.some(
+        (acc) =>
+          acc.role === 'official' &&
+          acc.status !== 'pending' &&
+          isOfficialAuthorizerAccount(acc) &&
+          String(acc.password || '').trim() === cleanPin
+      );
     }
 
     if (!isValidOfficial) return false;
@@ -343,7 +441,8 @@ function MainContent() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={handleLogout}
         isDeviceLocked={isDeviceLocked}
-        onUnlockDevice={handleUnlockDeviceNow}
+        alwaysLockDevices={alwaysLockDevices}
+        onAdminUnlockDevice={handleAdminUnlockDevice}
       />
 
       {/* Strictly Role-Isolated Workspace Views */}
@@ -442,7 +541,6 @@ function MainContent() {
                 isDeviceLocked={isDeviceLocked}
                 onInstallLockedDashboard={handleInstallLockedDashboard}
                 onAdminUnlockDevice={handleAdminUnlockDevice}
-                onUnlockDevice={handleUnlockDeviceNow}
               />
             )}
           </>
@@ -469,6 +567,29 @@ function MainContent() {
                 restrictedMode="employee_scanner"
               />
             )}
+            {resolveStaffCategoryKey(
+              {
+                categoryKey: authSession.categoryKey,
+                designationBn: authSession.designationBn || authSession.subLabel,
+                role: 'employee',
+              },
+              authSession.designationBn || authSession.subLabel
+            ) === 'accountant_clerk' && (
+              <>
+                {currentTab === 'fees' && (
+                  <StudentFeesView onNavigateToTab={(tab) => setCurrentTab(tab)} />
+                )}
+                {currentTab === 'daily_report' && (
+                  <DailyFeeReportView onNavigate={(tab) => setCurrentTab(tab)} />
+                )}
+                {currentTab === 'defaulters' && (
+                  <DefaulterListView
+                    onNavigate={(tab) => setCurrentTab(tab)}
+                    onOpenStudentHistory={() => setCurrentTab('fees')}
+                  />
+                )}
+              </>
+            )}
             {currentTab === 'syllabus' && <SyllabusView />}
             {currentTab === 'question_papers' && <QuestionPaperGenerator />}
             {currentTab === 'notes' && <NotesView />}
@@ -490,6 +611,19 @@ function MainContent() {
               <DashboardView
                 onNavigate={(tab) => setCurrentTab(tab)}
                 onOpenSettings={() => setIsSettingsOpen(true)}
+                reviewerNameBn={
+                  authSession.displayName
+                    ? `${authSession.displayName}${
+                        authSession.designationBn ? ` (${authSession.designationBn})` : ''
+                      }`
+                    : 'প্রিন্সিপাল'
+                }
+              />
+            )}
+            {currentTab === 'my_dashboard' && (
+              <CategoryStaffDashboardView
+                session={authSession}
+                onNavigate={(tab) => setCurrentTab(tab)}
               />
             )}
             {currentTab === 'staff_management' && <StaffManagementView />}

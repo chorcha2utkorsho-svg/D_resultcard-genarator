@@ -31,6 +31,12 @@ import {
   ExplicitPhotoClearFlags,
   StudentPhotoRegistryEntry,
   PhotoIntegrityReport,
+  StaffAccount,
+  StaffActivityLog,
+  StaffAttendanceRecord,
+  StaffAttendanceRealtimeEvent,
+  StaffLeaveRequest,
+  StaffLeaveType,
 } from '../types';
 import { idbSet, idbGet } from '../utils/indexedDbStorage';
 import { compressImageBase64 } from '../utils/imageCompressor';
@@ -79,17 +85,57 @@ import {
   batchPushStudentsToFirestore,
   checkCloudScannerAuthorization,
   deleteLibraryMaterialFromFirestore,
+  deleteStaffLeaveFromFirestore,
   ensureSchoolDocument,
-  pullLibraryMaterialsFromFirestore,
+  pullLatestCloudDailyAttendance,
   pullLatestCloudSecurityLogs,
+  pullLatestCloudStaffAttendance,
+  pullLibraryMaterialsFromFirestore,
+  pullStaffAccountsFromFirestore,
+  pullStaffActivitiesFromFirestore,
+  pullStaffLeavesFromFirestore,
   pullStudentsFromFirestore,
+  pushDailyAttendanceToFirestore,
   pushSecurityLogToFirestore,
+  pushStaffActivityToFirestore,
+  pushStaffAttendanceToFirestore,
+  pushStaffLeaveToFirestore,
   registerGuardianSubscription,
   subscribeBootstrapGuardianSubscribersMirror,
+  subscribeCloudDailyAttendance,
   subscribeCloudSecurityLogs,
+  subscribeCloudStaffAttendance,
+  subscribeCloudStaffLeaves,
   syncLibraryMaterialToFirestore,
+  syncSchoolLockPolicyToFirestore,
+  syncStaffAccountToFirestore,
   syncStudentRecordToFirestore,
 } from '../services/firestoreSyncService';
+import {
+  getLocalStaffAccounts,
+  getLocalStaffActivities,
+  getLocalStaffAttendance,
+  getLocalStaffLeaves,
+  safeFetchJson,
+  saveLocalStaffAccounts,
+  saveLocalStaffActivities,
+  saveLocalStaffAttendance,
+  saveLocalStaffLeaves,
+} from '../utils/portalAuthFallback';
+import {
+  computeStaffWorkedMinutes,
+  formatWorkedDurationBn,
+  getDhakaTodayIso,
+  normalizeStaffDesignation,
+  resolveStaffCategoryKey,
+} from '../utils/staffDesignations';
+import { mergeCanonicalStaffRoster } from '../utils/staffDirectorySeed';
+import {
+  ensureUniqueStudentCredentials,
+  generateStaffPassword,
+  generateUniquePin6,
+  isWeakOrDefaultPin,
+} from '../utils/credentialGenerator';
 
 interface SchoolContextType {
   schoolInfo: SchoolInfo;
@@ -376,6 +422,74 @@ interface SchoolContextType {
     log: SecurityGatepassLog
   ) => Promise<{ ok: boolean; guardianCount?: number; error?: string }>;
   pullCloudSecurityLogsNow: () => Promise<SecurityGatepassLog[]>;
+  // Real-time Teacher & Staff Attendance, Leaves, Activities & Payroll Config
+  staffAccounts: StaffAccount[];
+  staffAttendance: StaffAttendanceRecord[];
+  staffLeaves: StaffLeaveRequest[];
+  staffActivities: StaffActivityLog[];
+  latestStaffConfirmation: StaffAttendanceRealtimeEvent | null;
+  staffConfirmationFeed: StaffAttendanceRealtimeEvent[];
+  setStaffAccountsList: (accounts: StaffAccount[]) => void;
+  setStaffAttendanceList: (records: StaffAttendanceRecord[]) => void;
+  setStaffLeavesList: (leaves: StaffLeaveRequest[]) => void;
+  refreshStaffOverview: () => Promise<void>;
+  recordRealtimeStaffAttendance: (
+    record: StaffAttendanceRecord,
+    action?: 'checkin' | 'checkout',
+    summaryMeta?: { totalStaffCount?: number; presentCount?: number; pendingCount?: number }
+  ) => void;
+  recordStaffAttendanceAction: (
+    staff: Pick<StaffAccount, 'id' | 'staffCode' | 'nameBn' | 'designationBn'>,
+    action: 'checkin' | 'checkout'
+  ) => Promise<StaffAttendanceRecord | null>;
+  submitStaffLeave: (params: {
+    staffId: string;
+    staffCode?: string;
+    staffNameBn: string;
+    designationBn: string;
+    startDate: string;
+    endDate: string;
+    leaveType: StaffLeaveType;
+    reason: string;
+  }) => Promise<StaffLeaveRequest | null>;
+  reviewStaffLeave: (
+    leaveId: string,
+    status: 'approved' | 'rejected',
+    reviewedBy?: string,
+    reviewNote?: string
+  ) => Promise<StaffLeaveRequest | null>;
+  cancelStaffLeave: (leaveId: string, staffId?: string) => Promise<boolean>;
+  addStaffActivity: (params: {
+    staffId: string;
+    staffNameBn: string;
+    designationBn: string;
+    date?: string;
+    title: string;
+    details?: string;
+  }) => Promise<StaffActivityLog | null>;
+  deleteStaffActivity: (activityId: string) => Promise<void>;
+  updateStaffAccountConfig: (
+    staffId: string,
+    patch: Partial<
+      Pick<
+        StaffAccount,
+        | 'nameBn'
+        | 'phone'
+        | 'password'
+        | 'designationBn'
+        | 'baseMonthlySalary'
+        | 'dailyShiftHours'
+        | 'overtimeHourlyRate'
+        | 'status'
+        | 'unlockEpoch'
+      >
+    >
+  ) => Promise<StaffAccount | null>;
+  dismissStaffConfirmation: () => void;
+  toggleGlobalDeviceLock: (alwaysLocked: boolean) => Promise<boolean>;
+  remoteUnlockAccount: (targetType: 'staff' | 'student', accountId: string) => Promise<number | null>;
+  regenerateStaffPasswords: (staffId?: string) => Promise<StaffAccount[]>;
+  regenerateStudentPins: (options?: { studentId?: string; classId?: string }) => Promise<Student[]>;
 }
 
 const STORAGE_KEY = 'dlikon_academy_db_v1';
@@ -387,7 +501,16 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>(() => {
     try {
       const saved = localStorage.getItem(`${STORAGE_KEY}_info`);
-      return saved ? JSON.parse(saved) : DEFAULT_SCHOOL_INFO;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_SCHOOL_INFO,
+          ...parsed,
+          alwaysLockDevices:
+            typeof parsed.alwaysLockDevices === 'boolean' ? parsed.alwaysLockDevices : true,
+        };
+      }
+      return DEFAULT_SCHOOL_INFO;
     } catch {
       return DEFAULT_SCHOOL_INFO;
     }
@@ -411,12 +534,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           const cleaned = parsed.filter((s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id));
-          if (cleaned.length > 0) return cleaned;
+          if (cleaned.length > 0) return ensureUniqueStudentCredentials(cleaned);
         }
       }
-      return INITIAL_STUDENTS;
+      return ensureUniqueStudentCredentials(INITIAL_STUDENTS);
     } catch {
-      return INITIAL_STUDENTS;
+      return ensureUniqueStudentCredentials(INITIAL_STUDENTS);
     }
   });
 
@@ -591,6 +714,30 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   });
 
+  const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>(() => getLocalStaffAccounts());
+  const [staffAttendance, setStaffAttendance] = useState<StaffAttendanceRecord[]>(() =>
+    getLocalStaffAttendance()
+  );
+  const [staffLeaves, setStaffLeaves] = useState<StaffLeaveRequest[]>(() => getLocalStaffLeaves());
+  const [staffActivities, setStaffActivities] = useState<StaffActivityLog[]>(() =>
+    getLocalStaffActivities()
+  );
+  const [latestStaffConfirmation, setLatestStaffConfirmation] =
+    useState<StaffAttendanceRealtimeEvent | null>(null);
+  const [staffConfirmationFeed, setStaffConfirmationFeed] = useState<StaffAttendanceRealtimeEvent[]>([]);
+  const seenStaffEventIdsRef = useRef<Set<string>>(
+    (() => {
+      try {
+        const raw = typeof window !== 'undefined' ? sessionStorage.getItem('dlikon_seen_staff_att_events_v1') : null;
+        const parsed = raw ? JSON.parse(raw) : [];
+        return new Set<string>(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+      } catch {
+        return new Set<string>();
+      }
+    })()
+  );
+  const hasStaffCloudBaselineRef = useRef<boolean>(false);
+
   // Global Filter selections
   const [selectedYear, setSelectedYear] = useState<string>('২০২৬');
   const [selectedExamId, setSelectedExamId] = useState<string>('term_2');
@@ -701,6 +848,8 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const studentPhotoMapRef = useRef<Record<string, StudentPhotoRegistryEntry>>({});
 
   const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const cloudUserRef = useRef<User | null>(null);
+  cloudUserRef.current = cloudUser;
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [cloudUnauthorizedDomain, setCloudUnauthorizedDomain] = useState<string | null>(null);
   const [cloudPushAuthorized, setCloudPushAuthorized] = useState<boolean | null>(null);
@@ -940,10 +1089,926 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, []);
 
+  const cloudPushAuthorizedRef = useRef<boolean | null>(null);
+  cloudPushAuthorizedRef.current = cloudPushAuthorized;
+
+  const setStaffAccountsList = useCallback((accounts: StaffAccount[]) => {
+    const merged = mergeCanonicalStaffRoster(accounts);
+    setStaffAccounts(merged);
+    saveLocalStaffAccounts(merged);
+  }, []);
+
+  const setStaffAttendanceList = useCallback((records: StaffAttendanceRecord[]) => {
+    setStaffAttendance(records);
+    saveLocalStaffAttendance(records);
+  }, []);
+
+  const mergeCloudStaffAttendanceIntoState = useCallback((incoming: StaffAttendanceRecord[]) => {
+    if (!incoming || incoming.length === 0) return;
+    setStaffAttendance((prev) => {
+      const map = new Map<string, StaffAttendanceRecord>();
+      for (const r of prev) {
+        if (r && r.id) map.set(r.id, r);
+      }
+      for (const item of incoming) {
+        if (!item || !item.id) continue;
+        const ex = map.get(item.id);
+        if (!ex) {
+          map.set(item.id, item);
+        } else {
+          const exTs = ex.serverTimestamp || 0;
+          const inTs = item.serverTimestamp || 0;
+          map.set(item.id, {
+            ...ex,
+            ...item,
+            checkInTime: item.checkInTime || ex.checkInTime,
+            checkOutTime: item.checkOutTime || ex.checkOutTime,
+            serverTimestamp: Math.max(exTs, inTs),
+          });
+        }
+      }
+      const next = Array.from(map.values())
+        .sort((a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0) || b.date.localeCompare(a.date))
+        .slice(0, 500);
+      saveLocalStaffAttendance(next);
+      return next;
+    });
+  }, []);
+
+  const staffAccountsRef = useRef(staffAccounts);
+  staffAccountsRef.current = staffAccounts;
+  const staffAttendanceRef = useRef(staffAttendance);
+  staffAttendanceRef.current = staffAttendance;
+
+  const computeTodayStaffCounts = useCallback(
+    (
+      accountsList: StaffAccount[],
+      attendanceList: StaffAttendanceRecord[],
+      dateStr: string
+    ): { totalStaffCount: number; presentCount: number; pendingCount: number } => {
+      const activeStaff = accountsList.filter(
+        (a) => a && a.status !== 'pending'
+      );
+      const todayRecords = attendanceList.filter((r) => r && r.date === dateStr);
+      const presentStaffIds = new Set(
+        todayRecords
+          .filter((r) => Boolean(r.staffId))
+          .map((r) => r.staffId)
+      );
+      const presentCount = presentStaffIds.size;
+      const totalStaffCount = Math.max(activeStaff.length, presentCount);
+      const pendingCount = Math.max(0, totalStaffCount - presentCount);
+      return { totalStaffCount, presentCount, pendingCount };
+    },
+    []
+  );
+
+  const recordRealtimeStaffAttendance = useCallback(
+    (
+      record: StaffAttendanceRecord,
+      explicitAction?: 'checkin' | 'checkout',
+      summaryMeta?: { totalStaffCount?: number; presentCount?: number; pendingCount?: number }
+    ) => {
+      if (!record || !record.id) return;
+      const resolvedAction: 'checkin' | 'checkout' =
+        explicitAction ||
+        record.action ||
+        (record.checkOutTime ? 'checkout' : 'checkin');
+      const timeStampLabel =
+        resolvedAction === 'checkout' ? record.checkOutTime || record.checkInTime : record.checkInTime;
+      const eventId = `${record.id}::${resolvedAction}::${timeStampLabel || ''}`;
+
+      // Merge record into state cleanly including work duration metadata
+      const prevAtt = staffAttendanceRef.current;
+      const nextMap = new Map<string, StaffAttendanceRecord>();
+      for (const item of prevAtt) {
+        if (item?.id) nextMap.set(item.id, item);
+      }
+      const existing = nextMap.get(record.id);
+      const mergedRecBase: StaffAttendanceRecord = existing
+        ? {
+            ...existing,
+            ...record,
+            designationBn: normalizeStaffDesignation(record.designationBn || existing.designationBn),
+            checkInTime: record.checkInTime || existing.checkInTime,
+            checkInMs: record.checkInMs ?? existing.checkInMs,
+            checkOutTime: record.checkOutTime || existing.checkOutTime,
+            checkOutMs: record.checkOutMs ?? existing.checkOutMs,
+            workedMinutes: record.workedMinutes ?? existing.workedMinutes,
+            workedDurationBn: record.workedDurationBn || existing.workedDurationBn,
+            action: resolvedAction,
+            serverTimestamp: Math.max(record.serverTimestamp || 0, existing.serverTimestamp || 0),
+          }
+        : {
+            ...record,
+            designationBn: normalizeStaffDesignation(record.designationBn),
+            action: resolvedAction,
+          };
+
+      let mergedRec = mergedRecBase;
+      if (resolvedAction === 'checkout' && !mergedRec.workedDurationBn) {
+        const calc = computeStaffWorkedMinutes(mergedRec);
+        mergedRec = {
+          ...mergedRec,
+          ...(calc.checkInMs ? { checkInMs: calc.checkInMs } : {}),
+          ...(calc.checkOutMs ? { checkOutMs: calc.checkOutMs } : {}),
+          workedMinutes: calc.minutes,
+          workedDurationBn: formatWorkedDurationBn(calc.minutes),
+        };
+      }
+
+      nextMap.set(record.id, mergedRec);
+      const nextAttList = Array.from(nextMap.values())
+        .sort((a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0) || b.date.localeCompare(a.date))
+        .slice(0, 500);
+      setStaffAttendance(nextAttList);
+      saveLocalStaffAttendance(nextAttList);
+
+      if (seenStaffEventIdsRef.current.has(eventId)) {
+        return;
+      }
+      seenStaffEventIdsRef.current.add(eventId);
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(
+            'dlikon_seen_staff_att_events_v1',
+            JSON.stringify(Array.from(seenStaffEventIdsRef.current).slice(-200))
+          );
+        }
+      } catch {
+        // Ignore storage quota errors
+      }
+
+      const fallbackCounts = computeTodayStaffCounts(
+        staffAccountsRef.current,
+        nextAttList,
+        record.date
+      );
+      const totalStaffCount =
+        typeof summaryMeta?.totalStaffCount === 'number'
+          ? summaryMeta.totalStaffCount
+          : fallbackCounts.totalStaffCount;
+      const presentCount =
+        typeof summaryMeta?.presentCount === 'number'
+          ? summaryMeta.presentCount
+          : fallbackCounts.presentCount;
+      const pendingCount =
+        typeof summaryMeta?.pendingCount === 'number'
+          ? summaryMeta.pendingCount
+          : fallbackCounts.pendingCount;
+
+      const designation = normalizeStaffDesignation(mergedRec.designationBn || 'শিক্ষক');
+      const name = (mergedRec.staffNameBn || 'দায়িত্বশীল').trim();
+      const timePhrase = timeStampLabel ? ` (সময়: ${timeStampLabel})` : '';
+      const actionVerb = resolvedAction === 'checkout' ? 'প্রস্থান করেছেন' : 'প্রবেশ করেছেন';
+      const durationSuffix =
+        resolvedAction === 'checkout' && mergedRec.workedDurationBn
+          ? ` — মোট কর্মঘণ্টা: ${mergedRec.workedDurationBn}`
+          : '';
+      const messageBn = `এইমাত্র ${designation} পদে দায়িত্বশীল ${name} ${actionVerb}${timePhrase}${durationSuffix}। মোট উপস্থিতির সংখ্যা ${toBengaliNumber(presentCount)} জন, অপেক্ষমান সংখ্যা ${toBengaliNumber(pendingCount)} জন।`;
+
+      const eventObj: StaffAttendanceRealtimeEvent = {
+        eventId,
+        action: resolvedAction,
+        record: mergedRec,
+        totalStaffCount,
+        presentCount,
+        pendingCount,
+        messageBn,
+        receivedAt: Date.now(),
+      };
+      setLatestStaffConfirmation(eventObj);
+      setStaffConfirmationFeed((prev) =>
+        [eventObj, ...prev.filter((p) => p.eventId !== eventId)].slice(0, 20)
+      );
+    },
+    [computeTodayStaffCounts]
+  );
+
+  const recordStaffAttendanceAction = useCallback(
+    async (
+      staff: Pick<StaffAccount, 'id' | 'staffCode' | 'nameBn' | 'designationBn'>,
+      action: 'checkin' | 'checkout'
+    ): Promise<StaffAttendanceRecord | null> => {
+      if (!staff?.id) return null;
+      const todayIso = getDhakaTodayIso();
+      const normalizedDesignation = normalizeStaffDesignation(staff.designationBn);
+      const nowMs = Date.now();
+      const res = await safeFetchJson('/api/staff/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          staffId: staff.id,
+          staffCode: staff.staffCode,
+          staffNameBn: staff.nameBn,
+          designationBn: normalizedDesignation,
+          action,
+        }),
+      });
+
+      let savedRecord: StaffAttendanceRecord | null = null;
+      let summaryMeta:
+        | { totalStaffCount?: number; presentCount?: number; pendingCount?: number }
+        | undefined;
+
+      if (res.reachable && res.ok && res.data?.success) {
+        const updatedList: StaffAttendanceRecord[] = res.data.staffAttendance || [];
+        savedRecord = res.data.record || null;
+        summaryMeta = res.data.summary;
+        if (updatedList.length > 0) {
+          setStaffAttendance(updatedList);
+          saveLocalStaffAttendance(updatedList);
+        }
+      } else {
+        const nowStr = new Date(nowMs).toLocaleTimeString('bn-BD', {
+          timeZone: 'Asia/Dhaka',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+        const baseList =
+          staffAttendanceRef.current.length > 0
+            ? staffAttendanceRef.current
+            : getLocalStaffAttendance();
+        const existingIdx = baseList.findIndex(
+          (r) => r.staffId === staff.id && r.date === todayIso
+        );
+        const nextList = [...baseList];
+        if (existingIdx !== -1) {
+          const prevRec = nextList[existingIdx];
+          const checkInMs =
+            typeof prevRec.checkInMs === 'number' && prevRec.checkInMs > 0
+              ? prevRec.checkInMs
+              : computeStaffWorkedMinutes(prevRec, nowMs).checkInMs ?? nowMs;
+          const checkOutMs = action === 'checkout' ? nowMs : prevRec.checkOutMs;
+          const workedMinutes =
+            action === 'checkout' && checkInMs
+              ? Math.max(0, Math.round((nowMs - checkInMs) / 60000))
+              : prevRec.workedMinutes;
+          const workedDurationBn =
+            typeof workedMinutes === 'number'
+              ? formatWorkedDurationBn(workedMinutes)
+              : prevRec.workedDurationBn;
+          savedRecord = {
+            ...prevRec,
+            staffCode: staff.staffCode || prevRec.staffCode,
+            designationBn: normalizedDesignation,
+            checkInTime: action === 'checkin' ? prevRec.checkInTime || nowStr : prevRec.checkInTime,
+            checkInMs,
+            ...(action === 'checkout'
+              ? { checkOutTime: nowStr, checkOutMs, workedMinutes, workedDurationBn }
+              : {}),
+            action,
+            serverTimestamp: nowMs,
+          };
+          nextList[existingIdx] = savedRecord;
+        } else {
+          savedRecord = {
+            id: `${staff.id}_${todayIso}`,
+            staffId: staff.id,
+            staffCode: staff.staffCode,
+            staffNameBn: staff.nameBn,
+            designationBn: normalizedDesignation,
+            date: todayIso,
+            checkInTime: nowStr,
+            checkInMs: nowMs,
+            ...(action === 'checkout'
+              ? {
+                  checkOutTime: nowStr,
+                  checkOutMs: nowMs,
+                  workedMinutes: 0,
+                  workedDurationBn: formatWorkedDurationBn(0),
+                }
+              : {}),
+            action,
+            status: 'present',
+            serverTimestamp: nowMs,
+          };
+          nextList.unshift(savedRecord);
+        }
+        setStaffAttendance(nextList);
+        saveLocalStaffAttendance(nextList);
+      }
+
+      if (savedRecord) {
+        recordRealtimeStaffAttendance(savedRecord, action, summaryMeta);
+        try {
+          if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+            const ch = new BroadcastChannel('dlikon_gatepass_live');
+            ch.postMessage({
+              type: 'staff:attendance',
+              action,
+              record: savedRecord,
+              totalStaffCount: summaryMeta?.totalStaffCount,
+              presentCount: summaryMeta?.presentCount,
+              pendingCount: summaryMeta?.pendingCount,
+              serverTime: Date.now(),
+            });
+            ch.close();
+          }
+        } catch {
+          // Ignore BroadcastChannel error
+        }
+        const activeCloudUser = cloudUserRef.current;
+        if (activeCloudUser && activeCloudUser.emailVerified) {
+          void pushStaffAttendanceToFirestore(
+            savedRecord,
+            activeCloudUser,
+            latestStateRef.current.schoolInfo
+          ).catch(() => {});
+        }
+      }
+
+      return savedRecord;
+    },
+    [recordRealtimeStaffAttendance]
+  );
+
+  const dismissStaffConfirmation = useCallback(() => {
+    setLatestStaffConfirmation(null);
+  }, []);
+
+  const setStaffLeavesList = useCallback((leaves: StaffLeaveRequest[]) => {
+    if (!Array.isArray(leaves)) return;
+    const sorted = [...leaves].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    setStaffLeaves(sorted);
+    saveLocalStaffLeaves(sorted);
+  }, []);
+
+  const broadcastStaffLeavesLocal = useCallback((nextLeaves: StaffLeaveRequest[], action: string) => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+    try {
+      const ch = new BroadcastChannel('dlikon_gatepass_live');
+      ch.postMessage({
+        type: 'staff:leaves',
+        action,
+        staffLeaves: nextLeaves,
+        serverTime: Date.now(),
+      });
+      ch.close();
+    } catch {
+      // Ignore BroadcastChannel errors
+    }
+  }, []);
+
+  const submitStaffLeave = useCallback(
+    async (params: {
+      staffId: string;
+      staffCode?: string;
+      staffNameBn: string;
+      designationBn: string;
+      startDate: string;
+      endDate: string;
+      leaveType: StaffLeaveType;
+      reason: string;
+    }): Promise<StaffLeaveRequest | null> => {
+      if (!params.staffId || !params.startDate || !params.endDate || !params.reason.trim()) {
+        return null;
+      }
+      const startMs = Date.parse(`${params.startDate}T00:00:00Z`);
+      const endMs = Date.parse(`${params.endDate}T00:00:00Z`);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+        return null;
+      }
+      const daysCount = Math.min(60, Math.floor((endMs - startMs) / 86400000) + 1);
+      const nowIso = new Date().toISOString();
+      const draft: StaffLeaveRequest = {
+        id: `leave_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        staffId: params.staffId,
+        staffCode: params.staffCode,
+        staffNameBn: params.staffNameBn,
+        designationBn: normalizeStaffDesignation(params.designationBn),
+        startDate: params.startDate,
+        endDate: params.endDate,
+        daysCount,
+        leaveType: params.leaveType,
+        reason: params.reason.trim(),
+        status: 'pending',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      const res = await safeFetchJson('/api/staff/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'submit_leave', payload: draft }),
+      });
+
+      const savedLeave: StaffLeaveRequest =
+        res.reachable && res.ok && res.data?.leave ? res.data.leave : draft;
+
+      if (res.reachable && res.ok && Array.isArray(res.data?.staffLeaves)) {
+        setStaffLeaves(res.data.staffLeaves);
+        saveLocalStaffLeaves(res.data.staffLeaves);
+        broadcastStaffLeavesLocal(res.data.staffLeaves, 'submitted');
+      } else {
+        setStaffLeaves((prev) => {
+          const next = [savedLeave, ...prev].slice(0, 500);
+          saveLocalStaffLeaves(next);
+          broadcastStaffLeavesLocal(next, 'submitted');
+          return next;
+        });
+      }
+
+      const activeCloudUser = cloudUserRef.current;
+      if (activeCloudUser && activeCloudUser.emailVerified) {
+        void pushStaffLeaveToFirestore(
+          savedLeave,
+          activeCloudUser,
+          latestStateRef.current.schoolInfo
+        ).catch(() => {});
+      }
+
+      return savedLeave;
+    },
+    [broadcastStaffLeavesLocal]
+  );
+
+  const reviewStaffLeave = useCallback(
+    async (
+      leaveId: string,
+      status: 'approved' | 'rejected',
+      reviewedBy = 'প্রিন্সিপাল',
+      reviewNote?: string
+    ): Promise<StaffLeaveRequest | null> => {
+      if (!leaveId) return null;
+      const cleanNote =
+        typeof reviewNote === 'string' && reviewNote.trim()
+          ? reviewNote.trim().slice(0, 500)
+          : undefined;
+      const res = await safeFetchJson('/api/staff/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'review_leave',
+          payload: { leaveId, status, reviewedBy, ...(cleanNote ? { reviewNote: cleanNote } : {}) },
+        }),
+      });
+
+      let updatedLeave: StaffLeaveRequest | null = null;
+      if (res.reachable && res.ok && Array.isArray(res.data?.staffLeaves)) {
+        updatedLeave = res.data.leave || null;
+        setStaffLeaves(res.data.staffLeaves);
+        saveLocalStaffLeaves(res.data.staffLeaves);
+        broadcastStaffLeavesLocal(res.data.staffLeaves, status);
+      } else {
+        const nowIso = new Date().toISOString();
+        setStaffLeaves((prev) => {
+          const next = prev.map((l) => {
+            if (l.id === leaveId) {
+              updatedLeave = {
+                ...l,
+                status,
+                reviewedBy,
+                ...(cleanNote ? { reviewNote: cleanNote } : {}),
+                updatedAt: nowIso,
+              };
+              return updatedLeave;
+            }
+            return l;
+          });
+          saveLocalStaffLeaves(next);
+          broadcastStaffLeavesLocal(next, status);
+          return next;
+        });
+      }
+
+      const activeCloudUser = cloudUserRef.current;
+      if (updatedLeave && activeCloudUser && activeCloudUser.emailVerified) {
+        void pushStaffLeaveToFirestore(
+          updatedLeave,
+          activeCloudUser,
+          latestStateRef.current.schoolInfo
+        ).catch(() => {});
+      }
+      return updatedLeave;
+    },
+    [broadcastStaffLeavesLocal]
+  );
+
+  const cancelStaffLeave = useCallback(
+    async (leaveId: string, staffId?: string): Promise<boolean> => {
+      if (!leaveId) return false;
+      const res = await safeFetchJson('/api/staff/leaves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'cancel_leave',
+          payload: { leaveId, ...(staffId ? { staffId } : {}) },
+        }),
+      });
+
+      if (res.reachable && res.ok && Array.isArray(res.data?.staffLeaves)) {
+        setStaffLeaves(res.data.staffLeaves);
+        saveLocalStaffLeaves(res.data.staffLeaves);
+        broadcastStaffLeavesLocal(res.data.staffLeaves, 'cancelled');
+      } else if (res.reachable && !res.ok) {
+        return false;
+      } else {
+        let removed = false;
+        setStaffLeaves((prev) => {
+          const target = prev.find((l) => l.id === leaveId);
+          if (!target || target.status !== 'pending' || (staffId && target.staffId !== staffId)) {
+            return prev;
+          }
+          removed = true;
+          const next = prev.filter((l) => l.id !== leaveId);
+          saveLocalStaffLeaves(next);
+          broadcastStaffLeavesLocal(next, 'cancelled');
+          return next;
+        });
+        if (!removed) return false;
+      }
+
+      const activeCloudUser = cloudUserRef.current;
+      if (activeCloudUser && activeCloudUser.emailVerified) {
+        void deleteStaffLeaveFromFirestore(leaveId, activeCloudUser).catch(() => {});
+      }
+      return true;
+    },
+    [broadcastStaffLeavesLocal]
+  );
+
+  const addStaffActivity = useCallback(
+    async (params: {
+      staffId: string;
+      staffNameBn: string;
+      designationBn: string;
+      date?: string;
+      title: string;
+      details?: string;
+    }): Promise<StaffActivityLog | null> => {
+      if (!params.staffId || !params.title.trim()) return null;
+      const nowIso = new Date().toISOString();
+      const normalizedDes = normalizeStaffDesignation(params.designationBn);
+      const draft: StaffActivityLog = {
+        id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        staffId: params.staffId,
+        staffNameBn: params.staffNameBn,
+        designationBn: normalizedDes,
+        categoryKey: resolveStaffCategoryKey(
+          { designationBn: normalizedDes, role: 'employee' },
+          normalizedDes
+        ),
+        date: params.date || getDhakaTodayIso(),
+        title: params.title.trim(),
+        details: params.details?.trim() || '',
+        timestamp: nowIso,
+      };
+
+      const res = await safeFetchJson('/api/staff/activities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'add_activity', payload: draft }),
+      });
+
+      const savedAct: StaffActivityLog =
+        res.reachable && res.ok && res.data?.activity ? res.data.activity : draft;
+
+      if (res.reachable && res.ok && Array.isArray(res.data?.staffActivities)) {
+        setStaffActivities(res.data.staffActivities);
+        saveLocalStaffActivities(res.data.staffActivities);
+      } else {
+        setStaffActivities((prev) => {
+          const next = [savedAct, ...prev].slice(0, 800);
+          saveLocalStaffActivities(next);
+          return next;
+        });
+      }
+
+      const activeCloudUser = cloudUserRef.current;
+      if (activeCloudUser && activeCloudUser.emailVerified) {
+        void pushStaffActivityToFirestore(
+          savedAct,
+          activeCloudUser,
+          latestStateRef.current.schoolInfo
+        ).catch(() => {});
+      }
+      return savedAct;
+    },
+    []
+  );
+
+  const deleteStaffActivity = useCallback(async (activityId: string): Promise<void> => {
+    if (!activityId) return;
+    const res = await safeFetchJson('/api/staff/activities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'delete_activity', payload: { activityId } }),
+    });
+    if (res.reachable && res.ok && Array.isArray(res.data?.staffActivities)) {
+      setStaffActivities(res.data.staffActivities);
+      saveLocalStaffActivities(res.data.staffActivities);
+    } else {
+      setStaffActivities((prev) => {
+        const next = prev.filter((a) => a.id !== activityId);
+        saveLocalStaffActivities(next);
+        return next;
+      });
+    }
+  }, []);
+
+  const updateStaffAccountConfig = useCallback(
+    async (
+      staffId: string,
+      patch: Partial<
+        Pick<
+          StaffAccount,
+          | 'nameBn'
+          | 'phone'
+          | 'password'
+          | 'designationBn'
+          | 'baseMonthlySalary'
+          | 'dailyShiftHours'
+          | 'overtimeHourlyRate'
+          | 'status'
+          | 'unlockEpoch'
+        >
+      >
+    ): Promise<StaffAccount | null> => {
+      const target = staffAccountsRef.current.find((s) => s.id === staffId);
+      if (!target) return null;
+      const updatedStaff: StaffAccount = {
+        ...target,
+        ...patch,
+        designationBn: normalizeStaffDesignation(patch.designationBn || target.designationBn),
+        categoryKey: resolveStaffCategoryKey(
+          { ...target, ...patch },
+          patch.designationBn || target.designationBn
+        ),
+      };
+
+      const res = await safeFetchJson('/api/staff/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'upsert_staff', payload: updatedStaff }),
+      });
+
+      if (res.reachable && res.ok && Array.isArray(res.data?.staffAccounts)) {
+        const merged = mergeCanonicalStaffRoster(res.data.staffAccounts);
+        setStaffAccounts(merged);
+        saveLocalStaffAccounts(merged);
+      } else {
+        const nextList = staffAccountsRef.current.map((s) =>
+          s.id === staffId ? updatedStaff : s
+        );
+        const merged = mergeCanonicalStaffRoster(nextList);
+        setStaffAccounts(merged);
+        saveLocalStaffAccounts(merged);
+      }
+
+      const activeCloudUser = cloudUserRef.current;
+      if (activeCloudUser && activeCloudUser.emailVerified) {
+        void syncStaffAccountToFirestore(
+          updatedStaff,
+          activeCloudUser,
+          latestStateRef.current.schoolInfo
+        ).catch(() => {});
+      }
+
+      return updatedStaff;
+    },
+    []
+  );
+
+  const toggleGlobalDeviceLock = useCallback(async (alwaysLocked: boolean): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    const res = await safeFetchJson('/api/auth/device-lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'set_global_policy',
+        payload: { alwaysLockDevices: alwaysLocked },
+      }),
+    });
+    const resolvedVal =
+      res.reachable && res.ok && typeof res.data?.alwaysLockDevices === 'boolean'
+        ? res.data.alwaysLockDevices
+        : alwaysLocked;
+
+    setSchoolInfo((prev) => ({
+      ...prev,
+      alwaysLockDevices: resolvedVal,
+      lockUpdatedAt: res.data?.lockUpdatedAt || nowIso,
+    }));
+
+    const activeCloudUser = cloudUserRef.current;
+    if (activeCloudUser && activeCloudUser.emailVerified) {
+      void syncSchoolLockPolicyToFirestore(
+        resolvedVal,
+        activeCloudUser,
+        { ...latestStateRef.current.schoolInfo, alwaysLockDevices: resolvedVal }
+      ).catch(() => {});
+    }
+    return resolvedVal;
+  }, []);
+
+  const remoteUnlockAccount = useCallback(
+    async (targetType: 'staff' | 'student', accountId: string): Promise<number | null> => {
+      if (!accountId) return null;
+      const res = await safeFetchJson('/api/auth/device-lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'remote_unlock_account',
+          payload: { targetType, accountId },
+        }),
+      });
+
+      if (targetType === 'staff') {
+        let nextEpoch = typeof res.data?.unlockEpoch === 'number' ? res.data.unlockEpoch : 1;
+        const baseAccounts =
+          res.reachable && res.ok && Array.isArray(res.data?.staffAccounts)
+            ? mergeCanonicalStaffRoster(res.data.staffAccounts)
+            : staffAccountsRef.current.map((a) => {
+                if (a.id === accountId) {
+                  nextEpoch = (Number.isFinite(Number(a.unlockEpoch)) ? Number(a.unlockEpoch) : 0) + 1;
+                  return { ...a, unlockEpoch: nextEpoch };
+                }
+                return a;
+              });
+        setStaffAccounts(baseAccounts);
+        saveLocalStaffAccounts(baseAccounts);
+        const updatedAcc = baseAccounts.find((a) => a.id === accountId);
+        const activeCloudUser = cloudUserRef.current;
+        if (updatedAcc && activeCloudUser && activeCloudUser.emailVerified) {
+          void syncStaffAccountToFirestore(
+            updatedAcc,
+            activeCloudUser,
+            latestStateRef.current.schoolInfo
+          ).catch(() => {});
+        }
+        return nextEpoch;
+      }
+
+      let nextStdEpoch = typeof res.data?.unlockEpoch === 'number' ? res.data.unlockEpoch : 1;
+      let updatedStudentObj: Student | null = null;
+      if (res.reachable && res.ok && Array.isArray(res.data?.students)) {
+        const normalized = ensureUniqueStudentCredentials(res.data.students as Student[]);
+        updatedStudentObj = normalized.find((s) => s.id === accountId) || null;
+        if (updatedStudentObj && typeof updatedStudentObj.unlockEpoch === 'number') {
+          nextStdEpoch = updatedStudentObj.unlockEpoch;
+        }
+        suppressNextAutoPushRef.current = true;
+        setStudents(normalized);
+        idbSet(`${STORAGE_KEY}_students`, normalized);
+      } else {
+        setStudents((prev) => {
+          const next = prev.map((s) => {
+            if (s.id === accountId) {
+              nextStdEpoch = (Number.isFinite(Number(s.unlockEpoch)) ? Number(s.unlockEpoch) : 0) + 1;
+              updatedStudentObj = { ...s, unlockEpoch: nextStdEpoch };
+              return updatedStudentObj;
+            }
+            return s;
+          });
+          idbSet(`${STORAGE_KEY}_students`, next);
+          return next;
+        });
+      }
+      const activeCloudUser = cloudUserRef.current;
+      if (updatedStudentObj && activeCloudUser && activeCloudUser.emailVerified) {
+        void syncStudentRecordToFirestore(
+          updatedStudentObj,
+          activeCloudUser,
+          latestStateRef.current.schoolInfo
+        ).catch(() => {});
+      }
+      return nextStdEpoch;
+    },
+    []
+  );
+
+  const regenerateStaffPasswords = useCallback(async (staffId?: string): Promise<StaffAccount[]> => {
+    const action = staffId ? 'regenerate_staff_password' : 'regenerate_all_staff_passwords';
+    const res = await safeFetchJson('/api/auth/device-lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        payload: staffId ? { staffId } : {},
+      }),
+    });
+
+    if (res.reachable && res.ok && Array.isArray(res.data?.staffAccounts)) {
+      const merged = mergeCanonicalStaffRoster(res.data.staffAccounts);
+      setStaffAccounts(merged);
+      saveLocalStaffAccounts(merged);
+      return merged;
+    }
+
+    const current = staffAccountsRef.current;
+    const principalAcc = current.find(
+      (a) => a.id === 'staff_principal_mitu' || String(a.staffCode || '').toUpperCase() === 'DL-PRN-01'
+    );
+    const usedPasswords = new Set<string>(
+      staffId
+        ? current.filter((a) => a.id !== staffId).map((a) => String(a.password || '').trim())
+        : principalAcc?.password
+        ? [String(principalAcc.password).trim()]
+        : ['admin123']
+    );
+    const nextList = current.map((a) => {
+      if (staffId) {
+        if (a.id !== staffId) return a;
+        return { ...a, password: generateStaffPassword(a, usedPasswords) };
+      }
+      if (a.id === 'staff_principal_mitu' || String(a.staffCode || '').toUpperCase() === 'DL-PRN-01') {
+        return a;
+      }
+      return { ...a, password: generateStaffPassword(a, usedPasswords) };
+    });
+    setStaffAccounts(nextList);
+    saveLocalStaffAccounts(nextList);
+    return nextList;
+  }, []);
+
+  const regenerateStudentPins = useCallback(
+    async (options?: { studentId?: string; classId?: string }): Promise<Student[]> => {
+      const studentId = options?.studentId;
+      const classId = options?.classId;
+      const action = studentId ? 'regenerate_student_pin' : 'regenerate_all_student_pins';
+      const res = await safeFetchJson('/api/auth/device-lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          payload: studentId ? { studentId } : { classId: classId || 'all' },
+        }),
+      });
+
+      if (res.reachable && res.ok && Array.isArray(res.data?.students)) {
+        const normalized = ensureUniqueStudentCredentials(res.data.students as Student[]);
+        suppressNextAutoPushRef.current = true;
+        setStudents(normalized);
+        idbSet(`${STORAGE_KEY}_students`, normalized);
+        return normalized;
+      }
+
+      let updatedList: Student[] = [];
+      setStudents((prev) => {
+        const usedPins = new Set<string>();
+        if (studentId) {
+          for (const s of prev) {
+            if (s.id !== studentId && s.guardianPin) usedPins.add(String(s.guardianPin).trim());
+          }
+        } else if (classId && classId !== 'all') {
+          for (const s of prev) {
+            if (s.classId !== classId && s.guardianPin) usedPins.add(String(s.guardianPin).trim());
+          }
+        }
+        updatedList = ensureUniqueStudentCredentials(
+          prev.map((s, idx) => {
+            if (studentId) {
+              if (s.id !== studentId) return s;
+              return { ...s, guardianPin: generateUniquePin6(usedPins, `${s.id}-${Date.now()}-${idx}`) };
+            }
+            if (classId && classId !== 'all' && s.classId !== classId) return s;
+            return { ...s, guardianPin: generateUniquePin6(usedPins, `${s.id}-${Date.now()}-${idx}`) };
+          })
+        );
+        idbSet(`${STORAGE_KEY}_students`, updatedList);
+        return updatedList;
+      });
+      return updatedList;
+    },
+    []
+  );
+
+  const refreshStaffOverview = useCallback(async () => {
+    const res = await safeFetchJson('/api/staff/overview');
+    if (res.reachable && res.ok && res.data?.success) {
+      if (Array.isArray(res.data.staffAccounts)) {
+        const merged = mergeCanonicalStaffRoster(res.data.staffAccounts);
+        setStaffAccounts(merged);
+        saveLocalStaffAccounts(merged);
+      }
+      if (Array.isArray(res.data.staffAttendance)) {
+        mergeCloudStaffAttendanceIntoState(res.data.staffAttendance);
+      }
+      if (Array.isArray(res.data.staffLeaves)) {
+        setStaffLeaves(res.data.staffLeaves);
+        saveLocalStaffLeaves(res.data.staffLeaves);
+      }
+      if (Array.isArray(res.data.staffActivities)) {
+        setStaffActivities(res.data.staffActivities);
+        saveLocalStaffActivities(res.data.staffActivities);
+      }
+    }
+  }, [mergeCloudStaffAttendanceIntoState]);
+
   useEffect(() => {
-    if (!cloudUser || !cloudUser.emailVerified) return;
+    void refreshStaffOverview();
+  }, [refreshStaffOverview]);
+
+  useEffect(() => {
+    if (!cloudUser || !cloudUser.emailVerified) {
+      hasStaffCloudBaselineRef.current = false;
+      return;
+    }
     let cancelled = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    hasStaffCloudBaselineRef.current = false;
 
     setCloudConnectionStatus(cloudReconnectAttemptsRef.current > 0 ? 'reconnecting' : 'connecting');
 
@@ -973,6 +2038,61 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setCloudPushAuthorized(authStatus.authorized);
           if (authStatus.authorized) {
             ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+            pullStaffAccountsFromFirestore(cloudUser)
+              .then((cloudStaff) => {
+                if (cancelled || cloudStaff.length === 0) return;
+                setStaffAccounts((prev) => {
+                  const byId = new Map<string, StaffAccount>();
+                  for (const s of prev) if (s?.id) byId.set(s.id, s);
+                  for (const cs of cloudStaff) {
+                    if (!cs?.id) continue;
+                    const ex = byId.get(cs.id);
+                    byId.set(cs.id, ex ? { ...ex, ...cs, password: ex.password } : cs);
+                  }
+                  const merged = mergeCanonicalStaffRoster(Array.from(byId.values()));
+                  saveLocalStaffAccounts(merged);
+                  return merged;
+                });
+              })
+              .catch(() => {});
+            pullStaffLeavesFromFirestore(cloudUser)
+              .then((cloudLeaves) => {
+                if (cancelled || cloudLeaves.length === 0) return;
+                setStaffLeaves((prev) => {
+                  const byId = new Map<string, StaffLeaveRequest>();
+                  for (const l of prev) if (l?.id) byId.set(l.id, l);
+                  for (const cl of cloudLeaves) {
+                    if (!cl?.id) continue;
+                    const ex = byId.get(cl.id);
+                    if (!ex || new Date(cl.updatedAt).getTime() >= new Date(ex.updatedAt).getTime()) {
+                      byId.set(cl.id, cl);
+                    }
+                  }
+                  const merged = Array.from(byId.values()).sort((a, b) =>
+                    b.createdAt.localeCompare(a.createdAt)
+                  );
+                  saveLocalStaffLeaves(merged);
+                  return merged;
+                });
+              })
+              .catch(() => {});
+            pullStaffActivitiesFromFirestore(cloudUser)
+              .then((cloudActs) => {
+                if (cancelled || cloudActs.length === 0) return;
+                setStaffActivities((prev) => {
+                  const byId = new Map<string, StaffActivityLog>();
+                  for (const a of prev) if (a?.id) byId.set(a.id, a);
+                  for (const ca of cloudActs) {
+                    if (ca?.id) byId.set(ca.id, ca);
+                  }
+                  const merged = Array.from(byId.values()).sort((a, b) =>
+                    b.timestamp.localeCompare(a.timestamp)
+                  );
+                  saveLocalStaffActivities(merged);
+                  return merged;
+                });
+              })
+              .catch(() => {});
             if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
               hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
               syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
@@ -1048,11 +2168,129 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     );
 
+    const unsubStaffAtt = subscribeCloudStaffAttendance(
+      cloudUser,
+      (records, isInitialSnapshot) => {
+        if (cancelled) return;
+        const wasBaselineDone = hasStaffCloudBaselineRef.current;
+        hasStaffCloudBaselineRef.current = true;
+        if (isInitialSnapshot || !wasBaselineDone) {
+          for (const rec of records) {
+            if (!rec?.id) continue;
+            const act: 'checkin' | 'checkout' = rec.action || (rec.checkOutTime ? 'checkout' : 'checkin');
+            const tsLabel = act === 'checkout' ? rec.checkOutTime || rec.checkInTime : rec.checkInTime;
+            seenStaffEventIdsRef.current.add(`${rec.id}::${act}::${tsLabel || ''}`);
+          }
+          mergeCloudStaffAttendanceIntoState(records);
+          return;
+        }
+        const nowMs = Date.now();
+        for (const rec of records) {
+          const recTs = rec.serverTimestamp || 0;
+          if (recTs > nowMs - 20 * 60 * 1000) {
+            recordRealtimeStaffAttendance(rec, rec.action);
+          } else {
+            mergeCloudStaffAttendanceIntoState([rec]);
+          }
+        }
+      },
+      () => {
+        // Non-fatal: security logs stream drives reconnect backoff
+      }
+    );
+
+    const unsubDailyAtt = subscribeCloudDailyAttendance(
+      cloudUser,
+      (cloudRecords) => {
+        if (cancelled || cloudRecords.length === 0) return;
+        suppressNextAutoPushRef.current = true;
+        setAttendanceRecords((prev) => {
+          const next = { ...prev };
+          for (const incoming of cloudRecords) {
+            if (!incoming?.id || !incoming?.records) continue;
+            const existing = next[incoming.id];
+            next[incoming.id] = existing
+              ? {
+                  ...existing,
+                  ...incoming,
+                  records: {
+                    ...(existing.records || {}),
+                    ...incoming.records,
+                  },
+                }
+              : incoming;
+          }
+          return next;
+        });
+      },
+      () => {
+        // Non-fatal
+      }
+    );
+
+    const unsubStaffLeaves = subscribeCloudStaffLeaves(
+      cloudUser,
+      (cloudLeaves) => {
+        if (cancelled || cloudLeaves.length === 0) return;
+        setStaffLeaves((prev) => {
+          const byId = new Map<string, StaffLeaveRequest>();
+          for (const l of prev) if (l?.id) byId.set(l.id, l);
+          for (const cl of cloudLeaves) {
+            if (!cl?.id) continue;
+            const ex = byId.get(cl.id);
+            if (!ex || new Date(cl.updatedAt).getTime() >= new Date(ex.updatedAt).getTime()) {
+              byId.set(cl.id, cl);
+            }
+          }
+          const merged = Array.from(byId.values()).sort((a, b) =>
+            b.createdAt.localeCompare(a.createdAt)
+          );
+          saveLocalStaffLeaves(merged);
+          return merged;
+        });
+      },
+      () => {
+        // Non-fatal
+      }
+    );
+
     // Immediate catch-up pull in case scans occurred while offline or waking from sleep
     pullLatestCloudSecurityLogs(cloudUser)
       .then((logs) => {
         if (cancelled) return;
         mergeCloudSecurityLogsIntoState(logs);
+      })
+      .catch(() => {});
+
+    pullLatestCloudStaffAttendance(cloudUser)
+      .then((recs) => {
+        if (cancelled) return;
+        mergeCloudStaffAttendanceIntoState(recs);
+      })
+      .catch(() => {});
+
+    pullLatestCloudDailyAttendance(cloudUser)
+      .then((recs) => {
+        if (cancelled || recs.length === 0) return;
+        suppressNextAutoPushRef.current = true;
+        setAttendanceRecords((prev) => {
+          const next = { ...prev };
+          for (const incoming of recs) {
+            if (!incoming?.id || !incoming?.records) continue;
+            const existing = next[incoming.id];
+            next[incoming.id] = existing
+              ? {
+                  ...existing,
+                  ...incoming,
+                  records: {
+                    ...(existing.records || {}),
+                    ...incoming.records,
+                  },
+                }
+              : incoming;
+          }
+          return next;
+        });
       })
       .catch(() => {});
 
@@ -1077,6 +2315,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const handleCloudWake = () => {
       if (cancelled) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (cloudPushAuthorizedRef.current !== true) {
+        runAuthorizationAndSync();
+      }
       if (
         cloudConnectionStatusRef.current === 'reconnecting' ||
         cloudConnectionStatusRef.current === 'error'
@@ -1099,6 +2340,35 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           .catch(() => {
             scheduleCloudReconnect();
           });
+        pullLatestCloudStaffAttendance(cloudUser)
+          .then((recs) => {
+            if (!cancelled) mergeCloudStaffAttendanceIntoState(recs);
+          })
+          .catch(() => {});
+        pullLatestCloudDailyAttendance(cloudUser)
+          .then((recs) => {
+            if (cancelled || recs.length === 0) return;
+            suppressNextAutoPushRef.current = true;
+            setAttendanceRecords((prev) => {
+              const next = { ...prev };
+              for (const incoming of recs) {
+                if (!incoming?.id || !incoming?.records) continue;
+                const existing = next[incoming.id];
+                next[incoming.id] = existing
+                  ? {
+                      ...existing,
+                      ...incoming,
+                      records: {
+                        ...(existing.records || {}),
+                        ...incoming.records,
+                      },
+                    }
+                  : incoming;
+              }
+              return next;
+            });
+          })
+          .catch(() => {});
       }
     };
 
@@ -1120,8 +2390,18 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
       unsub();
       unsubMirror();
+      unsubStaffAtt();
+      unsubDailyAtt();
+      unsubStaffLeaves();
     };
-  }, [cloudUser, cloudReconnectNonce, syncAllPhotosToCloudWithUser, mergeCloudSecurityLogsIntoState]);
+  }, [
+    cloudUser,
+    cloudReconnectNonce,
+    syncAllPhotosToCloudWithUser,
+    mergeCloudSecurityLogsIntoState,
+    mergeCloudStaffAttendanceIntoState,
+    recordRealtimeStaffAttendance,
+  ]);
 
   const registerGuardianCloudSubscription = useCallback(
     async (
@@ -1465,8 +2745,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             let anySliceChanged = false;
 
             if (Array.isArray(db.students)) {
-              const cleanedStudents: Student[] = db.students.filter(
-                (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+              const cleanedStudents: Student[] = ensureUniqueStudentCredentials(
+                db.students.filter(
+                  (s: Student) => !['std_4_01', 'std_4_02', 'std_4_03', 'std_4_04', 'std_4_05'].includes(s.id)
+                )
               );
 
               // Record confirmed server photo signatures
@@ -1562,10 +2844,11 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     }
                   }
 
+                  const normalizedMerged = ensureUniqueStudentCredentials(mergedStudents);
                   const isUnchanged =
-                    prev.length === mergedStudents.length &&
+                    prev.length === normalizedMerged.length &&
                     prev.every((p, idx) => {
-                      const m = mergedStudents[idx];
+                      const m = normalizedMerged[idx];
                       if (!m) return false;
                       return (
                         p.id === m.id &&
@@ -1579,13 +2862,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                         (p.photoUpdatedAt || '') === (m.photoUpdatedAt || '') &&
                         (p.guardianPhone || '') === (m.guardianPhone || '') &&
                         (p.portalUserId || '') === (m.portalUserId || '') &&
+                        (p.guardianPin || '') === (m.guardianPin || '') &&
+                        Number(p.unlockEpoch || 0) === Number(m.unlockEpoch || 0) &&
                         (p.monerBari?.updatedAt || '') === (m.monerBari?.updatedAt || '') &&
                         (p.timeManagement?.updatedAt || '') === (m.timeManagement?.updatedAt || '') &&
                         (p.academicRoadmap?.updatedAt || '') === (m.academicRoadmap?.updatedAt || '')
                       );
                     });
 
-                  return { merged: mergedStudents, changed: !isUnchanged, missingOnSrv: missingList };
+                  return { merged: normalizedMerged, changed: !isUnchanged, missingOnSrv: missingList };
                 };
 
                 const preCheck = mergeServerWithPrev(currentSnapshot);
@@ -1626,11 +2911,19 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 curInfo.name !== db.schoolInfo.name ||
                 curInfo.address !== db.schoolInfo.address ||
                 curInfo.logoUrl !== db.schoolInfo.logoUrl ||
-                curInfo.principalSignatureUrl !== db.schoolInfo.principalSignatureUrl
+                curInfo.principalSignatureUrl !== db.schoolInfo.principalSignatureUrl ||
+                Boolean(curInfo.alwaysLockDevices !== false) !== Boolean(db.schoolInfo.alwaysLockDevices !== false) ||
+                (curInfo.lockUpdatedAt || '') !== (db.schoolInfo.lockUpdatedAt || '')
               ) {
                 anySliceChanged = true;
                 suppressNextAutoPushRef.current = true;
-                setSchoolInfo(db.schoolInfo);
+                setSchoolInfo({
+                  ...db.schoolInfo,
+                  alwaysLockDevices:
+                    typeof db.schoolInfo.alwaysLockDevices === 'boolean'
+                      ? db.schoolInfo.alwaysLockDevices
+                      : true,
+                });
               }
             }
 
@@ -1805,7 +3098,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               : current;
 
             if (baseList.length === 0 && INITIAL_STUDENTS.length > 0) {
-              return INITIAL_STUDENTS;
+              return ensureUniqueStudentCredentials(INITIAL_STUDENTS);
             }
 
             let anyUpdated = baseList !== current;
@@ -1855,7 +3148,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (isInitialServerLoadDone.current && restoredForServer.length > 0) {
               suppressNextAutoPushRef.current = true;
             }
-            return merged;
+            return ensureUniqueStudentCredentials(merged);
           });
 
           if (restoredForServer.length > 0) {
@@ -1864,7 +3157,9 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }, 350);
           }
         } else if (INITIAL_STUDENTS.length > 0) {
-          setStudents((current) => (current.length === 0 ? INITIAL_STUDENTS : current));
+          setStudents((current) =>
+            current.length === 0 ? ensureUniqueStudentCredentials(INITIAL_STUDENTS) : current
+          );
         }
         setIsIdbInitialized(true);
       })
@@ -2152,11 +3447,25 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const qrCode = studentData.securityQrCode || `DLIKON-SEC-${(studentData.classId || 'CLS').toUpperCase()}-${studentData.roll}-${newId.slice(-4).toUpperCase()}`;
     const hasAnyPhoto = Boolean(studentData.avatarUrl || studentData.fatherAvatarUrl || studentData.motherAvatarUrl);
     const stampedTime = hasAnyPhoto ? (studentData.photoUpdatedAt || new Date().toISOString()) : undefined;
-    const newStudent: Student = {
+    const usedPins = new Set<string>(
+      latestStateRef.current.students.map((s) => String(s.guardianPin || '').trim()).filter(Boolean)
+    );
+    const cleanPin = studentData.guardianPin ? String(studentData.guardianPin).trim() : '';
+    const assignedPin =
+      cleanPin && !isWeakOrDefaultPin(cleanPin)
+        ? cleanPin
+        : generateUniquePin6(usedPins, `${newId}-${studentData.classId}-${studentData.roll}-${studentData.nameBn}`);
+    const draftStudent: Student = {
       ...studentData,
       id: newId,
+      guardianPin: assignedPin,
+      unlockEpoch: studentData.unlockEpoch ?? 0,
       securityQrCode: qrCode,
       ...(stampedTime ? { photoUpdatedAt: stampedTime } : {}),
+    };
+    const newStudent: Student = {
+      ...draftStudent,
+      portalUserId: studentData.portalUserId || getStudentPortalId(draftStudent),
     };
 
     if (hasAnyPhoto && stampedTime) {
@@ -2820,7 +4129,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             );
           }
         });
-        const merged = [...baseList, ...toAdd];
+        const merged = ensureUniqueStudentCredentials([...baseList, ...toAdd]);
         idbSet(`${STORAGE_KEY}_students`, merged);
         persistStudentPhotoMapToIdb(merged);
         return merged;
@@ -2836,7 +4145,7 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             : `std_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
         return reconcileStudentPhotoReferences({ ...data, id: resolvedId }, undefined, regEntry).student;
       });
-      const next = [...baseList, ...created];
+      const next = ensureUniqueStudentCredentials([...baseList, ...created]);
       idbSet(`${STORAGE_KEY}_students`, next);
       persistStudentPhotoMapToIdb(next);
       return next;
@@ -3107,18 +4416,53 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     records: Record<string, { status: AttendanceStatus; remarks?: string }>
   ) => {
     const id = `${classId}_${section || 'all'}_${date}`;
+    const newRecord: DailyAttendanceRecord = {
+      id,
+      date,
+      academicYear,
+      classId,
+      section: section || '',
+      records,
+      updatedAt: new Date().toISOString(),
+    };
     setAttendanceRecords((prev) => ({
       ...prev,
-      [id]: {
-        id,
-        date,
-        academicYear,
-        classId,
-        section: section || '',
-        records,
-        updatedAt: new Date().toISOString(),
-      },
+      [id]: newRecord,
     }));
+
+    // Instant cross-tab broadcast + permanent Express DB & Firestore persistence
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const ch = new BroadcastChannel('dlikon_gatepass_live');
+        ch.postMessage({
+          type: 'attendance:updated',
+          attendanceRecord: newRecord,
+          serverTime: Date.now(),
+        });
+        ch.close();
+      }
+    } catch {
+      // Ignore BroadcastChannel error
+    }
+
+    void safeFetchJson('/api/attendance/daily', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ record: newRecord }),
+    }).catch(() => {});
+
+    const activeCloudUser = cloudUserRef.current;
+    if (activeCloudUser && activeCloudUser.emailVerified) {
+      const classStudentCount = latestStateRef.current.students.filter(
+        (s) => s.classId === classId && (!section || (s.section || 'ক') === section)
+      ).length;
+      void pushDailyAttendanceToFirestore(
+        newRecord,
+        classStudentCount,
+        activeCloudUser,
+        latestStateRef.current.schoolInfo
+      ).catch(() => {});
+    }
   };
 
   const upsertAttendanceRecordFromServer = useCallback(
@@ -4771,6 +6115,29 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         authorizeScannerUid,
         broadcastSecurityLogToCloud,
         pullCloudSecurityLogsNow,
+        staffAccounts,
+        staffAttendance,
+        staffLeaves,
+        staffActivities,
+        latestStaffConfirmation,
+        staffConfirmationFeed,
+        setStaffAccountsList,
+        setStaffAttendanceList,
+        setStaffLeavesList,
+        refreshStaffOverview,
+        recordRealtimeStaffAttendance,
+        recordStaffAttendanceAction,
+        submitStaffLeave,
+        reviewStaffLeave,
+        cancelStaffLeave,
+        addStaffActivity,
+        deleteStaffActivity,
+        updateStaffAccountConfig,
+        dismissStaffConfirmation,
+        toggleGlobalDeviceLock,
+        remoteUnlockAccount,
+        regenerateStaffPasswords,
+        regenerateStudentPins,
       }}
     >
       {children}

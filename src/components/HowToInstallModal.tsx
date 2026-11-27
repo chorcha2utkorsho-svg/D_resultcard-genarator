@@ -6,7 +6,6 @@ import {
   PlusSquare,
   Share,
   Smartphone,
-  Unlock,
   X,
 } from 'lucide-react';
 
@@ -22,7 +21,6 @@ interface HowToInstallModalProps {
   isInstallable?: boolean;
   isInstalled?: boolean;
   onTriggerNativeInstall?: () => Promise<boolean> | void;
-  onUnlockDevice?: () => void;
 }
 
 export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
@@ -37,7 +35,6 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
   isInstallable = false,
   isInstalled = false,
   onTriggerNativeInstall,
-  onUnlockDevice,
 }) => {
   const [platform, setPlatform] = useState<'android' | 'ios'>(defaultPlatform);
 
@@ -322,20 +319,6 @@ export const HowToInstallModal: React.FC<HowToInstallModalProps> = ({
                 বুঝেছি, বন্ধ করুন
               </button>
             </div>
-
-            {isDeviceLocked && onUnlockDevice && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onUnlockDevice();
-                }}
-                className="w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-950 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Unlock className="w-3.5 h-3.5" />
-                <span>অন্য শিক্ষার্থী টেস্ট করতে চান? এখান থেকে ড্যাশবোর্ড আনলক করুন</span>
-              </button>
-            )}
           </div>
         </div>
       </div>

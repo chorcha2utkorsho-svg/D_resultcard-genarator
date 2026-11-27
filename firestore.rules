@@ -50,12 +50,13 @@ service cloud.firestore {
 
     function isValidSchoolProfile(data) {
       return data.keys().hasAll(['schoolId', 'name', 'ownerUid', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['schoolId', 'name', 'address', 'phone', 'email', 'ownerUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['schoolId', 'name', 'address', 'phone', 'email', 'alwaysLockDevices', 'ownerUid', 'createdAt', 'updatedAt']) &&
         isValidId(data.schoolId) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
         (!('address' in data) || (data.address is string && data.address.size() <= 300)) &&
         (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
         (!('email' in data) || (data.email is string && data.email.size() <= 150)) &&
+        (!('alwaysLockDevices' in data) || data.alwaysLockDevices is bool) &&
         isValidId(data.ownerUid) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -65,7 +66,7 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'nameBn', 'roll', 'classId', 'ownerUid', 'createdAt', 'updatedAt']) &&
         data.keys().hasOnly([
           'id', 'nameBn', 'roll', 'classId', 'section', 'portalUserId',
-          'guardianPhone', 'guardianNameBn', 'guardianPin',
+          'guardianPhone', 'guardianNameBn', 'guardianPin', 'unlockEpoch',
           'avatarUrl', 'fatherAvatarUrl', 'motherAvatarUrl', 'photoUpdatedAt',
           'ownerUid', 'guardianUid', 'guardianUids', 'createdAt', 'updatedAt'
         ]) &&
@@ -78,6 +79,7 @@ service cloud.firestore {
         (!('guardianPhone' in data) || (data.guardianPhone is string && data.guardianPhone.size() <= 32)) &&
         (!('guardianNameBn' in data) || (data.guardianNameBn is string && data.guardianNameBn.size() <= 160)) &&
         (!('guardianPin' in data) || (data.guardianPin is string && data.guardianPin.size() <= 32)) &&
+        (!('unlockEpoch' in data) || (data.unlockEpoch is number && data.unlockEpoch >= 0 && data.unlockEpoch <= 1000000)) &&
         (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 180000)) &&
         (!('fatherAvatarUrl' in data) || (data.fatherAvatarUrl is string && data.fatherAvatarUrl.size() <= 180000)) &&
         (!('motherAvatarUrl' in data) || (data.motherAvatarUrl is string && data.motherAvatarUrl.size() <= 180000)) &&
@@ -153,18 +155,78 @@ service cloud.firestore {
           'status', 'ownerUid', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'id', 'staffCode', 'role', 'nameBn', 'designationBn', 'phone',
-          'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+          'id', 'staffCode', 'role', 'nameBn', 'designationBn', 'categoryKey',
+          'baseMonthlySalary', 'dailyShiftHours', 'overtimeHourlyRate', 'phone',
+          'status', 'unlockEpoch', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         data.staffCode is string && data.staffCode.size() >= 1 && data.staffCode.size() <= 40 &&
         data.role in ['official', 'employee'] &&
         data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 160 &&
         data.designationBn is string && data.designationBn.size() >= 1 && data.designationBn.size() <= 120 &&
+        (!('categoryKey' in data) || (data.categoryKey is string && data.categoryKey.size() <= 40)) &&
+        (!('baseMonthlySalary' in data) || (data.baseMonthlySalary is number && data.baseMonthlySalary >= 0 && data.baseMonthlySalary <= 10000000)) &&
+        (!('dailyShiftHours' in data) || (data.dailyShiftHours is number && data.dailyShiftHours >= 1 && data.dailyShiftHours <= 24)) &&
+        (!('overtimeHourlyRate' in data) || (data.overtimeHourlyRate is number && data.overtimeHourlyRate >= 0 && data.overtimeHourlyRate <= 100000)) &&
         data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 32 &&
         data.status in ['active', 'pending'] &&
+        (!('unlockEpoch' in data) || (data.unlockEpoch is number && data.unlockEpoch >= 0 && data.unlockEpoch <= 1000000)) &&
         isValidId(data.ownerUid) &&
         (!('staffUid' in data) || (data.staffUid is string && data.staffUid.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStaffLeave(data) {
+      return data.keys().hasAll([
+          'id', 'staffId', 'staffNameBn', 'designationBn', 'startDate', 'endDate',
+          'daysCount', 'leaveType', 'reason', 'status', 'ownerUid', 'staffUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'staffId', 'staffCode', 'staffNameBn', 'designationBn', 'startDate', 'endDate',
+          'daysCount', 'leaveType', 'reason', 'status', 'reviewedBy', 'reviewNote', 'ownerUid', 'staffUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.staffId) &&
+        (!('staffCode' in data) || (data.staffCode is string && data.staffCode.size() <= 40)) &&
+        data.staffNameBn is string && data.staffNameBn.size() >= 1 && data.staffNameBn.size() <= 160 &&
+        data.designationBn is string && data.designationBn.size() >= 1 && data.designationBn.size() <= 120 &&
+        data.startDate is string && data.startDate.size() >= 1 && data.startDate.size() <= 24 &&
+        data.endDate is string && data.endDate.size() >= 1 && data.endDate.size() <= 24 &&
+        data.daysCount is number && data.daysCount >= 1 && data.daysCount <= 60 &&
+        data.leaveType in ['casual', 'sick', 'earned', 'emergency'] &&
+        data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 500 &&
+        data.status in ['pending', 'approved', 'rejected'] &&
+        (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 160)) &&
+        (!('reviewNote' in data) || (data.reviewNote is string && data.reviewNote.size() <= 500)) &&
+        isValidId(data.ownerUid) &&
+        isValidId(data.staffUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStaffActivity(data) {
+      return data.keys().hasAll([
+          'id', 'staffId', 'staffNameBn', 'designationBn', 'categoryKey', 'date',
+          'title', 'timestamp', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'staffId', 'staffNameBn', 'designationBn', 'categoryKey', 'date',
+          'title', 'details', 'timestamp', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.staffId) &&
+        data.staffNameBn is string && data.staffNameBn.size() >= 1 && data.staffNameBn.size() <= 160 &&
+        data.designationBn is string && data.designationBn.size() >= 1 && data.designationBn.size() <= 120 &&
+        data.categoryKey is string && data.categoryKey.size() >= 1 && data.categoryKey.size() <= 40 &&
+        data.date is string && data.date.size() >= 1 && data.date.size() <= 24 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        (!('details' in data) || (data.details is string && data.details.size() <= 1000)) &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64 &&
+        isValidId(data.ownerUid) &&
+        isValidId(data.staffUid) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -175,19 +237,57 @@ service cloud.firestore {
           'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'id', 'staffId', 'staffNameBn', 'designationBn', 'date', 'checkInTime',
-          'checkOutTime', 'status', 'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
+          'id', 'staffId', 'staffCode', 'staffNameBn', 'designationBn', 'date', 'checkInTime',
+          'checkInMs', 'checkOutTime', 'checkOutMs', 'workedMinutes', 'workedDurationBn',
+          'action', 'status', 'note', 'serverTimestamp',
+          'ownerUid', 'staffUid', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.staffId) &&
+        (!('staffCode' in data) || (data.staffCode is string && data.staffCode.size() <= 40)) &&
         data.staffNameBn is string && data.staffNameBn.size() >= 1 && data.staffNameBn.size() <= 160 &&
         (!('designationBn' in data) || (data.designationBn is string && data.designationBn.size() <= 120)) &&
         data.date is string && data.date.size() >= 1 && data.date.size() <= 24 &&
         data.checkInTime is string && data.checkInTime.size() >= 1 && data.checkInTime.size() <= 40 &&
+        (!('checkInMs' in data) || (data.checkInMs is number && data.checkInMs >= 0)) &&
         (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 40)) &&
+        (!('checkOutMs' in data) || (data.checkOutMs is number && data.checkOutMs >= 0)) &&
+        (!('workedMinutes' in data) || (data.workedMinutes is number && data.workedMinutes >= 0 && data.workedMinutes <= 10080)) &&
+        (!('workedDurationBn' in data) || (data.workedDurationBn is string && data.workedDurationBn.size() <= 80)) &&
+        (!('action' in data) || data.action in ['checkin', 'checkout']) &&
         data.status in ['present', 'late', 'leave'] &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 300)) &&
+        (!('serverTimestamp' in data) || data.serverTimestamp is number) &&
         isValidId(data.ownerUid) &&
         isValidId(data.staffUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDailyAttendance(data) {
+      return data.keys().hasAll([
+          'id', 'date', 'classId', 'presentCount', 'absentCount', 'lateCount',
+          'leaveCount', 'totalStudents', 'recordsJson', 'ownerUid', 'updatedByUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'date', 'academicYear', 'classId', 'section',
+          'presentCount', 'absentCount', 'lateCount', 'leaveCount', 'totalStudents',
+          'recordsJson', 'ownerUid', 'updatedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.date is string && data.date.size() >= 1 && data.date.size() <= 24 &&
+        (!('academicYear' in data) || (data.academicYear is string && data.academicYear.size() <= 24)) &&
+        data.classId is string && data.classId.size() >= 1 && data.classId.size() <= 64 &&
+        (!('section' in data) || (data.section is string && data.section.size() <= 32)) &&
+        data.presentCount is number && data.presentCount >= 0 && data.presentCount <= 10000 &&
+        data.absentCount is number && data.absentCount >= 0 && data.absentCount <= 10000 &&
+        data.lateCount is number && data.lateCount >= 0 && data.lateCount <= 10000 &&
+        data.leaveCount is number && data.leaveCount >= 0 && data.leaveCount <= 10000 &&
+        data.totalStudents is number && data.totalStudents >= 0 && data.totalStudents <= 10000 &&
+        data.recordsJson is string && data.recordsJson.size() >= 2 && data.recordsJson.size() <= 120000 &&
+        isValidId(data.ownerUid) &&
+        isValidId(data.updatedByUid) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -255,7 +355,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (isAdmin() || (
           existing().ownerUid == request.auth.uid &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'phone', 'email', 'alwaysLockDevices', 'updatedAt'])
         ));
       allow delete: if isAdmin() && isValidId(schoolId);
 
@@ -290,7 +390,7 @@ service cloud.firestore {
             existing().ownerUid == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'nameBn', 'roll', 'classId', 'section', 'portalUserId',
-              'guardianPhone', 'guardianNameBn', 'guardianPin',
+              'guardianPhone', 'guardianNameBn', 'guardianPin', 'unlockEpoch',
               'avatarUrl', 'fatherAvatarUrl', 'motherAvatarUrl', 'photoUpdatedAt',
               'guardianUid', 'guardianUids', 'updatedAt'
             ])
@@ -385,8 +485,8 @@ service cloud.firestore {
 
       match /staffAccounts/{staffId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
-          (isAdmin() || (resource != null && (existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid)));
-        allow list: if isBootstrappedAdmin() ||
+          (isAdmin() || resource == null || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() || isAdmin() ||
           (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
         allow create: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
           isValidStaffAccount(incoming()) &&
@@ -394,8 +494,10 @@ service cloud.firestore {
           incoming().ownerUid == request.auth.uid &&
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
-          exists(/databases/$(database)/documents/schools/$(schoolId)) &&
-          (isAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+          (isAdmin() || (
+            exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+            get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid
+          ));
         allow update: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
           isValidStaffAccount(incoming()) &&
           incoming().id == existing().id &&
@@ -405,7 +507,8 @@ service cloud.firestore {
           (isAdmin() || (
             existing().ownerUid == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'nameBn', 'designationBn', 'phone', 'status', 'staffUid', 'updatedAt'
+              'nameBn', 'designationBn', 'categoryKey', 'baseMonthlySalary', 'dailyShiftHours',
+              'overtimeHourlyRate', 'phone', 'status', 'unlockEpoch', 'staffUid', 'updatedAt'
             ])
           ));
         allow delete: if isAdmin() && isValidId(schoolId) && isValidId(staffId);
@@ -413,16 +516,15 @@ service cloud.firestore {
 
       match /staffAttendance/{attId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
-          (isAdmin() || (resource != null && (existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid)));
-        allow list: if isBootstrappedAdmin() ||
+          (isAdmin() || resource == null || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() || isAdmin() ||
           (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
         allow create: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
           isValidStaffAttendance(incoming()) &&
           incoming().id == attId &&
-          incoming().staffUid == request.auth.uid &&
+          (incoming().staffUid == request.auth.uid || isAdmin()) &&
           incoming().createdAt == request.time &&
-          incoming().updatedAt == request.time &&
-          exists(/databases/$(database)/documents/schools/$(schoolId));
+          incoming().updatedAt == request.time;
         allow update: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
           isValidStaffAttendance(incoming()) &&
           incoming().id == existing().id &&
@@ -433,7 +535,101 @@ service cloud.firestore {
           incoming().updatedAt == request.time &&
           (isAdmin() || (
             (existing().staffUid == request.auth.uid || existing().ownerUid == request.auth.uid) &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['checkOutTime', 'status', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'designationBn', 'checkInTime', 'checkInMs', 'checkOutTime', 'checkOutMs',
+              'workedMinutes', 'workedDurationBn', 'action', 'status', 'note', 'serverTimestamp', 'updatedAt'
+            ])
+          ));
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(attId);
+      }
+
+      match /staffLeaves/{leaveId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(leaveId) &&
+          (isAdmin() || resource == null || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() || isAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(leaveId) &&
+          isValidStaffLeave(incoming()) &&
+          incoming().id == leaveId &&
+          incoming().status == 'pending' &&
+          (incoming().staffUid == request.auth.uid || isAdmin()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(leaveId) &&
+          isValidStaffLeave(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().staffId == existing().staffId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().staffUid == existing().staffUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            existing().ownerUid == request.auth.uid &&
+            existing().status == 'pending' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'reviewedBy', 'reviewNote', 'updatedAt'
+            ])
+          ));
+        allow delete: if isSignedIn() && isValidId(schoolId) && isValidId(leaveId) &&
+          (isAdmin() || (
+            (existing().staffUid == request.auth.uid || existing().ownerUid == request.auth.uid) &&
+            existing().status == 'pending'
+          ));
+      }
+
+      match /staffActivities/{activityId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(activityId) &&
+          (isAdmin() || resource == null || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() || isAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(activityId) &&
+          isValidStaffActivity(incoming()) &&
+          incoming().id == activityId &&
+          (incoming().staffUid == request.auth.uid || isAdmin()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(activityId) &&
+          isValidStaffActivity(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().staffId == existing().staffId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().staffUid == existing().staffUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            (existing().staffUid == request.auth.uid || existing().ownerUid == request.auth.uid) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'details', 'updatedAt'
+            ])
+          ));
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(activityId);
+      }
+
+      match /dailyAttendance/{attId} {
+        allow get: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          (isAdmin() || resource == null || existing().ownerUid == request.auth.uid || existing().updatedByUid == request.auth.uid);
+        allow list: if isBootstrappedAdmin() || isAdmin() ||
+          (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.updatedByUid == request.auth.uid));
+        allow create: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          isValidDailyAttendance(incoming()) &&
+          incoming().id == attId &&
+          (incoming().updatedByUid == request.auth.uid || isAdmin()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+        allow update: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
+          isValidDailyAttendance(incoming()) &&
+          incoming().id == existing().id &&
+          incoming().classId == existing().classId &&
+          incoming().date == existing().date &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (isAdmin() || (
+            (existing().ownerUid == request.auth.uid || existing().updatedByUid == request.auth.uid) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'academicYear', 'section', 'presentCount', 'absentCount', 'lateCount',
+              'leaveCount', 'totalStudents', 'recordsJson', 'updatedByUid', 'updatedAt'
+            ])
           ));
         allow delete: if isAdmin() && isValidId(schoolId) && isValidId(attId);
       }

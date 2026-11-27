@@ -10,7 +10,8 @@
       "classStartTimeBn": "নয়টা বিশ মিনিটে",
       "breakTimeBn": "দুপুর একটা দশ মিনিটে",
       "dismissalTimeBn": "বিকাল চারটায়"
-    }
+    },
+    "alwaysLockDevices": true
   },
   "classes": [
     {
@@ -592,7 +593,7 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "data:image/jpeg;base64,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",
-      "guardianPin": "1234",
+      "guardianPin": "304405",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -600,7 +601,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-1-WPXC",
       "futurePlan": null,
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-01"
     },
     {
       "roll": 2,
@@ -636,14 +639,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "783349",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-2-O14A",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-02"
     },
     {
       "roll": 3,
@@ -679,14 +684,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "252865",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-3-SZE1",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-03"
     },
     {
       "roll": 4,
@@ -722,14 +729,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "842133",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-4-YQ3T",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-04"
     },
     {
       "roll": 5,
@@ -765,14 +774,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "900997",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-5-6ECP",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-05"
     },
     {
       "roll": 6,
@@ -808,14 +819,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "595923",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-6-2CGU",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-06"
     },
     {
       "roll": 8,
@@ -851,14 +864,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "870719",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-8-ETDU",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-08"
     },
     {
       "roll": 9,
@@ -894,14 +909,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "414317",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-9-FTH0",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-09"
     },
     {
       "roll": 10,
@@ -937,14 +954,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "868687",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-10-SBJR",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-10"
     },
     {
       "roll": 14,
@@ -980,14 +999,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "982381",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-11-R70G",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-14"
     },
     {
       "roll": 12,
@@ -1023,14 +1044,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "667087",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-12-ZNBO",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-12"
     },
     {
       "roll": 13,
@@ -1066,14 +1089,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "865015",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-13-OU0W",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-13"
     },
     {
       "roll": 16,
@@ -1109,14 +1134,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "924905",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-14-UWKB",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-16"
     },
     {
       "roll": 15,
@@ -1152,14 +1179,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "575869",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-15-H3XO",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-15"
     },
     {
       "roll": 16,
@@ -1195,14 +1224,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "551757",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-16-GOXB",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-16"
     },
     {
       "roll": 17,
@@ -1238,14 +1269,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "912251",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-17-HYG7",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-17"
     },
     {
       "roll": 18,
@@ -1281,14 +1314,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "503367",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-18-0DJ2",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-18"
     },
     {
       "roll": 19,
@@ -1324,14 +1359,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "239149",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-19-MI0T",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-19"
     },
     {
       "roll": 20,
@@ -1367,14 +1404,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "123065",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-20-OJYC",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-20"
     },
     {
       "roll": 21,
@@ -1410,14 +1449,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "297345",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-21-VFFZ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-21"
     },
     {
       "roll": 22,
@@ -1453,14 +1494,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "995517",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-22-7CTX",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-22"
     },
     {
       "roll": 23,
@@ -1496,14 +1539,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "453875",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_PLAY-23-IUBR",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-PL-23"
     },
     {
       "roll": 1,
@@ -1539,14 +1584,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "809791",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-1-OQVT",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-01"
     },
     {
       "roll": 2,
@@ -1582,14 +1629,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "811925",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-2-KMTU",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-02"
     },
     {
       "roll": 3,
@@ -1625,14 +1674,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "375221",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-3-NI86",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-03"
     },
     {
       "roll": 4,
@@ -1668,14 +1719,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "141595",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-4-5GV9",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-04"
     },
     {
       "roll": 5,
@@ -1711,14 +1764,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "746909",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-5-3MC6",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-05"
     },
     {
       "roll": 6,
@@ -1754,14 +1809,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "682199",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-6-7647",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-06"
     },
     {
       "roll": 7,
@@ -1797,14 +1854,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "574685",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-7-7X73",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-07"
     },
     {
       "roll": 8,
@@ -1840,14 +1899,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "750733",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-8-RNZZ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-08"
     },
     {
       "roll": 9,
@@ -1883,14 +1944,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "363821",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-9-QWD9",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-09"
     },
     {
       "roll": 10,
@@ -1926,14 +1989,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "605035",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-10-G9SM",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-10"
     },
     {
       "roll": 11,
@@ -1969,14 +2034,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "553361",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-11-CTOK",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-11"
     },
     {
       "roll": 12,
@@ -2012,14 +2079,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "470961",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-12-QLP1",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-12"
     },
     {
       "roll": 13,
@@ -2055,14 +2124,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "786567",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-13-FOKC",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-13"
     },
     {
       "roll": 14,
@@ -2098,14 +2169,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "969097",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-14-TM15",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-14"
     },
     {
       "roll": 15,
@@ -2141,14 +2214,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "789673",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-15-L2YJ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-15"
     },
     {
       "roll": 16,
@@ -2184,14 +2259,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "398137",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-16-3BOO",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-16"
     },
     {
       "roll": 17,
@@ -2227,14 +2304,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "582645",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-17-1G5Q",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-17"
     },
     {
       "roll": 18,
@@ -2270,14 +2349,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "532431",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-18-JCRF",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-18"
     },
     {
       "roll": 19,
@@ -2313,14 +2394,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "732325",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-19-GKDP",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-19"
     },
     {
       "roll": 20,
@@ -2356,14 +2439,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "679873",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-20-A3Q5",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-20"
     },
     {
       "roll": 21,
@@ -2399,14 +2484,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "367165",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-21-0IES",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-21"
     },
     {
       "roll": 22,
@@ -2442,14 +2529,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "835595",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-22-1MHR",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-22"
     },
     {
       "roll": 23,
@@ -2485,14 +2574,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "461899",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-23-DKQ1",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-23"
     },
     {
       "roll": 24,
@@ -2528,14 +2619,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "649015",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-24-UZZ0",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-24"
     },
     {
       "roll": 25,
@@ -2571,14 +2664,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "480845",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-25-KYJZ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-25"
     },
     {
       "roll": 26,
@@ -2614,14 +2709,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "226641",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-26-IL0P",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-26"
     },
     {
       "roll": 27,
@@ -2657,14 +2754,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "589185",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-27-DVBE",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-27"
     },
     {
       "roll": 28,
@@ -2700,14 +2799,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "103841",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-28-8Z72",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-28"
     },
     {
       "roll": 29,
@@ -2743,14 +2844,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "811685",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-29-Z7MD",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-29"
     },
     {
       "roll": 30,
@@ -2786,14 +2889,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "457627",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-30-K4PZ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-30"
     },
     {
       "roll": 31,
@@ -2829,14 +2934,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "567769",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-31-Q59P",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-31"
     },
     {
       "roll": 32,
@@ -2872,14 +2979,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "224533",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-32-LSSI",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-32"
     },
     {
       "roll": 33,
@@ -2915,14 +3024,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "844133",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-33-NH84",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-33"
     },
     {
       "roll": 34,
@@ -2958,14 +3069,16 @@
       "motherNid": "",
       "motherOccupation": "",
       "motherAvatarUrl": "",
-      "guardianPin": "1234",
+      "guardianPin": "961425",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
       "guardianNid": "",
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_NURSERY-34-1POQ",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-NU-34"
     },
     {
       "roll": 1,
@@ -3001,7 +3114,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "697201",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3009,7 +3122,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-1-G1ZI",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-16T13:21:05.352Z"
+      "photoUpdatedAt": "2026-11-16T13:21:05.352Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-01"
     },
     {
       "roll": 2,
@@ -3045,7 +3160,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "357969",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3053,7 +3168,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-2-ICMV",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:33:11.714Z"
+      "photoUpdatedAt": "2026-11-15T12:33:11.714Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-02"
     },
     {
       "roll": 3,
@@ -3089,7 +3206,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "669995",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3097,7 +3214,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-3-UOYS",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:33:29.322Z"
+      "photoUpdatedAt": "2026-11-15T12:33:29.322Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-03"
     },
     {
       "roll": 4,
@@ -3133,7 +3252,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "860045",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3141,7 +3260,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-4-S65K",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:34:23.425Z"
+      "photoUpdatedAt": "2026-11-15T12:34:23.425Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-04"
     },
     {
       "roll": 5,
@@ -3177,7 +3298,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "135621",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3185,7 +3306,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-5-ZUFW",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:34:36.218Z"
+      "photoUpdatedAt": "2026-11-15T12:34:36.218Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-05"
     },
     {
       "roll": 6,
@@ -3221,7 +3344,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "802789",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3229,7 +3352,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-6-309S",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:34:47.264Z"
+      "photoUpdatedAt": "2026-11-15T12:34:47.264Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-06"
     },
     {
       "roll": 7,
@@ -3265,7 +3390,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "264679",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3273,7 +3398,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-7-54WZ",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:35:05.216Z"
+      "photoUpdatedAt": "2026-11-15T12:35:05.216Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-07"
     },
     {
       "roll": 8,
@@ -3309,7 +3436,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "248477",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3317,7 +3444,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-8-BFSA",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:35:14.441Z"
+      "photoUpdatedAt": "2026-11-15T12:35:14.441Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-08"
     },
     {
       "roll": 9,
@@ -3353,7 +3482,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "224413",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3361,7 +3490,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-9-UB4T",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:35:34.969Z"
+      "photoUpdatedAt": "2026-11-15T12:35:34.969Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-09"
     },
     {
       "roll": 10,
@@ -3397,7 +3528,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "630365",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3405,7 +3536,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-10-KWTA",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:36:18.392Z"
+      "photoUpdatedAt": "2026-11-15T12:36:18.392Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-10"
     },
     {
       "roll": 11,
@@ -3441,7 +3574,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "917145",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3449,7 +3582,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-11-ZMLP",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:36:30.616Z"
+      "photoUpdatedAt": "2026-11-15T12:36:30.616Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-11"
     },
     {
       "roll": 12,
@@ -3485,7 +3620,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "474545",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3493,7 +3628,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-12-CGE1",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:36:54.128Z"
+      "photoUpdatedAt": "2026-11-15T12:36:54.128Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-12"
     },
     {
       "roll": 13,
@@ -3529,7 +3666,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "633669",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3537,7 +3674,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-13-AIUC",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:37:15.631Z"
+      "photoUpdatedAt": "2026-11-15T12:37:15.631Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-13"
     },
     {
       "roll": 14,
@@ -3573,7 +3712,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "491589",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3581,7 +3720,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-14-K2H6",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:37:41.076Z"
+      "photoUpdatedAt": "2026-11-15T12:37:41.076Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-14"
     },
     {
       "roll": 15,
@@ -3617,7 +3758,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "176747",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3625,7 +3766,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-15-F3W4",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:37:57.710Z"
+      "photoUpdatedAt": "2026-11-15T12:37:57.710Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-15"
     },
     {
       "roll": 16,
@@ -3661,7 +3804,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "238035",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3669,7 +3812,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-16-JT5A",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:38:47.047Z"
+      "photoUpdatedAt": "2026-11-15T12:38:47.047Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-16"
     },
     {
       "roll": 17,
@@ -3705,7 +3850,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "990571",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3713,7 +3858,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-17-3AOT",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:39:15.718Z"
+      "photoUpdatedAt": "2026-11-15T12:39:15.718Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-17"
     },
     {
       "roll": 18,
@@ -3749,7 +3896,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "351659",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3757,7 +3904,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-18-85BD",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:39:46.925Z"
+      "photoUpdatedAt": "2026-11-15T12:39:46.925Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-18"
     },
     {
       "roll": 19,
@@ -3793,7 +3942,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "584477",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3801,7 +3950,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-19-U47X",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:39:57.085Z"
+      "photoUpdatedAt": "2026-11-15T12:39:57.085Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-19"
     },
     {
       "roll": 21,
@@ -3837,7 +3988,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "584029",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3845,7 +3996,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-21-PXHX",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:40:39.509Z"
+      "photoUpdatedAt": "2026-11-15T12:40:39.509Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-21"
     },
     {
       "roll": 22,
@@ -3881,7 +4034,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "872669",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3889,7 +4042,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-22-DTYE",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:41:14.349Z"
+      "photoUpdatedAt": "2026-11-15T12:41:14.349Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-22"
     },
     {
       "roll": 23,
@@ -3925,7 +4080,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "307293",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3933,7 +4088,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_1-23-0ZCE",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:41:25.445Z"
+      "photoUpdatedAt": "2026-11-15T12:41:25.445Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C1-23"
     },
     {
       "roll": 1,
@@ -3969,7 +4126,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "306625",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -3977,7 +4134,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-1-32GE",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-16T13:48:02.260Z"
+      "photoUpdatedAt": "2026-11-16T13:48:02.260Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-01"
     },
     {
       "roll": 2,
@@ -4013,7 +4172,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "304093",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4021,7 +4180,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-2-CHGI",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:43:14.692Z"
+      "photoUpdatedAt": "2026-11-15T12:43:14.692Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-02"
     },
     {
       "roll": 3,
@@ -4057,7 +4218,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "351549",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4065,7 +4226,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-3-06YL",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:43:32.220Z"
+      "photoUpdatedAt": "2026-11-15T12:43:32.220Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-03"
     },
     {
       "roll": 4,
@@ -4101,7 +4264,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "552605",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4109,7 +4272,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-4-OX4W",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:43:50.091Z"
+      "photoUpdatedAt": "2026-11-15T12:43:50.091Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-04"
     },
     {
       "roll": 5,
@@ -4145,7 +4310,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "822029",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4153,7 +4318,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-5-ZLD2",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:44:43.835Z"
+      "photoUpdatedAt": "2026-11-15T12:44:43.835Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-05"
     },
     {
       "roll": 6,
@@ -4189,7 +4356,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "851021",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4197,7 +4364,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-6-DT1V",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:50:54.406Z"
+      "photoUpdatedAt": "2026-11-15T12:50:54.406Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-06"
     },
     {
       "roll": 7,
@@ -4233,7 +4402,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "632367",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4241,7 +4410,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-7-UJ5S",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:51:15.798Z"
+      "photoUpdatedAt": "2026-11-15T12:51:15.798Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-07"
     },
     {
       "roll": 8,
@@ -4277,7 +4448,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "262529",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4285,7 +4456,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-8-AQ31",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:51:34.366Z"
+      "photoUpdatedAt": "2026-11-15T12:51:34.366Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-08"
     },
     {
       "roll": 9,
@@ -4321,7 +4494,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "106881",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4329,7 +4502,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-9-207O",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:52:16.037Z"
+      "photoUpdatedAt": "2026-11-15T12:52:16.037Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-09"
     },
     {
       "roll": 10,
@@ -4365,7 +4540,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "881421",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4373,7 +4548,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-10-KVZ8",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:52:35.566Z"
+      "photoUpdatedAt": "2026-11-15T12:52:35.566Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-10"
     },
     {
       "roll": 11,
@@ -4409,7 +4586,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "799305",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4417,7 +4594,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-11-GP02",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:52:53.429Z"
+      "photoUpdatedAt": "2026-11-15T12:52:53.429Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-11"
     },
     {
       "roll": 12,
@@ -4453,7 +4632,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "622385",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4461,7 +4640,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-12-KFIA",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:53:20.757Z"
+      "photoUpdatedAt": "2026-11-15T12:53:20.757Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-12"
     },
     {
       "roll": 13,
@@ -4497,7 +4678,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "228625",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4505,7 +4686,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-13-XXKL",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:53:45.604Z"
+      "photoUpdatedAt": "2026-11-15T12:53:45.604Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-13"
     },
     {
       "roll": 14,
@@ -4541,7 +4724,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "993501",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4549,7 +4732,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-14-LR0C",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:54:05.172Z"
+      "photoUpdatedAt": "2026-11-15T12:54:05.172Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-14"
     },
     {
       "roll": 15,
@@ -4585,7 +4770,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "341021",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4593,7 +4778,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-15-B8DL",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:54:16.532Z"
+      "photoUpdatedAt": "2026-11-15T12:54:16.532Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-15"
     },
     {
       "roll": 16,
@@ -4629,7 +4816,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "391821",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4637,7 +4824,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-16-4NJH",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:54:47.636Z"
+      "photoUpdatedAt": "2026-11-15T12:54:47.636Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-16"
     },
     {
       "roll": 17,
@@ -4673,7 +4862,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "983317",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4681,7 +4870,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-17-1NJZ",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:55:04.324Z"
+      "photoUpdatedAt": "2026-11-15T12:55:04.324Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-17"
     },
     {
       "roll": 18,
@@ -4717,7 +4908,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "693249",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4725,7 +4916,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-18-C2P5",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:55:35.132Z"
+      "photoUpdatedAt": "2026-11-15T12:55:35.132Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-18"
     },
     {
       "roll": 19,
@@ -4761,7 +4954,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "416869",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4769,7 +4962,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-19-DF8W",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:55:44.260Z"
+      "photoUpdatedAt": "2026-11-15T12:55:44.260Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-19"
     },
     {
       "roll": 20,
@@ -4805,7 +5000,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "592259",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4813,7 +5008,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-20-HA4Z",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:55:53.987Z"
+      "photoUpdatedAt": "2026-11-15T12:55:53.987Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-20"
     },
     {
       "roll": 21,
@@ -4849,7 +5046,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "220095",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4857,7 +5054,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-21-AVYD",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:56:13.027Z"
+      "photoUpdatedAt": "2026-11-15T12:56:13.027Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-21"
     },
     {
       "roll": 22,
@@ -4893,7 +5092,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "188875",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4901,7 +5100,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-22-9GFW",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:56:33.435Z"
+      "photoUpdatedAt": "2026-11-15T12:56:33.435Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-22"
     },
     {
       "roll": 23,
@@ -4937,7 +5138,7 @@
       "motherBirthRegNo": "",
       "motherNid": "",
       "motherOccupation": "",
-      "guardianPin": "1234",
+      "guardianPin": "837441",
       "presentAddress": "",
       "permanentAddress": "",
       "guardianRelation": "পিতা",
@@ -4945,7 +5146,9 @@
       "emergencyPhone": "",
       "securityQrCode": "DLIKON-CLASS_2-23-57XU",
       "dreamGallery": [],
-      "photoUpdatedAt": "2026-11-15T12:57:19.339Z"
+      "photoUpdatedAt": "2026-11-15T12:57:19.339Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C2-23"
     },
     {
       "roll": 1,
@@ -4969,7 +5172,10 @@
       "avatarUrl": "data:image/jpeg;base64,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",
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
-      "photoUpdatedAt": "2026-11-16T13:48:58.139Z"
+      "photoUpdatedAt": "2026-11-16T13:48:58.139Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-01",
+      "guardianPin": "481949"
     },
     {
       "roll": 2,
@@ -4993,7 +5199,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-2-JQZZ",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-02",
+      "guardianPin": "954521"
     },
     {
       "roll": 3,
@@ -5017,7 +5226,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-3-MHFI",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-03",
+      "guardianPin": "829917"
     },
     {
       "roll": 4,
@@ -5041,7 +5253,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-4-OZE3",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-04",
+      "guardianPin": "980429"
     },
     {
       "roll": 5,
@@ -5065,7 +5280,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-5-JF2P",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-05",
+      "guardianPin": "633401"
     },
     {
       "roll": 6,
@@ -5089,7 +5307,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-6-WBB3",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-06",
+      "guardianPin": "297593"
     },
     {
       "roll": 7,
@@ -5113,7 +5334,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-7-WTRU",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-07",
+      "guardianPin": "664277"
     },
     {
       "roll": 8,
@@ -5137,7 +5361,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-8-1MEO",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-08",
+      "guardianPin": "116469"
     },
     {
       "roll": 9,
@@ -5161,7 +5388,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-9-I5HY",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-09",
+      "guardianPin": "116725"
     },
     {
       "roll": 10,
@@ -5185,7 +5415,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-10-9EFT",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-10",
+      "guardianPin": "900373"
     },
     {
       "roll": 11,
@@ -5209,7 +5442,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-11-3924",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-11",
+      "guardianPin": "154521"
     },
     {
       "roll": 12,
@@ -5233,7 +5469,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-12-L4UN",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-12",
+      "guardianPin": "797033"
     },
     {
       "roll": 13,
@@ -5257,7 +5496,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-13-ZYOQ",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-13",
+      "guardianPin": "650417"
     },
     {
       "roll": 14,
@@ -5281,7 +5523,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-14-1LD9",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-14",
+      "guardianPin": "735141"
     },
     {
       "roll": 15,
@@ -5305,7 +5550,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-15-3QWJ",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-15",
+      "guardianPin": "221577"
     },
     {
       "roll": 16,
@@ -5329,7 +5577,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-16-C7GQ",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-16",
+      "guardianPin": "318637"
     },
     {
       "roll": 17,
@@ -5353,7 +5604,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-17-J8UG",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-17",
+      "guardianPin": "784777"
     },
     {
       "roll": 18,
@@ -5377,7 +5631,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-18-A6OL",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-18",
+      "guardianPin": "165169"
     },
     {
       "roll": 19,
@@ -5401,7 +5658,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-19-EJPH",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-19",
+      "guardianPin": "727125"
     },
     {
       "roll": 20,
@@ -5425,7 +5685,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_3-20-YDNI",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C3-20",
+      "guardianPin": "516029"
     },
     {
       "roll": 1,
@@ -5449,7 +5712,10 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-1-SVIK",
-      "photoUpdatedAt": "2026-11-16T14:19:47.560Z"
+      "photoUpdatedAt": "2026-11-16T14:19:47.560Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-01",
+      "guardianPin": "318433"
     },
     {
       "roll": 2,
@@ -5473,7 +5739,10 @@
       "avatarUrl": "data:image/jpeg;base64,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",
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
-      "photoUpdatedAt": "2026-11-15T12:30:15.975Z"
+      "photoUpdatedAt": "2026-11-15T12:30:15.975Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-02",
+      "guardianPin": "345725"
     },
     {
       "roll": 3,
@@ -5497,7 +5766,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-3-MVCQ",
-      "photoUpdatedAt": "2026-11-16T14:20:00.161Z"
+      "photoUpdatedAt": "2026-11-16T14:20:00.161Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-03",
+      "guardianPin": "403293"
     },
     {
       "roll": 4,
@@ -5521,7 +5793,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-4-9I02",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-04",
+      "guardianPin": "827093"
     },
     {
       "roll": 5,
@@ -5545,7 +5820,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-5-FW1L",
-      "photoUpdatedAt": "2026-11-16T14:20:50.063Z"
+      "photoUpdatedAt": "2026-11-16T14:20:50.063Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-05",
+      "guardianPin": "316321"
     },
     {
       "roll": 6,
@@ -5569,7 +5847,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-6-5H76",
-      "photoUpdatedAt": "2026-11-16T14:20:28.887Z"
+      "photoUpdatedAt": "2026-11-16T14:20:28.887Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-06",
+      "guardianPin": "594141"
     },
     {
       "roll": 7,
@@ -5593,7 +5874,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-7-6N2X",
-      "photoUpdatedAt": "2026-11-16T14:21:10.439Z"
+      "photoUpdatedAt": "2026-11-16T14:21:10.439Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-07",
+      "guardianPin": "535949"
     },
     {
       "roll": 8,
@@ -5617,7 +5901,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-8-VOV4",
-      "photoUpdatedAt": "2026-11-16T14:21:26.383Z"
+      "photoUpdatedAt": "2026-11-16T14:21:26.383Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-08",
+      "guardianPin": "238133"
     },
     {
       "roll": 9,
@@ -5641,7 +5928,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-9-YRPO",
-      "photoUpdatedAt": "2026-11-16T14:22:11.410Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.410Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-09",
+      "guardianPin": "824737"
     },
     {
       "roll": 10,
@@ -5665,7 +5955,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-10-CH46",
-      "photoUpdatedAt": "2026-11-16T14:21:41.071Z"
+      "photoUpdatedAt": "2026-11-16T14:21:41.071Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-10",
+      "guardianPin": "198465"
     },
     {
       "roll": 11,
@@ -5689,7 +5982,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-11-6RM0",
-      "photoUpdatedAt": "2026-11-16T14:22:11.534Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-11",
+      "guardianPin": "279613"
     },
     {
       "roll": 12,
@@ -5713,7 +6009,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_4-12-2JEF",
-      "photoUpdatedAt": "2026-11-17T04:32:29.896Z"
+      "photoUpdatedAt": "2026-11-17T04:32:29.896Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C4-12",
+      "guardianPin": "737629"
     },
     {
       "roll": 1,
@@ -5737,7 +6036,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-1-C8HI",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-01",
+      "guardianPin": "468491"
     },
     {
       "roll": 2,
@@ -5761,7 +6063,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-2-JVYT",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-02",
+      "guardianPin": "164621"
     },
     {
       "roll": 3,
@@ -5785,7 +6090,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-3-HW7I",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-03",
+      "guardianPin": "116601"
     },
     {
       "roll": 4,
@@ -5809,7 +6117,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-4-RZP5",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-04",
+      "guardianPin": "448709"
     },
     {
       "roll": 5,
@@ -5833,7 +6144,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-5-9A6Q",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-05",
+      "guardianPin": "217989"
     },
     {
       "roll": 6,
@@ -5857,7 +6171,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-6-0XRA",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-06",
+      "guardianPin": "750605"
     },
     {
       "roll": 7,
@@ -5881,7 +6198,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-7-K06J",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-07",
+      "guardianPin": "243645"
     },
     {
       "roll": 8,
@@ -5905,7 +6225,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-8-CD4L",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-08",
+      "guardianPin": "255565"
     },
     {
       "roll": 9,
@@ -5929,7 +6252,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-9-QYE7",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-09",
+      "guardianPin": "342541"
     },
     {
       "roll": 10,
@@ -5953,7 +6279,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-10-UYVQ",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-10",
+      "guardianPin": "102205"
     },
     {
       "roll": 11,
@@ -5977,7 +6306,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-11-4E42",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-11",
+      "guardianPin": "503941"
     },
     {
       "roll": 12,
@@ -6001,7 +6333,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-12-D0WV",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-12",
+      "guardianPin": "751773"
     },
     {
       "roll": 13,
@@ -6025,7 +6360,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-13-LZ71",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-13",
+      "guardianPin": "859029"
     },
     {
       "roll": 14,
@@ -6049,7 +6387,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-14-R6EN",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-14",
+      "guardianPin": "958035"
     },
     {
       "roll": 15,
@@ -6073,7 +6414,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-15-CYOK",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-15",
+      "guardianPin": "449077"
     },
     {
       "roll": 16,
@@ -6097,7 +6441,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-16-5SIG",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-16",
+      "guardianPin": "734413"
     },
     {
       "roll": 17,
@@ -6121,7 +6468,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-17-0KXM",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-17",
+      "guardianPin": "779461"
     },
     {
       "roll": 18,
@@ -6145,7 +6495,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-18-2J53",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-18",
+      "guardianPin": "999349"
     },
     {
       "roll": 19,
@@ -6169,7 +6522,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-19-XK8S",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-19",
+      "guardianPin": "955251"
     },
     {
       "roll": 20,
@@ -6193,7 +6549,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-20-VAFX",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-20",
+      "guardianPin": "240809"
     },
     {
       "roll": 21,
@@ -6217,7 +6576,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-21-C2NE",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-21",
+      "guardianPin": "335837"
     },
     {
       "roll": 22,
@@ -6241,7 +6603,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_5-22-PXB3",
-      "photoUpdatedAt": "2026-11-16T13:57:51.799Z"
+      "photoUpdatedAt": "2026-11-16T13:57:51.799Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C5-22",
+      "guardianPin": "719353"
     },
     {
       "roll": 1,
@@ -6265,7 +6630,10 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-1-HXS7",
-      "photoUpdatedAt": "2026-11-16T13:50:30.962Z"
+      "photoUpdatedAt": "2026-11-16T13:50:30.962Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-01",
+      "guardianPin": "291857"
     },
     {
       "roll": 2,
@@ -6289,7 +6657,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-2-B8KL",
-      "photoUpdatedAt": "2026-11-16T14:22:11.534Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-02",
+      "guardianPin": "500245"
     },
     {
       "roll": 3,
@@ -6313,7 +6684,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-3-BHXC",
-      "photoUpdatedAt": "2026-11-16T14:22:11.534Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-03",
+      "guardianPin": "497877"
     },
     {
       "roll": 4,
@@ -6337,7 +6711,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-4-XOFC",
-      "photoUpdatedAt": "2026-11-22T16:39:31.617Z"
+      "photoUpdatedAt": "2026-11-22T16:39:31.617Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-04",
+      "guardianPin": "216563"
     },
     {
       "roll": 5,
@@ -6361,7 +6738,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-5-JOWH",
-      "photoUpdatedAt": "2026-11-16T14:22:11.534Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-05",
+      "guardianPin": "897311"
     },
     {
       "roll": 6,
@@ -6385,7 +6765,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-6-INH3",
-      "photoUpdatedAt": "2026-11-16T14:22:11.534Z"
+      "photoUpdatedAt": "2026-11-16T14:22:11.534Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-06",
+      "guardianPin": "174813"
     },
     {
       "roll": 8,
@@ -6409,7 +6792,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-8-BVRG",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-08",
+      "guardianPin": "607261"
     },
     {
       "roll": 9,
@@ -6433,7 +6819,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-9-G1BU",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-09",
+      "guardianPin": "690515"
     },
     {
       "roll": 11,
@@ -6457,7 +6846,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_6-11-JK9S",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C6-11",
+      "guardianPin": "836045"
     },
     {
       "roll": 1,
@@ -6481,7 +6873,10 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-1-TYU4",
-      "photoUpdatedAt": "2026-11-16T13:54:30.489Z"
+      "photoUpdatedAt": "2026-11-16T13:54:30.489Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-01",
+      "guardianPin": "539661"
     },
     {
       "roll": 2,
@@ -6505,7 +6900,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-2-8TEJ",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-02",
+      "guardianPin": "915109"
     },
     {
       "roll": 3,
@@ -6529,7 +6927,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-3-VUS6",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-03",
+      "guardianPin": "519353"
     },
     {
       "roll": 4,
@@ -6553,7 +6954,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-4-YU9A",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-04",
+      "guardianPin": "959501"
     },
     {
       "roll": 5,
@@ -6577,7 +6981,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-5-BE1K",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-05",
+      "guardianPin": "649141"
     },
     {
       "roll": 6,
@@ -6601,7 +7008,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-6-D655",
-      "photoUpdatedAt": "2026-11-16T14:22:12.219Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.219Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-06",
+      "guardianPin": "950157"
     },
     {
       "roll": 7,
@@ -6625,7 +7035,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-7-G1NS",
-      "photoUpdatedAt": "2026-11-16T14:22:12.771Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-07",
+      "guardianPin": "569381"
     },
     {
       "roll": 8,
@@ -6649,7 +7062,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_7-8-NUNT",
-      "photoUpdatedAt": "2026-11-16T14:22:12.771Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C7-08",
+      "guardianPin": "632661"
     },
     {
       "roll": 1,
@@ -6673,7 +7089,10 @@
       "fatherAvatarUrl": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_8-1-J449",
-      "photoUpdatedAt": "2026-11-16T13:55:03.988Z"
+      "photoUpdatedAt": "2026-11-16T13:55:03.988Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C8-01",
+      "guardianPin": "697813"
     },
     {
       "roll": 2,
@@ -6697,7 +7116,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_8-2-OCC1",
-      "photoUpdatedAt": "2026-11-16T14:22:12.771Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C8-02",
+      "guardianPin": "631049"
     },
     {
       "roll": 3,
@@ -6721,7 +7143,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_8-3-D7TG",
-      "photoUpdatedAt": "2026-11-16T14:22:12.771Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C8-03",
+      "guardianPin": "539721"
     },
     {
       "roll": 6,
@@ -6745,7 +7170,10 @@
       "fatherAvatarUrl": "",
       "motherAvatarUrl": "",
       "securityQrCode": "DLIKON-SEC-CLASS_8-6-UGJA",
-      "photoUpdatedAt": "2026-11-16T14:22:12.771Z"
+      "photoUpdatedAt": "2026-11-16T14:22:12.771Z",
+      "unlockEpoch": 0,
+      "portalUserId": "DL-C8-06",
+      "guardianPin": "542853"
     }
   ],
   "examRecords": {},
@@ -7070,6 +7498,20 @@
         }
       },
       "updatedAt": "2026-11-23T17:32:15.583Z"
+    },
+    "class_6_ক_2026-11-23": {
+      "id": "class_6_ক_2026-11-23",
+      "date": "2026-11-23",
+      "academicYear": "২০২৬",
+      "classId": "class_6",
+      "section": "ক",
+      "records": {
+        "std_1794323132329_3_xofc": {
+          "status": "present",
+          "remarks": "ডিজিটাল গেটপাস স্ক্যান • ১১:৩২ PM"
+        }
+      },
+      "updatedAt": "2026-11-23T17:32:52.401Z"
     }
   },
   "calendarEvents": [
@@ -7345,6 +7787,24 @@
   "feeInvoices": [],
   "feeReceipts": [],
   "securityLogs": [
+    {
+      "id": "sec-1795455172309-eokv",
+      "studentId": "std_1794323132329_3_xofc",
+      "portalUserId": "DL-C6-04",
+      "classId": "class_6",
+      "section": "ক",
+      "studentNameBn": "মোকাদ্দাস আল জিহাদ",
+      "studentRoll": 4,
+      "classNameBn": "৬ষ্ঠ শ্রেণি",
+      "action": "entry",
+      "timestamp": "2026-11-23T17:32:52.309Z",
+      "guardianPhone": "০১৭০০-০০০০০০",
+      "voiceDispatched": true,
+      "smsDispatched": true,
+      "status": "verified",
+      "operatorNote": "বিদ্যালয়ে প্রবেশ সফল হয়েছে · দৈনিক হাজিরা সংরক্ষিত",
+      "serverTimestamp": 1795455172400
+    },
     {
       "id": "sec-1795455135492-b4eo",
       "studentId": "std_1794323115698_12_lz71",
@@ -9712,27 +10172,134 @@
   ],
   "staffAccounts": [
     {
-      "id": "staff_admin_default",
-      "staffCode": "DL-ADMIN",
+      "id": "staff_ent_didar",
+      "staffCode": "DL-DIR-01",
       "role": "official",
-      "nameBn": "প্রধান প্রশাসক ও অধ্যক্ষ",
-      "designationBn": "প্রধান শিক্ষক / পরিচালক",
-      "phone": "০১৩১৩১৫৯৪৫৯",
+      "categoryKey": "education_entrepreneur",
+      "nameBn": "দিদার",
+      "designationBn": "শিক্ষা উদ্যোক্তা",
+      "phone": "01710000101",
+      "password": "DR4829",
+      "department": "administration",
+      "baseMonthlySalary": 25000,
+      "dailyShiftHours": 6,
+      "overtimeHourlyRate": 250,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_ent_mosharraf",
+      "staffCode": "DL-DIR-02",
+      "role": "official",
+      "categoryKey": "education_entrepreneur",
+      "nameBn": "মোশাররফ",
+      "designationBn": "শিক্ষা উদ্যোক্তা",
+      "phone": "01710000102",
+      "password": "DR7391",
+      "department": "administration",
+      "baseMonthlySalary": 25000,
+      "dailyShiftHours": 6,
+      "overtimeHourlyRate": 250,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_ent_mokhles",
+      "staffCode": "DL-DIR-03",
+      "role": "official",
+      "categoryKey": "education_entrepreneur",
+      "nameBn": "মোখলেছ",
+      "designationBn": "শিক্ষা উদ্যোক্তা",
+      "phone": "01710000103",
+      "password": "DR5614",
+      "department": "administration",
+      "baseMonthlySalary": 25000,
+      "dailyShiftHours": 6,
+      "overtimeHourlyRate": 250,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_ent_prince",
+      "staffCode": "DL-DIR-04",
+      "role": "official",
+      "categoryKey": "education_entrepreneur",
+      "nameBn": "প্রিন্স",
+      "designationBn": "শিক্ষা উদ্যোক্তা",
+      "phone": "01710000104",
+      "password": "DR8942",
+      "department": "administration",
+      "baseMonthlySalary": 25000,
+      "dailyShiftHours": 6,
+      "overtimeHourlyRate": 250,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_principal_mitu",
+      "staffCode": "DL-PRN-01",
+      "role": "official",
+      "categoryKey": "principal",
+      "nameBn": "মিতু আক্তার",
+      "designationBn": "প্রিন্সিপাল",
+      "phone": "01313159459",
       "email": "contact.dlikonmodelacademy@gmail.com",
       "password": "admin123",
       "department": "administration",
+      "baseMonthlySalary": 28000,
+      "dailyShiftHours": 8,
+      "overtimeHourlyRate": 250,
       "status": "active",
-      "createdAt": "2026-11-12T20:35:50.456Z"
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
     },
     {
-      "id": "staff_emp_default",
-      "staffCode": "DL-EMP-01",
+      "id": "staff_vp_sojib",
+      "staffCode": "DL-VP-01",
+      "role": "official",
+      "categoryKey": "vice_principal",
+      "nameBn": "সজীব",
+      "designationBn": "সহ অধ্যক্ষ",
+      "phone": "01710000301",
+      "password": "VP6382",
+      "department": "administration",
+      "baseMonthlySalary": 22000,
+      "dailyShiftHours": 8,
+      "overtimeHourlyRate": 200,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_acc_clerk",
+      "staffCode": "DL-ACC-01",
       "role": "employee",
-      "nameBn": "সহকারী শিক্ষক (একাডেমিক ও গেট)",
-      "designationBn": "সহকারী শিক্ষক",
-      "phone": "01711000001",
-      "email": "teacher@dlikon.edu.bd",
-      "password": "emp123",
+      "categoryKey": "accountant_clerk",
+      "nameBn": "একাউন্টেন্ট কম কেরানী",
+      "designationBn": "একাউন্টেন্ট কম কেরানী",
+      "phone": "01710000401",
+      "password": "AC5194",
+      "department": "accounts",
+      "baseMonthlySalary": 16000,
+      "dailyShiftHours": 8,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_mazharul",
+      "staffCode": "DL-TCH-01",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "মাজহারুল",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000501",
+      "password": "TC4182",
       "department": "academic",
       "assignedClassIds": [
         "class_play",
@@ -9744,11 +10311,361 @@
         "class_4",
         "class_5"
       ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
       "status": "active",
-      "createdAt": "2026-11-12T20:35:50.456Z"
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_monir",
+      "staffCode": "DL-TCH-02",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "মনির হোসেন",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000502",
+      "password": "TC7539",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_mokhles",
+      "staffCode": "DL-TCH-03",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "মোখলেস",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000503",
+      "password": "TC2964",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_mahbub",
+      "staffCode": "DL-TCH-04",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "মাহবুব এলাহী",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000504",
+      "password": "TC8417",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_khadiza",
+      "staffCode": "DL-TCH-05",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "খাদিজা",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000505",
+      "password": "TC6358",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_mita",
+      "staffCode": "DL-TCH-06",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "মিতা",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000506",
+      "password": "TC9124",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_salma",
+      "staffCode": "DL-TCH-07",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "সালমা",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000507",
+      "password": "TC3785",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_shahnaz",
+      "staffCode": "DL-TCH-08",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "শাহনাজ",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000508",
+      "password": "TC5496",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_runa",
+      "staffCode": "DL-TCH-09",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "রুনা",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000509",
+      "password": "TC6843",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_tch_shanta",
+      "staffCode": "DL-TCH-10",
+      "role": "employee",
+      "categoryKey": "teacher",
+      "nameBn": "শান্তা",
+      "designationBn": "শিক্ষক",
+      "phone": "01710000510",
+      "password": "TC8271",
+      "department": "academic",
+      "assignedClassIds": [
+        "class_play",
+        "class_nursery",
+        "class_kg",
+        "class_1",
+        "class_2",
+        "class_3",
+        "class_4",
+        "class_5"
+      ],
+      "baseMonthlySalary": 14000,
+      "dailyShiftHours": 7,
+      "overtimeHourlyRate": 150,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_dpt_sohel",
+      "staffCode": "DL-DPT-01",
+      "role": "employee",
+      "categoryKey": "office_assistant",
+      "nameBn": "সোয়েল",
+      "designationBn": "দপ্তরী",
+      "phone": "01710000601",
+      "password": "DP4739",
+      "department": "office",
+      "baseMonthlySalary": 10000,
+      "dailyShiftHours": 8,
+      "overtimeHourlyRate": 100,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_aya_khala",
+      "staffCode": "DL-AYA-01",
+      "role": "employee",
+      "categoryKey": "ayah",
+      "nameBn": "খালা",
+      "designationBn": "আয়া",
+      "phone": "01710000701",
+      "password": "AY5826",
+      "department": "office",
+      "baseMonthlySalary": 8500,
+      "dailyShiftHours": 8,
+      "overtimeHourlyRate": 80,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
+    },
+    {
+      "id": "staff_ng_bobul",
+      "staffCode": "DL-NG-01",
+      "role": "employee",
+      "categoryKey": "night_guard",
+      "nameBn": "বোবুল হোসেন",
+      "designationBn": "নৈশ প্রহরী",
+      "phone": "01710000801",
+      "password": "NG7195",
+      "department": "security",
+      "baseMonthlySalary": 10500,
+      "dailyShiftHours": 10,
+      "overtimeHourlyRate": 90,
+      "status": "active",
+      "unlockEpoch": 0,
+      "createdAt": "2026-11-27T00:00:00.000Z"
     }
   ],
   "staffAttendance": [],
   "admissionRequests": [],
-  "_lastUpdated": "2026-11-23T17:32:52.261Z"
+  "_lastUpdated": "2026-11-27T10:53:59.327Z",
+  "_lastSecurityEvent": {
+    "id": "sec-1795455172309-eokv",
+    "studentId": "std_1794323132329_3_xofc",
+    "portalUserId": "DL-C6-04",
+    "classId": "class_6",
+    "section": "ক",
+    "studentNameBn": "মোকাদ্দাস আল জিহাদ",
+    "studentRoll": 4,
+    "classNameBn": "৬ষ্ঠ শ্রেণি",
+    "action": "entry",
+    "timestamp": "2026-11-23T17:32:52.309Z",
+    "guardianPhone": "০১৭০০-০০০০০০",
+    "voiceDispatched": true,
+    "smsDispatched": true,
+    "status": "verified",
+    "operatorNote": "বিদ্যালয়ে প্রবেশ সফল হয়েছে · দৈনিক হাজিরা সংরক্ষিত",
+    "serverTimestamp": 1795455172400
+  },
+  "staffLeaves": [
+    {
+      "id": "e2e_leave_cancel_1795776839325",
+      "staffId": "staff_acc_clerk",
+      "staffCode": "DL-ACC-01",
+      "staffNameBn": "একাউন্টেন্ট কম কেরানী",
+      "designationBn": "একাউন্টেন্ট কম কেরানী",
+      "startDate": "2026-12-15",
+      "endDate": "2026-12-15",
+      "daysCount": 1,
+      "leaveType": "casual",
+      "reason": "ব্যক্তিগত কাজ",
+      "status": "pending",
+      "createdAt": "2026-11-27T10:53:59.327Z",
+      "updatedAt": "2026-11-27T10:53:59.327Z"
+    },
+    {
+      "id": "e2e_leave_1795776839026",
+      "staffId": "staff_acc_clerk",
+      "staffCode": "DL-ACC-01",
+      "staffNameBn": "একাউন্টেন্ট কম কেরানী",
+      "designationBn": "একাউন্টেন্ট কম কেরানী",
+      "startDate": "2026-12-10",
+      "endDate": "2026-12-12",
+      "daysCount": 3,
+      "leaveType": "sick",
+      "reason": "জ্বর ও চিকিৎসা",
+      "status": "approved",
+      "createdAt": "2026-11-27T10:53:59.029Z",
+      "updatedAt": "2026-11-27T10:53:59.204Z",
+      "reviewedBy": "মিতু আক্তার (প্রিন্সিপাল)",
+      "reviewNote": "দ্রুত সুস্থতা কামনা করছি"
+    }
+  ]
 }

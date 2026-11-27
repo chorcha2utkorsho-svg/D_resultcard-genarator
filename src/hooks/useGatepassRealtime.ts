@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSchool } from '../context/SchoolContext';
-import { PortalRole, SecurityGatepassLog } from '../types';
+import { DailyAttendanceRecord, PortalRole, SecurityGatepassLog, StaffAccount, StaffAttendanceRecord } from '../types';
 import { getStudentPortalId } from '../utils/bengali';
 import { parseJsonApiResponse } from '../utils/apiResponse';
 import {
@@ -88,6 +88,44 @@ export function broadcastLocalGatepassScan(log: SecurityGatepassLog): void {
   try {
     const ch = new BroadcastChannel(GATEPASS_BROADCAST_CHANNEL);
     ch.postMessage({ type: 'gatepass:scan', log, serverTime: Date.now() });
+    ch.close();
+  } catch {
+    // Ignore BroadcastChannel errors
+  }
+}
+
+export function broadcastLocalStaffAttendance(
+  record: StaffAttendanceRecord,
+  action: 'checkin' | 'checkout',
+  summary?: { totalStaffCount?: number; presentCount?: number; pendingCount?: number }
+): void {
+  if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+  try {
+    const ch = new BroadcastChannel(GATEPASS_BROADCAST_CHANNEL);
+    ch.postMessage({
+      type: 'staff:attendance',
+      action,
+      record,
+      totalStaffCount: summary?.totalStaffCount,
+      presentCount: summary?.presentCount,
+      pendingCount: summary?.pendingCount,
+      serverTime: Date.now(),
+    });
+    ch.close();
+  } catch {
+    // Ignore BroadcastChannel errors
+  }
+}
+
+export function broadcastLocalDailyAttendance(record: DailyAttendanceRecord): void {
+  if (typeof window === 'undefined' || !('BroadcastChannel' in window) || !record?.id) return;
+  try {
+    const ch = new BroadcastChannel(GATEPASS_BROADCAST_CHANNEL);
+    ch.postMessage({
+      type: 'attendance:updated',
+      attendanceRecord: record,
+      serverTime: Date.now(),
+    });
     ch.close();
   } catch {
     // Ignore BroadcastChannel errors
@@ -185,6 +223,9 @@ export function useGatepassRealtime({
     addSecurityLog,
     upsertAttendanceRecordFromServer,
     pullCloudSecurityLogsNow,
+    setStaffAccountsList,
+    setStaffLeavesList,
+    recordRealtimeStaffAttendance,
   } = useSchool();
   const [liveRingingAlert, setLiveRingingAlert] = useState<{
     log: SecurityGatepassLog;
@@ -489,6 +530,12 @@ export function useGatepassRealtime({
   upsertAttendanceRecordFromServerRef.current = upsertAttendanceRecordFromServer;
   const pullCloudSecurityLogsNowRef = useRef(pullCloudSecurityLogsNow);
   pullCloudSecurityLogsNowRef.current = pullCloudSecurityLogsNow;
+  const setStaffAccountsListRef = useRef(setStaffAccountsList);
+  setStaffAccountsListRef.current = setStaffAccountsList;
+  const setStaffLeavesListRef = useRef(setStaffLeavesList);
+  setStaffLeavesListRef.current = setStaffLeavesList;
+  const recordRealtimeStaffAttendanceRef = useRef(recordRealtimeStaffAttendance);
+  recordRealtimeStaffAttendanceRef.current = recordRealtimeStaffAttendance;
 
   // Pre-warm Bengali voice MP3 cache so incoming alerts play instantaneously (0ms fetch delay)
   useEffect(() => {
@@ -696,10 +743,71 @@ export function useGatepassRealtime({
       }
       setLastSyncServerTime(clientNow);
 
+      if (rawPayload.type === 'staff:attendance' && rawPayload.record && rawPayload.record.id) {
+        if (role === 'official') {
+          const attRec: StaffAttendanceRecord = rawPayload.record;
+          const act: 'checkin' | 'checkout' =
+            rawPayload.action === 'checkout' || attRec.action === 'checkout' ? 'checkout' : 'checkin';
+          setLastSignalType(`staff:attendance (${act})`);
+          setLastSignalAt(clientNow);
+          setLastSignalTransport(viaTransport);
+          recordRealtimeStaffAttendanceRef.current(attRec, act, {
+            totalStaffCount:
+              typeof rawPayload.totalStaffCount === 'number' ? rawPayload.totalStaffCount : undefined,
+            presentCount:
+              typeof rawPayload.presentCount === 'number' ? rawPayload.presentCount : undefined,
+            pendingCount:
+              typeof rawPayload.pendingCount === 'number' ? rawPayload.pendingCount : undefined,
+          });
+        }
+        return;
+      }
+
+      if (rawPayload.type === 'staff:leaves' && Array.isArray(rawPayload.staffLeaves)) {
+        if (role === 'official' || role === 'employee') {
+          setLastSignalType(`staff:leaves (${rawPayload.action || 'updated'})`);
+          setLastSignalAt(clientNow);
+          setLastSignalTransport(viaTransport);
+          setStaffLeavesListRef.current(rawPayload.staffLeaves);
+        }
+        return;
+      }
+
+      if (rawPayload.type === 'attendance:updated' && rawPayload.attendanceRecord?.id) {
+        setLastSignalType('attendance:updated');
+        setLastSignalAt(clientNow);
+        setLastSignalTransport(viaTransport);
+        upsertAttendanceRecordFromServerRef.current(rawPayload.attendanceRecord, {
+          suppressAutoPush: true,
+        });
+        return;
+      }
+
       if (rawPayload.type === 'gatepass:init') {
         const logs: SecurityGatepassLog[] = Array.isArray(rawPayload.logs) ? rawPayload.logs : [];
         const isFirstInit = !hasBaselineRef.current;
         hasBaselineRef.current = true;
+        if (Array.isArray(rawPayload.todayStudentAttendance)) {
+          for (const attRec of rawPayload.todayStudentAttendance) {
+            if (attRec?.id && attRec?.records) {
+              upsertAttendanceRecordFromServerRef.current(attRec, { suppressAutoPush: true });
+            }
+          }
+        }
+        if (role === 'official' && Array.isArray(rawPayload.staffAccounts)) {
+          setStaffAccountsListRef.current(rawPayload.staffAccounts as StaffAccount[]);
+        }
+        if (role === 'official' && Array.isArray(rawPayload.staffAttendance)) {
+          const staffRecs: StaffAttendanceRecord[] = rawPayload.staffAttendance;
+          const freshWindowMs = isFirstInit ? 2 * 60 * 1000 : 10 * 60 * 1000;
+          for (const rec of staffRecs) {
+            if (!rec?.id) continue;
+            const recTs = rec.serverTimestamp || 0;
+            if (recTs >= serverTime - freshWindowMs) {
+              recordRealtimeStaffAttendanceRef.current(rec, rec.action, rawPayload.staffSummary);
+            }
+          }
+        }
         // Generous 5m/15m window for unacknowledged live scans so phones waking from background sleep never miss an alert
         const windowMs = isFirstInit ? 5 * 60 * 1000 : 15 * 60 * 1000;
         const approxLag =
@@ -935,12 +1043,38 @@ export function useGatepassRealtime({
             {
               type: 'gatepass:init',
               logs: data.logs,
+              staffAccounts: data.staffAccounts,
+              staffAttendance: data.staffAttendance,
+              staffSummary: data.staffSummary,
+              todayStudentAttendance: data.todayStudentAttendance,
               serverTime: serverNow,
               serverInstanceId: data.serverInstanceId,
             },
             'polling'
           );
           return;
+        }
+
+        if (Array.isArray(data.todayStudentAttendance)) {
+          for (const attRec of data.todayStudentAttendance) {
+            if (attRec?.id && attRec?.records) {
+              upsertAttendanceRecordFromServerRef.current(attRec, { suppressAutoPush: true });
+            }
+          }
+        }
+
+        if (role === 'official' && Array.isArray(data.staffAccounts)) {
+          setStaffAccountsListRef.current(data.staffAccounts as StaffAccount[]);
+        }
+        if (role === 'official' && Array.isArray(data.staffAttendance)) {
+          const staffRecs: StaffAttendanceRecord[] = data.staffAttendance;
+          for (const rec of staffRecs) {
+            if (!rec?.id) continue;
+            const recTs = rec.serverTimestamp || 0;
+            if (recTs > 0 && recTs >= serverNow - 10 * 60 * 1000) {
+              recordRealtimeStaffAttendanceRef.current(rec, rec.action, data.staffSummary);
+            }
+          }
         }
 
         lastServerTimeRef.current = Math.max(lastServerTimeRef.current, serverNow - 5000);

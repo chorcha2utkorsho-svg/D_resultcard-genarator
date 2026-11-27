@@ -36,11 +36,15 @@ import {
   UserCheck,
   Image as ImageIcon,
   Cloud,
+  Lock,
+  Unlock,
+  KeyRound,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { DreamGalleryPhoto, ExplicitPhotoClearFlags, PhotoIntegrityReport, Student } from '../types';
 import { DREAM_CAREER_PRESETS } from '../data/dreamCareerGallery';
-import { toBengaliNumber, toBengaliRoll, formatBengaliDate } from '../utils/bengali';
+import { toBengaliNumber, toBengaliRoll, formatBengaliDate, getStudentPortalId } from '../utils/bengali';
+import { generateUniquePin6, isWeakOrDefaultPin } from '../utils/credentialGenerator';
 import { SchoolLogo } from './SchoolLogo';
 import { BulkStudentRegistration } from './BulkStudentRegistration';
 import { compressImageBase64 } from '../utils/imageCompressor';
@@ -79,6 +83,9 @@ export const StudentManagement: React.FC = () => {
     selectedSection,
     setSelectedSection,
     selectedYear,
+    toggleGlobalDeviceLock,
+    remoteUnlockAccount,
+    regenerateStudentPins,
   } = useSchool();
 
   const [photoSyncBanner, setPhotoSyncBanner] = useState<string | null>(null);
@@ -98,6 +105,10 @@ export const StudentManagement: React.FC = () => {
   const [isTemplateDropdownOpen, setIsTemplateDropdownOpen] = useState(false);
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const [isPrintDirectoryOpen, setIsPrintDirectoryOpen] = useState(false);
+  const [isPrintCredentialsOpen, setIsPrintCredentialsOpen] = useState(false);
+  const [confirmRegenStudentPins, setConfirmRegenStudentPins] = useState(false);
+  const [isTogglingGlobalLock, setIsTogglingGlobalLock] = useState(false);
+  const [unlockingStudentId, setUnlockingStudentId] = useState<string | null>(null);
 
   // Full Form state for comprehensive student & guardian dossier
   const [studentModalTab, setStudentModalTab] = useState<'student' | 'father' | 'mother' | 'address' | 'security' | 'dream_gallery'>('student');
@@ -142,7 +153,7 @@ export const StudentManagement: React.FC = () => {
     motherAvatarUrl: '',
 
     // অভিভাবক পিন (অভিভাবক পোর্টাল লগইন)
-    guardianPin: '1234',
+    guardianPin: '',
 
     // ঠিকানা ও স্থানীয় অভিভাবক
     presentAddress: '',
@@ -255,12 +266,20 @@ export const StudentManagement: React.FC = () => {
     const activeClassId = classFilter !== 'all' ? classFilter : selectedClassId || 'class_play';
     const classStudents = students.filter((s) => s.classId === activeClassId);
     const nextRoll = classStudents.length > 0 ? Math.max(...classStudents.map((s) => s.roll)) + 1 : 1;
+    const existingPins = new Set(
+      students.map((s) => String(s.guardianPin || '').trim()).filter(Boolean)
+    );
+    const freshPin = generateUniquePin6(
+      existingPins,
+      `${activeClassId}-${nextRoll}-${Date.now()}`
+    );
     setFormData({
       ...initialFormState,
       roll: nextRoll,
       classId: activeClassId,
       section: selectedSection || 'ক',
       academicYear: selectedYear || '২০২৬',
+      guardianPin: freshPin,
       securityQrCode: `DLIKON-SEC-${activeClassId.toUpperCase()}-${nextRoll}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
     });
     setStudentModalTab('student');
@@ -272,6 +291,13 @@ export const StudentManagement: React.FC = () => {
 
   const handleOpenEdit = (student: Student) => {
     setEditingStudent(student);
+    const existingPins = new Set(
+      students.filter((s) => s.id !== student.id).map((s) => String(s.guardianPin || '').trim()).filter(Boolean)
+    );
+    const resolvedPin =
+      student.guardianPin && !isWeakOrDefaultPin(student.guardianPin)
+        ? student.guardianPin
+        : generateUniquePin6(existingPins, `${student.id}-${student.roll}`);
     setFormData({
       nameBn: student.nameBn || '',
       nameEn: student.nameEn || '',
@@ -307,7 +333,7 @@ export const StudentManagement: React.FC = () => {
       motherAvatarUrl: student.motherAvatarUrl || '',
 
       // অভিভাবক পিন
-      guardianPin: student.guardianPin || '1234',
+      guardianPin: resolvedPin,
 
       // ঠিকানা ও অভিভাবক
       presentAddress: student.presentAddress || '',
@@ -966,10 +992,102 @@ export const StudentManagement: React.FC = () => {
 
             <button
               onClick={handleOpenAdd}
-              className="inline-flex items-center px-4 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition"
+              className="inline-flex items-center px-4 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition cursor-pointer"
             >
               <UserPlus className="w-3.5 h-3.5 mr-1" />
               নতুন শিক্ষার্থী যুক্ত করুন
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsPrintCredentialsOpen(true)}
+              className="inline-flex items-center px-3.5 py-1.5 rounded-lg text-xs font-bold bg-[#0F1E3D] hover:bg-[#172C57] text-white shadow-xs transition cursor-pointer"
+              title="সকল শিক্ষার্থীর স্বতন্ত্র পোর্টাল আইডি ও ৬-ডিজিট পাসওয়ার্ড প্রিন্ট শিট"
+            >
+              <KeyRound className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+              আইডি ও পাসওয়ার্ড শিট প্রিন্ট
+            </button>
+
+            {!confirmRegenStudentPins ? (
+              <button
+                type="button"
+                onClick={() => setConfirmRegenStudentPins(true)}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 shadow-2xs transition cursor-pointer"
+                title="নির্বাচিত শ্রেণির শিক্ষার্থীদের জন্য নতুন ৬-ডিজিট পিন জেনারেট করুন"
+              >
+                <RefreshCw className="w-3.5 h-3.5 mr-1 text-indigo-700" />
+                নতুন পিন জেনারেট
+              </button>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-300 bg-amber-50 text-xs">
+                <span className="font-bold text-amber-950">
+                  {classFilter === 'all'
+                    ? 'সকল শিক্ষার্থীর পিন বদলাবেন?'
+                    : `${classes.find((c) => c.id === classFilter)?.nameBn || 'শ্রেণির'} পিন বদলাবেন?`}
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setConfirmRegenStudentPins(false);
+                    await regenerateStudentPins({ classId: classFilter });
+                    setPhotoSyncBannerOk(true);
+                    setPhotoSyncBanner(
+                      '✓ নির্বাচিত শিক্ষার্থীদের জন্য নতুন স্বতন্ত্র ৬-ডিজিট পাসওয়ার্ড/পিন জেনারেট হয়েছে।'
+                    );
+                    setTimeout(() => setPhotoSyncBanner(null), 5000);
+                  }}
+                  className="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-800 text-white font-bold cursor-pointer"
+                >
+                  হ্যাঁ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRegenStudentPins(false)}
+                  className="px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 font-semibold cursor-pointer"
+                >
+                  না
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={isTogglingGlobalLock}
+              onClick={async () => {
+                setIsTogglingGlobalLock(true);
+                try {
+                  const nextState = await toggleGlobalDeviceLock(
+                    !(schoolInfo.alwaysLockDevices !== false)
+                  );
+                  setPhotoSyncBannerOk(true);
+                  setPhotoSyncBanner(
+                    nextState
+                      ? '✓ সকল শিক্ষার্থী ও স্টাফের স্মার্টফোনে স্থায়ী ড্যাশবোর্ড লক চালু করা হয়েছে।'
+                      : 'সাময়িক আনলক মোড ("স্টে") চালু হয়েছে — ডিভাইসগুলো অস্থায়ীভাবে আনলক হবে।'
+                  );
+                  setTimeout(() => setPhotoSyncBanner(null), 5000);
+                } finally {
+                  setIsTogglingGlobalLock(false);
+                }
+              }}
+              className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold border shadow-2xs transition cursor-pointer disabled:opacity-60 ${
+                schoolInfo.alwaysLockDevices !== false
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100'
+                  : 'border-amber-300 bg-amber-100 text-amber-950 hover:bg-amber-200'
+              }`}
+              title="সকল স্মার্টফোন ড্যাশবোর্ড লক নীতি পরিবর্তন করুন"
+            >
+              {schoolInfo.alwaysLockDevices !== false ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 mr-1 text-emerald-700" />
+                  <span>স্মার্টফোন লক্ড (চালু)</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 mr-1 text-amber-700" />
+                  <span>সাময়িক আনলক ("স্টে")</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1206,17 +1324,18 @@ export const StudentManagement: React.FC = () => {
                 <th className="py-3 px-3 text-center w-14">রোল</th>
                 <th className="py-3 px-3">শিক্ষার্থীর ছবি ও নাম</th>
                 <th className="py-3 px-3 text-center w-28">শ্রেণি ও শাখা</th>
+                <th className="py-3 px-3">পোর্টাল আইডি ও পাসওয়ার্ড</th>
                 <th className="py-3 px-3">জন্ম নিবন্ধন (১৭ ডিজিট)</th>
                 <th className="py-3 px-3">পিতা ও মাতার বিবরণ</th>
                 <th className="py-3 px-3">অভিভাবক ফোন</th>
                 <th className="py-3 px-2 text-center w-16">গ্রুপ</th>
-                <th className="py-3 px-3 text-center w-28">অ্যাকশন</th>
+                <th className="py-3 px-3 text-center w-36">অ্যাকশন</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200">
+            <tbody className="divide-y divide-slate-200 tabular-nums">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-500 space-y-2">
+                  <td colSpan={9} className="py-12 text-center text-slate-500 space-y-2">
                     <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
                       <Users className="w-6 h-6" />
                     </div>
@@ -1291,6 +1410,19 @@ export const StudentManagement: React.FC = () => {
                         {std.section ? ` (${std.section})` : ''}
                       </span>
                     </td>
+                    <td className="py-2.5 px-3 font-mono text-xs whitespace-nowrap">
+                      <div className="font-bold text-[#0F1E3D]">
+                        {std.portalUserId || getStudentPortalId(std)}
+                      </div>
+                      <div className="text-[11px] text-emerald-800 font-semibold">
+                        পিন: {std.guardianPin || '-'}
+                        {(std.unlockEpoch || 0) > 0 && (
+                          <span className="ml-1.5 text-amber-700">
+                            · আনলক {toBengaliNumber(std.unlockEpoch || 0)}x
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-2.5 px-3">
                       {std.birthRegNo ? (
                         <div className="font-mono text-xs font-bold text-indigo-950 bg-indigo-50/80 px-2 py-0.5 rounded border border-indigo-200 inline-block">
@@ -1331,7 +1463,7 @@ export const StudentManagement: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setDetailStudent(std)}
-                          className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg transition"
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg transition cursor-pointer"
                           title="সম্পূর্ণ প্রোফাইল ও সিকিউরিটি কার্ড দেখুন"
                         >
                           <Eye className="w-4 h-4" />
@@ -1339,10 +1471,33 @@ export const StudentManagement: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(std)}
-                          className="p-1.5 text-amber-600 hover:bg-amber-100 rounded-lg transition"
+                          className="p-1.5 text-amber-600 hover:bg-amber-100 rounded-lg transition cursor-pointer"
                           title="সম্পাদনা করুন"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={unlockingStudentId === std.id}
+                          onClick={async () => {
+                            setUnlockingStudentId(std.id);
+                            try {
+                              const nextEpoch = await remoteUnlockAccount('student', std.id);
+                              if (nextEpoch !== null) {
+                                setPhotoSyncBannerOk(true);
+                                setPhotoSyncBanner(
+                                  `✓ "${std.nameBn}"-এর স্মার্টফোন রিমোট আনলক সিগন্যাল (ধাপ ${toBengaliNumber(nextEpoch)}) পাঠানো হয়েছে।`
+                                );
+                                setTimeout(() => setPhotoSyncBanner(null), 5000);
+                              }
+                            } finally {
+                              setUnlockingStudentId(null);
+                            }
+                          }}
+                          className="p-1.5 text-amber-800 hover:bg-amber-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                          title="এই শিক্ষার্থীর স্মার্টফোনে রিমোট আনলক সিগন্যাল পাঠান"
+                        >
+                          <Unlock className="w-4 h-4" />
                         </button>
                         <button
                           type="button"
@@ -1351,7 +1506,7 @@ export const StudentManagement: React.FC = () => {
                               deleteStudent(std.id);
                             }
                           }}
-                          className="p-1.5 text-rose-600 hover:bg-rose-100 rounded-lg transition"
+                          className="p-1.5 text-rose-600 hover:bg-rose-100 rounded-lg transition cursor-pointer"
                           title="মুছে ফেলুন"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -2173,6 +2328,63 @@ export const StudentManagement: React.FC = () => {
                       <p className="text-[11px] leading-relaxed text-slate-400">
                         এই শিক্ষার্থীর আইডি কার্ড ডিজিটাল সিকিউরিটি মডিউলে স্ক্যান করলেই তাৎক্ষণিক স্বয়ংক্রিয় বাংলা ভয়েস মেসেজ প্রচার হবে এবং অভিভাবকের ফোনে লাইভ নোটিশ যাবে।
                       </p>
+                    </div>
+                  </div>
+
+                  {/* Student Portal ID & Unique 6-digit Password/PIN */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-800 tabular-nums">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">
+                        শিক্ষার্থী পোর্টাল লগইন আইডি (Portal ID)
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={
+                          editingStudent?.portalUserId ||
+                          getStudentPortalId({
+                            id: editingStudent?.id || 'new',
+                            classId: formData.classId,
+                            roll: formData.roll,
+                          })
+                        }
+                        className="w-full bg-slate-800 border border-slate-700 text-emerald-300 font-mono text-xs p-2.5 rounded-lg select-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">
+                        স্বতন্ত্র ৬-ডিজিট পাসওয়ার্ড / অভিভাবক পিন *
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={formData.guardianPin}
+                          onChange={(e) =>
+                            setFormData({ ...formData, guardianPin: e.target.value.trim() })
+                          }
+                          placeholder="৬ ডিজিট পিন"
+                          className="flex-1 bg-slate-800 border border-slate-700 text-amber-300 font-mono text-xs p-2.5 rounded-lg"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const used = new Set(
+                              students
+                                .filter((s) => s.id !== editingStudent?.id)
+                                .map((s) => String(s.guardianPin || '').trim())
+                            );
+                            const nextPin = generateUniquePin6(
+                              used,
+                              `${formData.classId}-${formData.roll}-${Date.now()}`
+                            );
+                            setFormData({ ...formData, guardianPin: nextPin });
+                          }}
+                          className="px-3 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          <span>নতুন পিন</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3104,6 +3316,103 @@ export const StudentManagement: React.FC = () => {
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRINTABLE STUDENT PORTAL ID & PIN CREDENTIAL CARDS MODAL (A4 / PDF) */}
+      {isPrintCredentialsOpen && (
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[96vh] flex flex-col overflow-hidden">
+            <div className="no-print p-4 bg-[#0F1E3D] text-white flex flex-wrap items-center justify-between gap-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <KeyRound className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base font-serif">
+                    শিক্ষার্থী ও অভিভাবক পোর্টাল আইডি-পাসওয়ার্ড শিট ({toBengaliNumber(filtered.length)} জন)
+                  </h3>
+                  <p className="text-[11px] text-slate-300">
+                    শিক্ষার্থীর স্মার্টফোনে লগইন করিয়ে স্থায়ী ড্যাশবোর্ড লক সেটআপ করার জন্য প্রিন্ট বা PDF সেভ করুন।
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs flex items-center space-x-1 shadow-sm cursor-pointer transition"
+                >
+                  <Printer className="w-4 h-4 mr-1" />
+                  <span>PDF সংরক্ষণ / প্রিন্ট</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrintCredentialsOpen(false)}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 overflow-y-auto printable-area bg-white text-slate-900">
+              <div className="text-center pb-3 border-b-2 border-slate-900 mb-4">
+                <div className="flex items-center justify-center space-x-3 mb-1">
+                  <SchoolLogo customLogoUrl={schoolInfo?.logoUrl} size={44} />
+                  <div>
+                    <h1 className="text-xl font-extrabold tracking-wide text-slate-950 font-serif">
+                      {schoolInfo?.name || 'ডি-লিকন মডেল একাডেমী'}
+                    </h1>
+                    <p className="text-xs text-slate-700">
+                      শিক্ষার্থী স্মার্টফোন ড্যাশবোর্ড লগইন আইডি ও ৬-ডিজিট পাসওয়ার্ড তালিকা —{' '}
+                      {classFilter === 'all'
+                        ? 'সকল শ্রেণি'
+                        : classes.find((c) => c.id === classFilter)?.nameBn || classFilter}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <table className="w-full text-xs border border-slate-800 border-collapse tabular-nums">
+                <thead>
+                  <tr className="bg-slate-100 font-bold border-b border-slate-800 text-[11px]">
+                    <th className="p-1.5 border-r border-slate-800 text-center w-10">রোল</th>
+                    <th className="p-1.5 border-r border-slate-800 text-left">শিক্ষার্থীর নাম</th>
+                    <th className="p-1.5 border-r border-slate-800 text-left w-28">শ্রেণি ও শাখা</th>
+                    <th className="p-1.5 border-r border-slate-800 text-left w-32">অভিভাবক ফোন</th>
+                    <th className="p-1.5 border-r border-slate-800 text-left w-32">পোর্টাল আইডি</th>
+                    <th className="p-1.5 border-slate-800 text-left w-28">পাসওয়ার্ড (পিন)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((s) => {
+                    const clsName = classes.find((c) => c.id === s.classId)?.nameBn || s.classId;
+                    return (
+                      <tr key={s.id} className="border-b border-slate-300">
+                        <td className="p-1.5 border-r border-slate-800 text-center font-mono font-bold">
+                          {toBengaliRoll(s.roll)}
+                        </td>
+                        <td className="p-1.5 border-r border-slate-800 font-semibold">
+                          {s.nameBn}
+                        </td>
+                        <td className="p-1.5 border-r border-slate-800">
+                          {clsName} ({s.section || 'ক'})
+                        </td>
+                        <td className="p-1.5 border-r border-slate-800 font-mono">
+                          {s.guardianPhone || '-'}
+                        </td>
+                        <td className="p-1.5 border-r border-slate-800 font-mono font-bold text-[#0F1E3D]">
+                          {s.portalUserId || getStudentPortalId(s)}
+                        </td>
+                        <td className="p-1.5 border-slate-800 font-mono font-bold text-emerald-900">
+                          {s.guardianPin || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

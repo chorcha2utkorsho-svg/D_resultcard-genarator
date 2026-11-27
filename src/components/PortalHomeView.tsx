@@ -29,6 +29,7 @@ import {
   saveLocalStaffAccounts,
 } from '../utils/portalAuthFallback';
 import { setGuardianLiveWatchActive, unlockMobileAudioAndSpeech } from '../utils/gatepassAudio';
+import { STAFF_DESIGNATIONS } from '../utils/staffDesignations';
 
 interface PortalHomeViewProps {
   onLoginSuccess: (session: PortalAuthSession, matchedStudent?: Student | null) => void;
@@ -54,7 +55,7 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
 
   // Official / Employee Sign-Up States
   const [staffNameBn, setStaffNameBn] = useState('');
-  const [staffDesignationBn, setStaffDesignationBn] = useState('সহকারী শিক্ষক');
+  const [staffDesignationBn, setStaffDesignationBn] = useState('শিক্ষক');
   const [staffPhone, setStaffPhone] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
@@ -78,9 +79,9 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
     setPassword('');
     setShowPassword(false);
     if (portal === 'official') {
-      setStaffDesignationBn('অফিস প্রশাসক');
+      setStaffDesignationBn('প্রিন্সিপাল');
     } else if (portal === 'employee') {
-      setStaffDesignationBn('সহকারী শিক্ষক');
+      setStaffDesignationBn('শিক্ষক');
     }
   };
 
@@ -334,23 +335,8 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
     setAuthMode('signin');
     setFeedback(null);
     if (selectedPortal === 'official') {
-      setIdentifier('DL-ADMIN');
+      setIdentifier('DL-PRN-01');
       setPassword('admin123');
-    } else if (selectedPortal === 'employee') {
-      setIdentifier('DL-EMP-01');
-      setPassword('emp123');
-    } else {
-      const sample =
-        students.find((s) => s.classId === 'class_4' && s.roll === 1) ||
-        students[0];
-      if (sample) {
-        setStudentLoginClassId(sample.classId);
-        setIdentifier(getStudentPortalId(sample));
-        setPassword(sample.guardianPin || '1234');
-      } else {
-        setIdentifier('DL-C4-01');
-        setPassword('1234');
-      }
     }
   };
 
@@ -375,13 +361,13 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
   > = {
     official: {
       title: 'অফিসিয়াল সাইন ইন',
-      subtitle: 'অধ্যক্ষ, পরিচালক ও অফিস প্রশাসন — সম্পূর্ণ আর্থিক ও প্রাতিষ্ঠানিক নিয়ন্ত্রণ',
+      subtitle: 'শিক্ষা উদ্যোক্তা, প্রিন্সিপাল ও সহ অধ্যক্ষ — নিজস্ব ড্যাশবোর্ড ও প্রতিষ্ঠান নিয়ন্ত্রণ',
       accentBg: 'bg-[#0F1E3D]',
       accentText: 'text-[#0F1E3D]',
       buttonClass: 'bg-[#0F1E3D] hover:bg-[#172C57] text-white',
-      idLabel: 'অফিসিয়াল আইডি / ই-মেইল / মোবাইল',
-      idPlaceholder: 'যেমন: DL-ADMIN অথবা মোবাইল নম্বর',
-      demoHint: 'ডিফল্ট আইডি: DL-ADMIN · পাসওয়ার্ড: admin123',
+      idLabel: 'অফিসিয়াল আইডি / নাম / মোবাইল',
+      idPlaceholder: 'যেমন: DL-PRN-01, DL-DIR-01, DL-VP-01 অথবা নাম',
+      demoHint: 'প্রিন্সিপাল আইডি: DL-PRN-01 (বা DL-ADMIN) · পাসওয়ার্ড: admin123',
     },
     student: {
       title: 'শিক্ষার্থী ও অভিভাবক সাইন ইন',
@@ -391,17 +377,17 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
       buttonClass: 'bg-emerald-800 hover:bg-emerald-900 text-white',
       idLabel: 'শিক্ষার্থী ইউনিক আইডি / রোল / মোবাইল',
       idPlaceholder: 'যেমন: DL-C4-01 অথবা রোল নম্বর',
-      demoHint: 'নমুনা আইডি: DL-C4-01 (অথবা শ্রেণি ও রোল) · ডিফল্ট পিন: 1234',
+      demoHint: 'স্কুল অফিস থেকে প্রদত্ত নিজস্ব আইডি ও গোপন পিন দিয়ে প্রবেশ করুন · লগইন করলে ফোন এই ড্যাশবোর্ডে লক হবে',
     },
     employee: {
       title: 'এমপ্লয়ী ও শিক্ষক সাইন ইন',
-      subtitle: 'শিক্ষক হাজিরা, ক্লাস উপস্থিতি, মার্ক এন্ট্রি, নোট, সিলেবাস ও গেট স্ক্যানার',
+      subtitle: 'কর্মঘণ্টা, ওভারটাইম, ছুটি, অ্যাবসেন্ট, সম্ভাব্য বেতন ও নিজস্ব কার্যক্রম',
       accentBg: 'bg-teal-900',
       accentText: 'text-teal-900',
       buttonClass: 'bg-teal-800 hover:bg-teal-900 text-white',
-      idLabel: 'এমপ্লয়ী আইডি / মোবাইল / ই-মেইল',
-      idPlaceholder: 'যেমন: DL-EMP-01 অথবা মোবাইল নম্বর',
-      demoHint: 'ডিফল্ট আইডি: DL-EMP-01 · পাসওয়ার্ড: emp123',
+      idLabel: 'এমপ্লয়ী আইডি / নাম / মোবাইল',
+      idPlaceholder: 'যেমন: DL-TCH-01, DL-ACC-01, DL-DPT-01, DL-NG-01',
+      demoHint: 'দাপ্তরিকভাবে নির্ধারিত নিজস্ব এমপ্লয়ী আইডি ও পাসওয়ার্ড দিয়ে প্রবেশ করুন · লগইন করলে ফোন ড্যাশবোর্ডে লক হবে',
     },
   };
 
@@ -684,16 +670,18 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                       <ArrowRight className="w-4 h-4" />
                     </button>
 
-                    {/* Helpful Starter Info & 1-Click Test Autofill */}
+                    {/* Helpful Starter Info (Auto-fill only for Official demo) */}
                     <div className="pt-2 border-t border-stone-100 flex items-center justify-between gap-2 text-[11px] text-stone-500">
                       <span>{activeMeta.demoHint}</span>
-                      <button
-                        type="button"
-                        onClick={fillQuickDemo}
-                        className="text-[#0F1E3D] font-bold hover:underline whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        অটো-ফিল
-                      </button>
+                      {selectedPortal === 'official' && (
+                        <button
+                          type="button"
+                          onClick={fillQuickDemo}
+                          className="text-[#0F1E3D] font-bold hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          অটো-ফিল
+                        </button>
+                      )}
                     </div>
                   </form>
                 )}
@@ -725,21 +713,15 @@ export const PortalHomeView: React.FC<PortalHomeViewProps> = ({
                           onChange={(e) => setStaffDesignationBn(e.target.value)}
                           className="w-full px-3 py-2 rounded-xl border border-stone-300 text-sm bg-white"
                         >
-                          {selectedPortal === 'official' ? (
-                            <>
-                              <option value="প্রধান শিক্ষক">প্রধান শিক্ষক</option>
-                              <option value="পরিচালক">পরিচালক</option>
-                              <option value="অফিস প্রশাসক">অফিস প্রশাসক</option>
-                              <option value="হিসাব রক্ষক">হিসাব রক্ষক</option>
-                            </>
-                          ) : (
-                            <>
-                              <option value="সহকারী শিক্ষক">সহকারী শিক্ষক</option>
-                              <option value="শ্রেণি শিক্ষক">শ্রেণি শিক্ষক</option>
-                              <option value="গেট সিকিউরিটি">গেট সিকিউরিটি</option>
-                              <option value="অফিস সহকারী">অফিস সহকারী</option>
-                            </>
-                          )}
+                          {STAFF_DESIGNATIONS.filter((d) =>
+                            selectedPortal === 'official'
+                              ? d.defaultRole === 'official'
+                              : d.defaultRole === 'employee'
+                          ).map((d) => (
+                            <option key={d.key} value={d.labelBn}>
+                              {toBengaliNumber(d.order)}। {d.labelBn}
+                            </option>
+                          ))}
                         </select>
                       </div>
 

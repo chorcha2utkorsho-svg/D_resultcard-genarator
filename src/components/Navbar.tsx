@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   GraduationCap,
   FileCheck2,
@@ -30,13 +30,15 @@ import {
   QrCode,
   Cloud,
   CloudOff,
-  Unlock,
+  Lock,
   Library,
+  Timer,
 } from 'lucide-react';
 import { useSchool } from '../context/SchoolContext';
 import { PortalAuthSession } from '../types';
 import { SchoolLogo } from './SchoolLogo';
 import { PWAInstallButton } from './PWAInstallButton';
+import { resolveStaffCategoryKey } from '../utils/staffDesignations';
 
 interface NavbarProps {
   session: PortalAuthSession;
@@ -45,7 +47,8 @@ interface NavbarProps {
   onOpenSettings: () => void;
   onLogout: () => void;
   isDeviceLocked?: boolean;
-  onUnlockDevice?: () => void;
+  alwaysLockDevices?: boolean;
+  onAdminUnlockDevice?: (adminPin: string) => Promise<boolean>;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -55,7 +58,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSettings,
   onLogout,
   isDeviceLocked = false,
-  onUnlockDevice,
+  alwaysLockDevices = true,
+  onAdminUnlockDevice,
 }) => {
   const {
     schoolInfo,
@@ -71,10 +75,38 @@ export const Navbar: React.FC<NavbarProps> = ({
   } = useSchool();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
-  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const [showOfficeUnlockModal, setShowOfficeUnlockModal] = useState(false);
+  const [officeUnlockPin, setOfficeUnlockPin] = useState('');
+  const [officeUnlockError, setOfficeUnlockError] = useState<string | null>(null);
+  const [isVerifyingUnlock, setIsVerifyingUnlock] = useState(false);
+  const tapStateRef = useRef<{ count: number; timer: ReturnType<typeof setTimeout> | null }>({
+    count: 0,
+    timer: null,
+  });
+
+  const handleLockedIndicatorTap = () => {
+    if (!onAdminUnlockDevice) return;
+    if (tapStateRef.current.timer) {
+      clearTimeout(tapStateRef.current.timer);
+    }
+    tapStateRef.current.count += 1;
+    if (tapStateRef.current.count >= 5) {
+      tapStateRef.current.count = 0;
+      tapStateRef.current.timer = null;
+      setOfficeUnlockPin('');
+      setOfficeUnlockError(null);
+      setShowOfficeUnlockModal(true);
+      return;
+    }
+    tapStateRef.current.timer = setTimeout(() => {
+      tapStateRef.current.count = 0;
+      tapStateRef.current.timer = null;
+    }, 3000);
+  };
 
   const officialNavItems = [
     { id: 'dashboard', label: 'অফিসিয়াল ড্যাশবোর্ড', icon: GraduationCap },
+    { id: 'my_dashboard', label: 'আমার ড্যাশবোর্ড ও বেতন', icon: Timer },
     { id: 'daily_report', label: 'দৈনিক আদায় রিপোর্ট', icon: Receipt },
     { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
     { id: 'defaulters', label: 'খেলাপি তালিকা', icon: ShieldAlert },
@@ -97,17 +129,43 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
   ];
 
-  const employeeNavItems = [
-    { id: 'dashboard', label: 'এমপ্লয়ী ড্যাশবোর্ড', icon: Briefcase },
-    { id: 'attendance', label: 'শিক্ষার্থী হাজিরা', icon: CalendarCheck },
-    { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
-    { id: 'employee_scanner', label: 'গেটপাস স্ক্যানার', icon: QrCode },
-    { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
-    { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
-    { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
-    { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
-    { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
-  ];
+  const employeeCategoryKey = resolveStaffCategoryKey(
+    {
+      categoryKey: session.categoryKey,
+      designationBn: session.designationBn || session.subLabel,
+      role: session.role === 'official' ? 'official' : 'employee',
+    },
+    session.designationBn || session.subLabel
+  );
+
+  const employeeNavItems =
+    employeeCategoryKey === 'accountant_clerk'
+      ? [
+          { id: 'dashboard', label: 'একাউন্টস ড্যাশবোর্ড ও বেতন', icon: Briefcase },
+          { id: 'fees', label: 'বকেয়া ও ফি আদায়', icon: CreditCard },
+          { id: 'daily_report', label: 'দৈনিক আদায় রিপোর্ট', icon: Receipt },
+          { id: 'defaulters', label: 'খেলাপি তালিকা', icon: ShieldAlert },
+          { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+        ]
+      : employeeCategoryKey === 'office_assistant' ||
+        employeeCategoryKey === 'ayah' ||
+        employeeCategoryKey === 'night_guard'
+      ? [
+          { id: 'dashboard', label: 'আমার ড্যাশবোর্ড ও বেতন', icon: Briefcase },
+          { id: 'employee_scanner', label: 'গেটপাস স্ক্যানার', icon: QrCode },
+          { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+        ]
+      : [
+          { id: 'dashboard', label: 'শিক্ষক ড্যাশবোর্ড ও বেতন', icon: Briefcase },
+          { id: 'attendance', label: 'শিক্ষার্থী হাজিরা', icon: CalendarCheck },
+          { id: 'marks_entry', label: 'মার্ক এন্ট্রি', icon: FileCheck2 },
+          { id: 'employee_scanner', label: 'গেটপাস স্ক্যানার', icon: QrCode },
+          { id: 'digital_library', label: 'ডিজিটাল লাইব্রেরি', icon: Library },
+          { id: 'syllabus', label: 'সিলেবাস', icon: BookOpen },
+          { id: 'question_papers', label: 'প্রশ্নপত্র', icon: HelpCircle },
+          { id: 'notes', label: 'ক্লাস নোট', icon: FileText },
+          { id: 'calendar', label: 'একাডেমিক ক্যালেন্ডার', icon: CalendarDays },
+        ];
 
   const studentNavItems = [
     { id: 'dashboard', label: 'আমার ড্যাশবোর্ড ও গেটপাস', icon: User },
@@ -234,16 +292,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               </>
             )}
 
-            {isDeviceLocked && onUnlockDevice ? (
+            {isDeviceLocked ? (
               <button
                 type="button"
-                onClick={() => setShowUnlockModal(true)}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition shadow-xs cursor-pointer whitespace-nowrap"
+                onClick={handleLockedIndicatorTap}
+                className="inline-flex items-center px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-white/10 text-slate-200 border border-white/15 select-none whitespace-nowrap"
               >
-                <Unlock className="w-3.5 h-3.5 mr-1.5" />
-                লক সরান / অন্য শিক্ষার্থী
+                <Lock className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+                লক্ড ড্যাশবোর্ড
               </button>
-            ) : !isDeviceLocked ? (
+            ) : (
               <button
                 onClick={onLogout}
                 className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600/90 hover:bg-rose-600 text-white transition shadow-xs cursor-pointer whitespace-nowrap"
@@ -251,7 +309,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <LogOut className="w-3.5 h-3.5 mr-1.5" />
                 সাইন আউট
               </button>
-            ) : null}
+            )}
           </div>
 
           {/* Mobile menu button */}
@@ -266,17 +324,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <Settings className="w-5 h-5" />
               </button>
             )}
-            {isDeviceLocked && onUnlockDevice ? (
+            {isDeviceLocked ? (
               <button
                 type="button"
-                onClick={() => setShowUnlockModal(true)}
-                className="px-2.5 py-1.5 rounded-lg bg-amber-400 text-slate-950 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                title="লক সরান / অন্য শিক্ষার্থী"
+                onClick={handleLockedIndicatorTap}
+                className="px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/15 text-slate-200 text-[11px] font-medium flex items-center gap-1 select-none"
               >
-                <Unlock className="w-3.5 h-3.5" />
-                <span>আনলক</span>
+                <Lock className="w-3.5 h-3.5 text-amber-300" />
+                <span>লক্ড</span>
               </button>
-            ) : !isDeviceLocked ? (
+            ) : (
               <button
                 onClick={onLogout}
                 className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1"
@@ -285,7 +342,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">সাইন আউট</span>
               </button>
-            ) : null}
+            )}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 focus:outline-none"
@@ -413,19 +470,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               </>
             )}
-            {isDeviceLocked && onUnlockDevice ? (
+            {isDeviceLocked ? (
               <button
                 type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setShowUnlockModal(true);
-                }}
-                className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-bold bg-amber-400 text-slate-950 cursor-pointer"
+                onClick={handleLockedIndicatorTap}
+                className="flex-1 inline-flex items-center justify-center px-3 py-2 rounded-lg text-[11px] font-medium bg-white/10 border border-white/15 text-slate-200 select-none"
               >
-                <Unlock className="w-3.5 h-3.5 mr-1" />
-                লক সরান / অন্য শিক্ষার্থী
+                <Lock className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+                লক্ড ড্যাশবোর্ড · অফিসিয়াল নিয়ন্ত্রিত
               </button>
-            ) : !isDeviceLocked ? (
+            ) : (
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);
@@ -436,75 +490,111 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <LogOut className="w-3.5 h-3.5 mr-1" />
                 সাইন আউট
               </button>
-            ) : null}
+            )}
           </div>
+          {!alwaysLockDevices && (
+            <div className="text-[11px] text-amber-300/90 text-center pt-1">
+              সাময়িক আনলক সময়সূচি সক্রিয় রয়েছে
+            </div>
+          )}
         </div>
       )}
 
-      {/* Device Unlock & Switch Student Modal */}
-      {showUnlockModal && onUnlockDevice && (
+      {/* Hidden In-Person Principal/Entrepreneur Unlock Verification Modal (5 taps on Locked badge) */}
+      {showOfficeUnlockModal && onAdminUnlockDevice && (
         <div
-          className="fixed inset-0 z-[9999] bg-slate-950/75 flex items-center justify-center p-4"
-          onClick={() => setShowUnlockModal(false)}
+          className="fixed inset-0 z-[9999] bg-slate-950/80 flex items-center justify-center p-4"
+          onClick={() => setShowOfficeUnlockModal(false)}
         >
           <div
             className="bg-white text-slate-900 rounded-2xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+            <div className="bg-[#0F1E3D] text-white px-5 py-4 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-amber-400 text-slate-950">
-                  <Unlock className="w-4 h-4" />
+                  <ShieldCheck className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="text-sm sm:text-base font-bold font-serif">
-                    ডিভাইস লক সরান ও অন্য শিক্ষার্থীতে যান
+                    অফিস প্রিন্সিপাল আনলক যাচাই
                   </h3>
-                  <p className="text-[11px] text-slate-300">{session.displayName}</p>
+                  <p className="text-[11px] text-slate-300">
+                    {session.displayName} ({session.subLabel})
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowUnlockModal(false)}
+                onClick={() => setShowOfficeUnlockModal(false)}
                 className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-5 space-y-4 text-xs sm:text-sm">
-              <p className="text-slate-700 leading-relaxed">
-                বর্তমান শিক্ষার্থীর (<strong>{session.displayName}</strong>) স্থায়ী ডিভাইস লক সরিয়ে দিলে আপনি সরাসরি পোর্টাল সাইন-ইন স্ক্রিনে চলে যাবেন এবং অন্য যেকোনো শিক্ষার্থী, শিক্ষক বা অ্যাডমিন অ্যাকাউন্টে প্রবেশ করতে পারবেন।
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setOfficeUnlockError(null);
+                setIsVerifyingUnlock(true);
+                try {
+                  const ok = await onAdminUnlockDevice(officeUnlockPin.trim());
+                  if (ok) {
+                    setShowOfficeUnlockModal(false);
+                    setOfficeUnlockPin('');
+                  } else {
+                    setOfficeUnlockError('অফিস প্রিন্সিপাল বা শিক্ষা উদ্যোক্তার পাসওয়ার্ড সঠিক নয়!');
+                  }
+                } finally {
+                  setIsVerifyingUnlock(false);
+                }
+              }}
+              className="p-5 space-y-4 text-xs sm:text-sm"
+            >
+              <p className="text-slate-600 leading-relaxed">
+                এই স্মার্টফোনটি বর্তমানে <strong>{session.displayName}</strong>-এর ড্যাশবোর্ডে লক করা আছে। আনলক করতে শুধুমাত্র প্রিন্সিপাল অথবা শিক্ষা উদ্যোক্তার দাপ্তরিক পাসওয়ার্ড দিন।
               </p>
 
-              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 space-y-1.5">
-                <div className="font-bold">স্মার্টফোনের হোম স্ক্রিনে আগে থেকেই আইকন যুক্ত থাকলে:</div>
-                <p className="leading-relaxed">
-                  হোম স্ক্রিনে থাকা পুরনো অ্যাপ আইকনটির ওপর কিছুক্ষণ চেপে ধরে <strong>Uninstall / Remove</strong> করুন। তারপর নতুন শিক্ষার্থীতে সাইন ইন করে পুনরায় <strong>Install App</strong> চাপলে নতুন শিক্ষার্থীর ছবি ও নামসহ অ্যাপ আইকন সেট হয়ে যাবে।
-                </p>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  প্রিন্সিপাল / শিক্ষা উদ্যোক্তার পাসওয়ার্ড
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  value={officeUnlockPin}
+                  onChange={(e) => setOfficeUnlockPin(e.target.value)}
+                  placeholder="অফিস পাসওয়ার্ড লিখুন"
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0F1E3D]"
+                />
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              {officeUnlockError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-800">
+                  {officeUnlockError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
                 <button
-                  type="button"
-                  onClick={() => {
-                    setShowUnlockModal(false);
-                    onUnlockDevice();
-                  }}
-                  className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  type="submit"
+                  disabled={isVerifyingUnlock}
+                  className="flex-1 py-2.5 px-4 bg-[#0F1E3D] hover:bg-[#172C57] text-white text-xs sm:text-sm font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
                 >
-                  <Unlock className="w-4 h-4" />
-                  <span>হ্যাঁ, লক সরান ও নতুন সাইন-ইন করুন</span>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>{isVerifyingUnlock ? 'যাচাই হচ্ছে...' : 'যাচাই করে আনলক করুন'}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowUnlockModal(false)}
+                  onClick={() => setShowOfficeUnlockModal(false)}
                   className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer"
                 >
                   বাতিল
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
       )}

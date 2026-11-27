@@ -28,6 +28,7 @@ export const DEFAULT_SCHOOL_INFO: SchoolInfo = {
     breakTimeBn: 'দুপুর একটা দশ মিনিটে',
     dismissalTimeBn: 'বিকাল চারটায়',
   },
+  alwaysLockDevices: true,
 };
 
 export const DEFAULT_EXAM_TERMS: ExamTerm[] = [

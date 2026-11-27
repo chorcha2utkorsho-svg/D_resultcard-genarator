@@ -19,7 +19,18 @@ import {
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { LibraryMaterial, SchoolInfo, SecurityGatepassLog, Student } from '../types';
+import {
+  DailyAttendanceRecord,
+  LibraryMaterial,
+  SchoolInfo,
+  SecurityGatepassLog,
+  StaffAccount,
+  StaffActivityLog,
+  StaffAttendanceRecord,
+  StaffCategoryKey,
+  StaffLeaveRequest,
+  Student,
+} from '../types';
 
 export const DEFAULT_SCHOOL_ID = 'dlikon_academy';
 export const BOOTSTRAP_ADMIN_EMAIL = 'chorcho2utkosho@gmail.com';
@@ -326,11 +337,31 @@ export async function ensureSchoolDocument(
         address: clampStr(schoolInfo.address || '', 300),
         phone: clampStr(schoolInfo.phone || '', 50),
         email: clampStr(schoolInfo.email || '', 150),
+        alwaysLockDevices: schoolInfo.alwaysLockDevices !== false,
         ownerUid: safeId(user.uid),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncSchoolLockPolicyToFirestore(
+  alwaysLockDevices: boolean,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified) return;
+  await ensureSchoolDocument(user, { ...schoolInfo, alwaysLockDevices });
+  const path = `schools/${DEFAULT_SCHOOL_ID}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID);
+  try {
+    await updateDoc(ref, {
+      alwaysLockDevices: Boolean(alwaysLockDevices),
+      updatedAt: serverTimestamp(),
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -510,6 +541,12 @@ function buildStudentFirestorePayload(
   if (student.guardianPhone) payload.guardianPhone = clampStr(student.guardianPhone, 32);
   if (student.guardianName) payload.guardianNameBn = clampStr(student.guardianName, 160);
   if (student.guardianPin) payload.guardianPin = clampStr(student.guardianPin, 32);
+  payload.unlockEpoch =
+    typeof student.unlockEpoch === 'number' && Number.isFinite(student.unlockEpoch)
+      ? Math.max(0, Math.floor(student.unlockEpoch))
+      : typeof existingData?.unlockEpoch === 'number'
+      ? Math.max(0, Math.floor(existingData.unlockEpoch))
+      : 0;
   const resolvedGuardianUid =
     typeof student.guardianUid === 'string' && student.guardianUid.trim()
       ? safeId(student.guardianUid.trim())
@@ -672,6 +709,7 @@ export async function pullStudentsFromFirestore(
         guardianPhone: data.guardianPhone,
         guardianName: data.guardianNameBn,
         guardianPin: data.guardianPin,
+        unlockEpoch: typeof data.unlockEpoch === 'number' ? data.unlockEpoch : 0,
         ...(typeof data.guardianUid === 'string' && data.guardianUid ? { guardianUid: data.guardianUid } : {}),
         avatarUrl: typeof data.avatarUrl === 'string' ? data.avatarUrl : undefined,
         fatherAvatarUrl: typeof data.fatherAvatarUrl === 'string' ? data.fatherAvatarUrl : undefined,
@@ -1005,3 +1043,861 @@ export async function pullLibraryMaterialsFromFirestore(
   }
 }
 
+function mapStaffAttendanceDoc(d: any): StaffAttendanceRecord {
+  const data = d.data();
+  const fallbackServerTs =
+    typeof data.serverTimestamp === 'number'
+      ? data.serverTimestamp
+      : data.updatedAt && typeof data.updatedAt.toMillis === 'function'
+      ? data.updatedAt.toMillis()
+      : data.createdAt && typeof data.createdAt.toMillis === 'function'
+      ? data.createdAt.toMillis()
+      : undefined;
+  return {
+    id: data.id || d.id,
+    staffId: data.staffId,
+    ...(typeof data.staffCode === 'string' && data.staffCode ? { staffCode: data.staffCode } : {}),
+    staffNameBn: data.staffNameBn || 'এমপ্লয়ী',
+    designationBn: data.designationBn || 'শিক্ষক',
+    date: data.date,
+    checkInTime: data.checkInTime || '',
+    ...(typeof data.checkInMs === 'number' ? { checkInMs: data.checkInMs } : {}),
+    ...(typeof data.checkOutTime === 'string' && data.checkOutTime ? { checkOutTime: data.checkOutTime } : {}),
+    ...(typeof data.checkOutMs === 'number' ? { checkOutMs: data.checkOutMs } : {}),
+    ...(typeof data.workedMinutes === 'number' ? { workedMinutes: data.workedMinutes } : {}),
+    ...(typeof data.workedDurationBn === 'string' && data.workedDurationBn ? { workedDurationBn: data.workedDurationBn } : {}),
+    ...(data.action === 'checkout' || data.action === 'checkin' ? { action: data.action } : {}),
+    status: data.status === 'late' || data.status === 'leave' ? data.status : 'present',
+    ...(typeof data.note === 'string' && data.note ? { note: data.note } : {}),
+    serverTimestamp: fallbackServerTs,
+  };
+}
+
+export async function pushStaffAttendanceToFirestore(
+  record: StaffAttendanceRecord,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified) return;
+
+  const cleanAttId = safeId(record.id);
+  const cleanStaffId = safeId(record.staffId);
+  const cleanUid = safeId(user.uid);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffAttendance/${cleanAttId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'staffAttendance', cleanAttId);
+
+  let schoolOwnerUid = cleanUid;
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+    if (schoolSnap.exists() && typeof schoolSnap.data()?.ownerUid === 'string') {
+      schoolOwnerUid = safeId(schoolSnap.data()!.ownerUid);
+    }
+  } catch {
+    // Non-fatal; proceed with cleanUid
+  }
+
+  let existingSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+  try {
+    existingSnap = await getDocFromServer(ref);
+  } catch {
+    try {
+      existingSnap = await getDoc(ref);
+    } catch {
+      existingSnap = null;
+    }
+  }
+
+  const nowTs = typeof record.serverTimestamp === 'number' ? record.serverTimestamp : Date.now();
+
+  try {
+    if (existingSnap?.exists()) {
+      const updatePayload: Record<string, any> = {
+        status: record.status === 'late' || record.status === 'leave' ? record.status : 'present',
+        action: record.action === 'checkout' ? 'checkout' : 'checkin',
+        serverTimestamp: nowTs,
+        updatedAt: serverTimestamp(),
+      };
+      if (record.designationBn) updatePayload.designationBn = clampStr(record.designationBn, 120);
+      if (record.checkInTime) updatePayload.checkInTime = clampStr(record.checkInTime, 40);
+      if (typeof record.checkInMs === 'number' && record.checkInMs >= 0) {
+        updatePayload.checkInMs = record.checkInMs;
+      }
+      if (record.checkOutTime) updatePayload.checkOutTime = clampStr(record.checkOutTime, 40);
+      if (typeof record.checkOutMs === 'number' && record.checkOutMs >= 0) {
+        updatePayload.checkOutMs = record.checkOutMs;
+      }
+      if (typeof record.workedMinutes === 'number' && record.workedMinutes >= 0) {
+        updatePayload.workedMinutes = Math.min(10080, Math.round(record.workedMinutes));
+      }
+      if (record.workedDurationBn) {
+        updatePayload.workedDurationBn = clampStr(record.workedDurationBn, 80);
+      }
+      if (typeof record.note === 'string') updatePayload.note = clampStr(record.note, 300);
+      await updateDoc(ref, updatePayload);
+    } else {
+      if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+        await ensureSchoolDocument(user, schoolInfo).catch(() => {});
+      }
+      const createPayload: Record<string, any> = {
+        id: cleanAttId,
+        staffId: cleanStaffId,
+        staffNameBn: clampStr(record.staffNameBn || 'এমপ্লয়ী', 160),
+        designationBn: clampStr(record.designationBn || 'শিক্ষক', 120),
+        date: clampStr(record.date, 24),
+        checkInTime: clampStr(record.checkInTime || '', 40),
+        action: record.action === 'checkout' ? 'checkout' : 'checkin',
+        status: record.status === 'late' || record.status === 'leave' ? record.status : 'present',
+        serverTimestamp: nowTs,
+        ownerUid: schoolOwnerUid,
+        staffUid: cleanUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      if (record.staffCode) createPayload.staffCode = clampStr(record.staffCode, 40);
+      if (typeof record.checkInMs === 'number' && record.checkInMs >= 0) {
+        createPayload.checkInMs = record.checkInMs;
+      }
+      if (record.checkOutTime) createPayload.checkOutTime = clampStr(record.checkOutTime, 40);
+      if (typeof record.checkOutMs === 'number' && record.checkOutMs >= 0) {
+        createPayload.checkOutMs = record.checkOutMs;
+      }
+      if (typeof record.workedMinutes === 'number' && record.workedMinutes >= 0) {
+        createPayload.workedMinutes = Math.min(10080, Math.round(record.workedMinutes));
+      }
+      if (record.workedDurationBn) {
+        createPayload.workedDurationBn = clampStr(record.workedDurationBn, 80);
+      }
+      if (record.note) createPayload.note = clampStr(record.note, 300);
+      await setDoc(ref, createPayload);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeCloudStaffAttendance(
+  user: User,
+  onRecords: (records: StaffAttendanceRecord[], isInitialSnapshot: boolean) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!user.emailVerified) {
+    return () => {};
+  }
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffAttendance`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffAttendance');
+
+  const reportSnapshotError = (error: unknown) => {
+    try {
+      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (wrappedErr: any) {
+      onError?.(wrappedErr instanceof Error ? wrappedErr : new Error(String(error)));
+    }
+  };
+
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  if (isAdminUser) {
+    let isFirst = true;
+    return onSnapshot(
+      query(colRef, limit(200)),
+      (snapshot) => {
+        const list = snapshot.docs
+          .map(mapStaffAttendanceDoc)
+          .sort((a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0));
+        onRecords(list, isFirst);
+        isFirst = false;
+      },
+      reportSnapshotError
+    );
+  }
+
+  const uid = safeId(user.uid);
+  const ownerMap = new Map<string, StaffAttendanceRecord>();
+  const staffMap = new Map<string, StaffAttendanceRecord>();
+  let isFirst = true;
+
+  const emitMerged = () => {
+    const merged = new Map<string, StaffAttendanceRecord>();
+    for (const [k, v] of ownerMap.entries()) merged.set(k, v);
+    for (const [k, v] of staffMap.entries()) merged.set(k, v);
+    const list = Array.from(merged.values()).sort(
+      (a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0)
+    );
+    onRecords(list, isFirst);
+    isFirst = false;
+  };
+
+  const unsubOwner = onSnapshot(
+    query(colRef, where('ownerUid', '==', uid), limit(200)),
+    (snapshot) => {
+      ownerMap.clear();
+      for (const d of snapshot.docs) {
+        const rec = mapStaffAttendanceDoc(d);
+        ownerMap.set(rec.id, rec);
+      }
+      emitMerged();
+    },
+    reportSnapshotError
+  );
+
+  const unsubStaff = onSnapshot(
+    query(colRef, where('staffUid', '==', uid), limit(200)),
+    (snapshot) => {
+      staffMap.clear();
+      for (const d of snapshot.docs) {
+        const rec = mapStaffAttendanceDoc(d);
+        staffMap.set(rec.id, rec);
+      }
+      emitMerged();
+    },
+    reportSnapshotError
+  );
+
+  return () => {
+    unsubOwner();
+    unsubStaff();
+  };
+}
+
+export async function pullLatestCloudStaffAttendance(
+  user: User
+): Promise<StaffAttendanceRecord[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffAttendance`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffAttendance');
+
+  const runServerFirst = async (q: ReturnType<typeof query>) => {
+    try {
+      return await getDocsFromServer(q);
+    } catch {
+      return await getDocs(q);
+    }
+  };
+
+  try {
+    if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+      const snap = await runServerFirst(query(colRef, limit(200)));
+      return snap.docs
+        .map(mapStaffAttendanceDoc)
+        .sort((a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0));
+    }
+
+    const uid = safeId(user.uid);
+    const merged = new Map<string, StaffAttendanceRecord>();
+    const [ownerSnap, staffSnap] = await Promise.all([
+      runServerFirst(query(colRef, where('ownerUid', '==', uid), limit(200))),
+      runServerFirst(query(colRef, where('staffUid', '==', uid), limit(200))),
+    ]);
+    for (const snap of [ownerSnap, staffSnap]) {
+      for (const d of snap.docs) {
+        const rec = mapStaffAttendanceDoc(d);
+        if (rec.id) merged.set(rec.id, rec);
+      }
+    }
+    return Array.from(merged.values()).sort(
+      (a, b) => (b.serverTimestamp || 0) - (a.serverTimestamp || 0)
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function syncStaffAccountToFirestore(
+  staff: StaffAccount,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified) return;
+  await ensureSchoolDocument(user, schoolInfo);
+
+  const cleanStaffId = safeId(staff.id);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffAccounts/${cleanStaffId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'staffAccounts', cleanStaffId);
+
+  try {
+    const existingSnap = await getDoc(ref);
+    const existingData = existingSnap.exists() ? existingSnap.data() : undefined;
+    const payload: Record<string, any> = {
+      id: cleanStaffId,
+      staffCode: clampStr(staff.staffCode, 40),
+      role: staff.role === 'official' ? 'official' : 'employee',
+      nameBn: clampStr(staff.nameBn, 160),
+      designationBn: clampStr(staff.designationBn || 'শিক্ষক', 120),
+      phone: clampStr(staff.phone || '01700000000', 32),
+      status: staff.status === 'pending' ? 'pending' : 'active',
+      unlockEpoch:
+        typeof staff.unlockEpoch === 'number' && Number.isFinite(staff.unlockEpoch)
+          ? Math.max(0, Math.floor(staff.unlockEpoch))
+          : typeof existingData?.unlockEpoch === 'number'
+          ? Math.max(0, Math.floor(existingData.unlockEpoch))
+          : 0,
+      ownerUid: existingData?.ownerUid ? safeId(existingData.ownerUid) : safeId(user.uid),
+      createdAt: existingData?.createdAt || serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    if (staff.categoryKey) {
+      payload.categoryKey = clampStr(staff.categoryKey, 40);
+    }
+    if (typeof staff.baseMonthlySalary === 'number' && staff.baseMonthlySalary >= 0) {
+      payload.baseMonthlySalary = Math.min(10000000, Math.round(staff.baseMonthlySalary));
+    }
+    if (typeof staff.dailyShiftHours === 'number' && staff.dailyShiftHours >= 1) {
+      payload.dailyShiftHours = Math.min(24, Math.max(1, Number(staff.dailyShiftHours)));
+    }
+    if (typeof staff.overtimeHourlyRate === 'number' && staff.overtimeHourlyRate >= 0) {
+      payload.overtimeHourlyRate = Math.min(100000, Math.round(staff.overtimeHourlyRate));
+    }
+    if (existingData?.staffUid) {
+      payload.staffUid = safeId(existingData.staffUid);
+    }
+    if (existingSnap.exists()) {
+      await updateDoc(ref, payload);
+    } else {
+      await setDoc(ref, payload);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function pullStaffAccountsFromFirestore(
+  user: User
+): Promise<StaffAccount[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffAccounts`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffAccounts');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  const q = isAdminUser
+    ? query(colRef, limit(200))
+    : query(colRef, where('ownerUid', '==', safeId(user.uid)), limit(200));
+
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: data.id || d.id,
+        staffCode: data.staffCode || '',
+        role: data.role === 'official' ? 'official' : 'employee',
+        categoryKey: typeof data.categoryKey === 'string' ? (data.categoryKey as StaffCategoryKey) : undefined,
+        nameBn: data.nameBn || 'শিক্ষক',
+        designationBn: data.designationBn || 'শিক্ষক',
+        baseMonthlySalary: typeof data.baseMonthlySalary === 'number' ? data.baseMonthlySalary : undefined,
+        dailyShiftHours: typeof data.dailyShiftHours === 'number' ? data.dailyShiftHours : undefined,
+        overtimeHourlyRate: typeof data.overtimeHourlyRate === 'number' ? data.overtimeHourlyRate : undefined,
+        phone: data.phone || '',
+        password: '',
+        status: data.status === 'pending' ? 'pending' : 'active',
+        unlockEpoch: typeof data.unlockEpoch === 'number' ? data.unlockEpoch : 0,
+        createdAt:
+          data.createdAt && typeof data.createdAt.toDate === 'function'
+            ? data.createdAt.toDate().toISOString()
+            : new Date().toISOString(),
+      };
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+function mapDailyAttendanceDoc(d: any): DailyAttendanceRecord {
+  const data = d.data();
+  let parsedRecords: DailyAttendanceRecord['records'] = {};
+  if (typeof data.recordsJson === 'string' && data.recordsJson.trim()) {
+    try {
+      const obj = JSON.parse(data.recordsJson);
+      if (obj && typeof obj === 'object') {
+        parsedRecords = obj;
+      }
+    } catch {
+      parsedRecords = {};
+    }
+  }
+  const updatedAtIso =
+    data.updatedAt && typeof data.updatedAt.toDate === 'function'
+      ? data.updatedAt.toDate().toISOString()
+      : new Date().toISOString();
+  return {
+    id: data.id || d.id,
+    date: data.date || '',
+    academicYear: data.academicYear || '২০২৬',
+    classId: data.classId || '',
+    section: data.section || 'ক',
+    records: parsedRecords,
+    updatedAt: updatedAtIso,
+  };
+}
+
+export async function pushDailyAttendanceToFirestore(
+  record: DailyAttendanceRecord,
+  totalStudentsInClass: number,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified || !record?.id) return;
+
+  const cleanAttId = safeId(record.id);
+  const cleanUid = safeId(user.uid);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/dailyAttendance/${cleanAttId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'dailyAttendance', cleanAttId);
+
+  let schoolOwnerUid = cleanUid;
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+    if (schoolSnap.exists() && typeof schoolSnap.data()?.ownerUid === 'string') {
+      schoolOwnerUid = safeId(schoolSnap.data()!.ownerUid);
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  const entries = Object.values(record.records || {});
+  const presentCount = entries.filter((e) => e?.status === 'present').length;
+  const lateCount = entries.filter((e) => e?.status === 'late').length;
+  const leaveCount = entries.filter((e) => e?.status === 'leave').length;
+  const absentCount = entries.filter((e) => e?.status === 'absent').length;
+  const totalStudents = Math.min(10000, Math.max(totalStudentsInClass || 0, entries.length));
+  const recordsJson = clampStr(JSON.stringify(record.records || {}), 120000) || '{}';
+
+  let existingSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+  try {
+    existingSnap = await getDocFromServer(ref);
+  } catch {
+    try {
+      existingSnap = await getDoc(ref);
+    } catch {
+      existingSnap = null;
+    }
+  }
+
+  try {
+    if (existingSnap?.exists()) {
+      await updateDoc(ref, {
+        academicYear: clampStr(record.academicYear || '২০২৬', 24),
+        section: clampStr(record.section || 'ক', 32),
+        presentCount,
+        absentCount,
+        lateCount,
+        leaveCount,
+        totalStudents,
+        recordsJson,
+        updatedByUid: cleanUid,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+        await ensureSchoolDocument(user, schoolInfo).catch(() => {});
+      }
+      await setDoc(ref, {
+        id: cleanAttId,
+        date: clampStr(record.date, 24),
+        academicYear: clampStr(record.academicYear || '২০২৬', 24),
+        classId: clampStr(record.classId, 64),
+        section: clampStr(record.section || 'ক', 32),
+        presentCount,
+        absentCount,
+        lateCount,
+        leaveCount,
+        totalStudents,
+        recordsJson,
+        ownerUid: schoolOwnerUid,
+        updatedByUid: cleanUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeCloudDailyAttendance(
+  user: User,
+  onRecords: (records: DailyAttendanceRecord[], isInitialSnapshot: boolean) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!user.emailVerified) {
+    return () => {};
+  }
+  const path = `schools/${DEFAULT_SCHOOL_ID}/dailyAttendance`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'dailyAttendance');
+  const reportSnapshotError = (error: unknown) => {
+    try {
+      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (wrappedErr: any) {
+      onError?.(wrappedErr instanceof Error ? wrappedErr : new Error(String(error)));
+    }
+  };
+
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  if (isAdminUser) {
+    let isFirst = true;
+    return onSnapshot(
+      query(colRef, limit(200)),
+      (snapshot) => {
+        const list = snapshot.docs.map(mapDailyAttendanceDoc);
+        onRecords(list, isFirst);
+        isFirst = false;
+      },
+      reportSnapshotError
+    );
+  }
+
+  const uid = safeId(user.uid);
+  let isFirst = true;
+  return onSnapshot(
+    query(colRef, where('ownerUid', '==', uid), limit(200)),
+    (snapshot) => {
+      const list = snapshot.docs.map(mapDailyAttendanceDoc);
+      onRecords(list, isFirst);
+      isFirst = false;
+    },
+    reportSnapshotError
+  );
+}
+
+export async function pullLatestCloudDailyAttendance(
+  user: User
+): Promise<DailyAttendanceRecord[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/dailyAttendance`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'dailyAttendance');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  const q = isAdminUser
+    ? query(colRef, limit(200))
+    : query(colRef, where('ownerUid', '==', safeId(user.uid)), limit(200));
+
+  try {
+    let snap;
+    try {
+      snap = await getDocsFromServer(q);
+    } catch {
+      snap = await getDocs(q);
+    }
+    return snap.docs.map(mapDailyAttendanceDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function pushStaffLeaveToFirestore(
+  leave: StaffLeaveRequest,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified || !leave?.id) return;
+
+  const cleanLeaveId = safeId(leave.id);
+  const cleanUid = safeId(user.uid);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffLeaves/${cleanLeaveId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'staffLeaves', cleanLeaveId);
+
+  let schoolOwnerUid = cleanUid;
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+    if (schoolSnap.exists() && typeof schoolSnap.data()?.ownerUid === 'string') {
+      schoolOwnerUid = safeId(schoolSnap.data()!.ownerUid);
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  let existingSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+  try {
+    existingSnap = await getDocFromServer(ref);
+  } catch {
+    try {
+      existingSnap = await getDoc(ref);
+    } catch {
+      existingSnap = null;
+    }
+  }
+
+  try {
+    if (existingSnap?.exists()) {
+      await updateDoc(ref, {
+        status: leave.status === 'approved' || leave.status === 'rejected' ? leave.status : 'pending',
+        ...(leave.reviewedBy ? { reviewedBy: clampStr(leave.reviewedBy, 160) } : {}),
+        ...(leave.reviewNote ? { reviewNote: clampStr(leave.reviewNote, 500) } : {}),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+        await ensureSchoolDocument(user, schoolInfo).catch(() => {});
+      }
+      await setDoc(ref, {
+        id: cleanLeaveId,
+        staffId: safeId(leave.staffId),
+        ...(leave.staffCode ? { staffCode: clampStr(leave.staffCode, 40) } : {}),
+        staffNameBn: clampStr(leave.staffNameBn || 'এমপ্লয়ী', 160),
+        designationBn: clampStr(leave.designationBn || 'শিক্ষক', 120),
+        startDate: clampStr(leave.startDate, 24),
+        endDate: clampStr(leave.endDate, 24),
+        daysCount: Math.max(1, Math.min(60, Math.round(leave.daysCount || 1))),
+        leaveType: leave.leaveType || 'casual',
+        reason: clampStr(leave.reason || 'ব্যক্তিগত কারণ', 500),
+        status: leave.status === 'approved' || leave.status === 'rejected' ? leave.status : 'pending',
+        ...(leave.reviewedBy ? { reviewedBy: clampStr(leave.reviewedBy, 160) } : {}),
+        ...(leave.reviewNote ? { reviewNote: clampStr(leave.reviewNote, 500) } : {}),
+        ownerUid: schoolOwnerUid,
+        staffUid: cleanUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteStaffLeaveFromFirestore(
+  leaveId: string,
+  user: User
+): Promise<void> {
+  if (!user.emailVerified || !leaveId) return;
+  const cleanLeaveId = safeId(leaveId);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffLeaves/${cleanLeaveId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'staffLeaves', cleanLeaveId);
+  try {
+    await deleteDoc(ref);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+function mapStaffLeaveDoc(d: { id: string; data: () => Record<string, any> }): StaffLeaveRequest {
+  const data = d.data();
+  return {
+    id: data.id || d.id,
+    staffId: data.staffId || '',
+    staffCode: data.staffCode || undefined,
+    staffNameBn: data.staffNameBn || '',
+    designationBn: data.designationBn || 'শিক্ষক',
+    startDate: data.startDate || '',
+    endDate: data.endDate || '',
+    daysCount: Number(data.daysCount) || 1,
+    leaveType: data.leaveType || 'casual',
+    reason: data.reason || '',
+    status: data.status || 'pending',
+    reviewedBy: data.reviewedBy || undefined,
+    reviewNote: data.reviewNote || undefined,
+    createdAt:
+      data.createdAt && typeof data.createdAt.toDate === 'function'
+        ? data.createdAt.toDate().toISOString()
+        : new Date().toISOString(),
+    updatedAt:
+      data.updatedAt && typeof data.updatedAt.toDate === 'function'
+        ? data.updatedAt.toDate().toISOString()
+        : new Date().toISOString(),
+  };
+}
+
+export async function pullStaffLeavesFromFirestore(
+  user: User
+): Promise<StaffLeaveRequest[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffLeaves`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffLeaves');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+
+  try {
+    if (isAdminUser) {
+      const snap = await getDocs(query(colRef, limit(200)));
+      return snap.docs.map(mapStaffLeaveDoc);
+    }
+    const uid = safeId(user.uid);
+    const [ownerSnap, staffSnap] = await Promise.all([
+      getDocs(query(colRef, where('ownerUid', '==', uid), limit(200))),
+      getDocs(query(colRef, where('staffUid', '==', uid), limit(200))),
+    ]);
+    const map = new Map<string, StaffLeaveRequest>();
+    for (const snap of [ownerSnap, staffSnap]) {
+      for (const d of snap.docs) {
+        const mapped = mapStaffLeaveDoc(d);
+        map.set(mapped.id, mapped);
+      }
+    }
+    return Array.from(map.values());
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export function subscribeCloudStaffLeaves(
+  user: User,
+  onLeaves: (leaves: StaffLeaveRequest[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!user.emailVerified) {
+    return () => {};
+  }
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffLeaves`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffLeaves');
+
+  const reportSnapshotError = (error: unknown) => {
+    try {
+      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (wrappedErr: any) {
+      onError?.(wrappedErr instanceof Error ? wrappedErr : new Error(String(error)));
+    }
+  };
+
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+  if (isAdminUser) {
+    return onSnapshot(
+      query(colRef, limit(200)),
+      (snapshot) => {
+        const list = snapshot.docs
+          .map(mapStaffLeaveDoc)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        onLeaves(list);
+      },
+      reportSnapshotError
+    );
+  }
+
+  const uid = safeId(user.uid);
+  const ownerMap = new Map<string, StaffLeaveRequest>();
+  const staffMap = new Map<string, StaffLeaveRequest>();
+
+  const emitMerged = () => {
+    const merged = new Map<string, StaffLeaveRequest>();
+    for (const [k, v] of ownerMap.entries()) merged.set(k, v);
+    for (const [k, v] of staffMap.entries()) merged.set(k, v);
+    const list = Array.from(merged.values()).sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt)
+    );
+    onLeaves(list);
+  };
+
+  const unsubOwner = onSnapshot(
+    query(colRef, where('ownerUid', '==', uid), limit(200)),
+    (snapshot) => {
+      ownerMap.clear();
+      for (const d of snapshot.docs) {
+        const mapped = mapStaffLeaveDoc(d);
+        ownerMap.set(mapped.id, mapped);
+      }
+      emitMerged();
+    },
+    reportSnapshotError
+  );
+
+  const unsubStaff = onSnapshot(
+    query(colRef, where('staffUid', '==', uid), limit(200)),
+    (snapshot) => {
+      staffMap.clear();
+      for (const d of snapshot.docs) {
+        const mapped = mapStaffLeaveDoc(d);
+        staffMap.set(mapped.id, mapped);
+      }
+      emitMerged();
+    },
+    reportSnapshotError
+  );
+
+  return () => {
+    unsubOwner();
+    unsubStaff();
+  };
+}
+
+export async function pushStaffActivityToFirestore(
+  activity: StaffActivityLog,
+  user: User,
+  schoolInfo: SchoolInfo
+): Promise<void> {
+  if (!user.emailVerified || !activity?.id) return;
+
+  const cleanActId = safeId(activity.id);
+  const cleanUid = safeId(user.uid);
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffActivities/${cleanActId}`;
+  const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'staffActivities', cleanActId);
+
+  let schoolOwnerUid = cleanUid;
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schools', DEFAULT_SCHOOL_ID));
+    if (schoolSnap.exists() && typeof schoolSnap.data()?.ownerUid === 'string') {
+      schoolOwnerUid = safeId(schoolSnap.data()!.ownerUid);
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  try {
+    if (user.email === BOOTSTRAP_ADMIN_EMAIL) {
+      await ensureSchoolDocument(user, schoolInfo).catch(() => {});
+    }
+    await setDoc(ref, {
+      id: cleanActId,
+      staffId: safeId(activity.staffId),
+      staffNameBn: clampStr(activity.staffNameBn || 'এমপ্লয়ী', 160),
+      designationBn: clampStr(activity.designationBn || 'শিক্ষক', 120),
+      categoryKey: clampStr(activity.categoryKey || 'teacher', 40),
+      date: clampStr(activity.date, 24),
+      title: clampStr(activity.title, 200),
+      ...(activity.details ? { details: clampStr(activity.details, 1000) } : {}),
+      timestamp: clampStr(activity.timestamp || new Date().toISOString(), 64),
+      ownerUid: schoolOwnerUid,
+      staffUid: cleanUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function pullStaffActivitiesFromFirestore(
+  user: User
+): Promise<StaffActivityLog[]> {
+  if (!user.emailVerified) return [];
+  const path = `schools/${DEFAULT_SCHOOL_ID}/staffActivities`;
+  const colRef = collection(db, 'schools', DEFAULT_SCHOOL_ID, 'staffActivities');
+  const isAdminUser = user.email === BOOTSTRAP_ADMIN_EMAIL;
+
+  try {
+    if (isAdminUser) {
+      const snap = await getDocs(query(colRef, limit(200)));
+      return snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: data.id || d.id,
+          staffId: data.staffId || '',
+          staffNameBn: data.staffNameBn || '',
+          designationBn: data.designationBn || 'শিক্ষক',
+          categoryKey: (data.categoryKey || 'teacher') as StaffCategoryKey,
+          date: data.date || '',
+          title: data.title || '',
+          details: data.details || undefined,
+          timestamp: data.timestamp || new Date().toISOString(),
+        };
+      });
+    }
+    const uid = safeId(user.uid);
+    const [ownerSnap, staffSnap] = await Promise.all([
+      getDocs(query(colRef, where('ownerUid', '==', uid), limit(200))),
+      getDocs(query(colRef, where('staffUid', '==', uid), limit(200))),
+    ]);
+    const map = new Map<string, StaffActivityLog>();
+    for (const snap of [ownerSnap, staffSnap]) {
+      for (const d of snap.docs) {
+        const data = d.data();
+        const id = data.id || d.id;
+        map.set(id, {
+          id,
+          staffId: data.staffId || '',
+          staffNameBn: data.staffNameBn || '',
+          designationBn: data.designationBn || 'শিক্ষক',
+          categoryKey: (data.categoryKey || 'teacher') as StaffCategoryKey,
+          date: data.date || '',
+          title: data.title || '',
+          details: data.details || undefined,
+          timestamp: data.timestamp || new Date().toISOString(),
+        });
+      }
+    }
+    return Array.from(map.values());
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}

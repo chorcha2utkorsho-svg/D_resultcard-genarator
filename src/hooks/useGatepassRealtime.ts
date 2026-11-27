@@ -623,6 +623,7 @@ export function useGatepassRealtime({
     let wsConnected = false;
     let sseConnected = false;
     let pollVerified = false;
+    let staticHostDetected = false;
     let consecutivePollFailures = 0;
     let wsReconnectAttempts = 0;
     let wsLoggedFallbackNote = false;
@@ -854,6 +855,7 @@ export function useGatepassRealtime({
           consecutivePollFailures += 1;
           pollVerified = false;
           if (!wsConnected && !sseConnected && consecutivePollFailures >= 2) {
+            staticHostDetected = true;
             setSyncHealth('static_host');
             appendDiagnosticLogRef.current(
               'POLL',
@@ -1012,6 +1014,12 @@ export function useGatepassRealtime({
         sse.onerror = () => {
           sseConnected = false;
           setSseReadyState('CLOSED');
+          if (sse && sse.readyState === EventSource.CLOSED) {
+            try {
+              sse.close();
+            } catch {}
+            sse = null;
+          }
           if (!sseLoggedWarnNote && !pollVerified) {
             sseLoggedWarnNote = true;
             appendDiagnosticLogRef.current('SSE', 'info', 'HTTP পোলিং চ্যানেলে লাইভ সিঙ্ক সচল আছে');
@@ -1180,10 +1188,19 @@ export function useGatepassRealtime({
     connectWebSocket();
     void pollLatestLogs();
 
-    // Adaptive polling: fast 2.5s whenever WS isn't open (and 8s even with WS open so cloud proxies never drop silent updates)
+    // Adaptive polling: fast 2.5s whenever WS isn't open (and 8s even with WS open);
+    // on static hosts (Vercel), avoid spamming HTML endpoints and run periodic cloud catch-up instead
     let lastPollTick = Date.now();
+    let lastCloudCatchupTick = Date.now();
     pollTimer = setInterval(() => {
       const now = Date.now();
+      if (staticHostDetected) {
+        if (now - lastCloudCatchupTick >= 20000) {
+          lastCloudCatchupTick = now;
+          void pullCloudSecurityLogsNowRef.current();
+        }
+        return;
+      }
       const isPushActive = wsConnected;
       if (!isPushActive || now - lastPollTick >= 8000) {
         lastPollTick = now;
@@ -1194,21 +1211,25 @@ export function useGatepassRealtime({
     const handleWakeUp = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       consecutivePollFailures = 0;
-      void pollLatestLogs();
-      void pullCloudSecurityLogsNowRef.current();
-      if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
-        wsReconnectAttempts = 0;
-        connectWebSocket();
+      if (!staticHostDetected) {
+        void pollLatestLogs();
+        if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
+          wsReconnectAttempts = 0;
+          connectWebSocket();
+        }
       }
+      void pullCloudSecurityLogsNowRef.current();
     };
     const handleOnline = () => {
       consecutivePollFailures = 0;
       wsReconnectAttempts = 0;
-      void pollLatestLogs();
-      void pullCloudSecurityLogsNowRef.current();
-      if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
-        connectWebSocket();
+      if (!staticHostDetected) {
+        void pollLatestLogs();
+        if (!wsConnected && (!ws || ws.readyState === WebSocket.CLOSED)) {
+          connectWebSocket();
+        }
       }
+      void pullCloudSecurityLogsNowRef.current();
     };
     const handleOffline = () => {
       pollVerified = false;

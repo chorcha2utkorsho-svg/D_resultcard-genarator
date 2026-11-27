@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getDocsFromServer,
   onSnapshot,
@@ -149,7 +150,8 @@ export async function authorizeScannerUidInFirestore(
 
 export function subscribeBootstrapGuardianSubscribersMirror(
   user: User,
-  getLocalStudents: () => Student[]
+  getLocalStudents: () => Student[],
+  onError?: (err: Error) => void
 ): Unsubscribe {
   if (!user.emailVerified || user.email !== BOOTSTRAP_ADMIN_EMAIL) {
     return () => {};
@@ -237,8 +239,8 @@ export function subscribeBootstrapGuardianSubscribersMirror(
         }
       }
     },
-    () => {
-      // Non-fatal listener guard
+    (err) => {
+      onError?.(err instanceof Error ? err : new Error(String(err)));
     }
   );
 }
@@ -256,25 +258,51 @@ export async function registerGuardianSubscription(
   const bindingId = `${cleanStudentId}__${cleanUid}`;
   const path = `schools/${DEFAULT_SCHOOL_ID}/guardianSubscribers/${bindingId}`;
   const ref = doc(db, 'schools', DEFAULT_SCHOOL_ID, 'guardianSubscribers', bindingId);
+  const safePortalId = clampStr(portalUserId || student.portalUserId || '', 64);
+  const safeStudentName = clampStr(student.nameBn || 'শিক্ষার্থী', 160);
 
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
+    let existingSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+    try {
+      existingSnap = await getDocFromServer(ref);
+    } catch {
+      try {
+        existingSnap = await getDoc(ref);
+      } catch {
+        existingSnap = null;
+      }
+    }
+
+    if (existingSnap?.exists()) {
       await updateDoc(ref, {
-        portalUserId: clampStr(portalUserId || student.portalUserId || '', 64),
-        studentNameBn: clampStr(student.nameBn || 'শিক্ষার্থী', 160),
+        portalUserId: safePortalId,
+        studentNameBn: safeStudentName,
         updatedAt: serverTimestamp(),
       });
     } else {
-      await setDoc(ref, {
-        id: bindingId,
-        studentId: cleanStudentId,
-        portalUserId: clampStr(portalUserId || student.portalUserId || '', 64),
-        studentNameBn: clampStr(student.nameBn || 'শিক্ষার্থী', 160),
-        guardianUid: cleanUid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      try {
+        await setDoc(ref, {
+          id: bindingId,
+          studentId: cleanStudentId,
+          portalUserId: safePortalId,
+          studentNameBn: safeStudentName,
+          guardianUid: cleanUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (writeErr: any) {
+        // Fallback: if doc actually existed on server while cache missed it, try updateDoc
+        const writeMsg = String(writeErr?.message || writeErr?.code || '');
+        if (writeMsg.includes('permission-denied') || writeMsg.includes('already-exists')) {
+          await updateDoc(ref, {
+            portalUserId: safePortalId,
+            studentNameBn: safeStudentName,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          throw writeErr;
+        }
+      }
     }
     return { bindingId };
   } catch (error) {

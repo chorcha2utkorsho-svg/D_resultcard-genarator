@@ -34,6 +34,12 @@ service cloud.firestore {
       return isBootstrappedAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
+    function isOwnGuardianBindingId(bindingId) {
+      return isValidBindingId(bindingId) &&
+        bindingId.size() > request.auth.uid.size() + 2 &&
+        bindingId[bindingId.size() - request.auth.uid.size() - 2 : bindingId.size()] == '__' + request.auth.uid;
+    }
+
     function isValidAdminUser(data) {
       return data.keys().hasAll(['uid', 'createdAt']) &&
         data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
@@ -235,7 +241,7 @@ service cloud.firestore {
     }
 
     match /schools/{schoolId} {
-      allow get: if isSignedIn() && isValidId(schoolId) && (isAdmin() || (resource != null && existing().ownerUid == request.auth.uid));
+      allow get: if isSignedIn() && isValidId(schoolId) && (isAdmin() || resource == null || existing().ownerUid == request.auth.uid);
       allow list: if isBootstrappedAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
       allow create: if isSignedIn() && isValidId(schoolId) && isValidSchoolProfile(incoming()) &&
         incoming().schoolId == schoolId &&
@@ -255,8 +261,11 @@ service cloud.firestore {
 
       match /students/{studentId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(studentId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid ||
-            ('guardianUids' in existing() && existing().guardianUids is list && request.auth.uid in existing().guardianUids));
+          (isAdmin() ||
+            (resource == null && exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+              get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid) ||
+            (resource != null && (existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid ||
+              ('guardianUids' in existing() && existing().guardianUids is list && request.auth.uid in existing().guardianUids))));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && (
             resource.data.ownerUid == request.auth.uid ||
@@ -292,8 +301,11 @@ service cloud.firestore {
 
       match /guardianSubscribers/{bindingId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidBindingId(bindingId) &&
-          (isAdmin() || existing().guardianUid == request.auth.uid ||
-            get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid);
+          (isAdmin() ||
+            (resource == null && isOwnGuardianBindingId(bindingId)) ||
+            (resource != null && (existing().guardianUid == request.auth.uid ||
+              (exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+                get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid))));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && resource.data.guardianUid == request.auth.uid);
         allow create: if isSignedIn() && isValidId(schoolId) && isValidBindingId(bindingId) &&
@@ -302,8 +314,7 @@ service cloud.firestore {
           incoming().guardianUid == request.auth.uid &&
           incoming().id == incoming().studentId + '__' + request.auth.uid &&
           incoming().createdAt == request.time &&
-          incoming().updatedAt == request.time &&
-          exists(/databases/$(database)/documents/schools/$(schoolId));
+          incoming().updatedAt == request.time;
         allow update: if isSignedIn() && isValidId(schoolId) && isValidBindingId(bindingId) &&
           isValidGuardianSubscriber(incoming()) &&
           incoming().id == existing().id &&
@@ -323,8 +334,11 @@ service cloud.firestore {
 
       match /securityLogs/{logId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(logId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid ||
-            ('guardianUids' in existing() && existing().guardianUids is list && request.auth.uid in existing().guardianUids));
+          (isAdmin() ||
+            (resource == null && exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+              get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerUid == request.auth.uid) ||
+            (resource != null && (existing().ownerUid == request.auth.uid || existing().guardianUid == request.auth.uid ||
+              ('guardianUids' in existing() && existing().guardianUids is list && request.auth.uid in existing().guardianUids))));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && (
             resource.data.ownerUid == request.auth.uid ||
@@ -371,7 +385,7 @@ service cloud.firestore {
 
       match /staffAccounts/{staffId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+          (isAdmin() || (resource != null && (existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid)));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
         allow create: if isSignedIn() && isValidId(schoolId) && isValidId(staffId) &&
@@ -399,7 +413,7 @@ service cloud.firestore {
 
       match /staffAttendance/{attId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid);
+          (isAdmin() || (resource != null && (existing().ownerUid == request.auth.uid || existing().staffUid == request.auth.uid)));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && (resource.data.ownerUid == request.auth.uid || resource.data.staffUid == request.auth.uid));
         allow create: if isSignedIn() && isValidId(schoolId) && isValidId(attId) &&
@@ -426,7 +440,7 @@ service cloud.firestore {
 
       match /libraryMaterials/{materialId} {
         allow get: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid);
+          (isAdmin() || (resource != null && existing().ownerUid == request.auth.uid));
         allow list: if isBootstrappedAdmin() ||
           (isSignedIn() && resource.data.ownerUid == request.auth.uid);
         allow create: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
@@ -450,8 +464,7 @@ service cloud.firestore {
               'subjectNameBn', 'chapter', 'downloadsCount', 'academicYear', 'updatedAt'
             ])
           ));
-        allow delete: if isSignedIn() && isValidId(schoolId) && isValidId(materialId) &&
-          (isAdmin() || existing().ownerUid == request.auth.uid);
+        allow delete: if isAdmin() && isValidId(schoolId) && isValidId(materialId);
       }
     }
   }

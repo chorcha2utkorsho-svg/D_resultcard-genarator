@@ -356,6 +356,7 @@ interface SchoolContextType {
   cloudSyncError: string | null;
   cloudUnauthorizedDomain: string | null;
   cloudPushAuthorized: boolean | null;
+  cloudConnectionStatus: 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
   cloudGuardianBindingState: {
     status: 'idle' | 'binding' | 'bound' | 'needs_official_init' | 'error';
     studentId?: string;
@@ -364,6 +365,7 @@ interface SchoolContextType {
   isCloudPhotoSyncing: boolean;
   cloudPhotoSyncProgress: { done: number; total: number } | null;
   connectCloudSync: () => Promise<boolean>;
+  reconnectCloudSync: () => Promise<void>;
   disconnectCloudSync: () => Promise<void>;
   syncAllPhotosToCloud: () => Promise<{ ok: boolean; pushedCount: number; pulledCount: number; message: string }>;
   registerGuardianCloudSubscription: (
@@ -702,6 +704,13 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [cloudUnauthorizedDomain, setCloudUnauthorizedDomain] = useState<string | null>(null);
   const [cloudPushAuthorized, setCloudPushAuthorized] = useState<boolean | null>(null);
+  const [cloudConnectionStatus, setCloudConnectionStatus] = useState<
+    'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error'
+  >('idle');
+  const [cloudReconnectNonce, setCloudReconnectNonce] = useState<number>(0);
+  const cloudReconnectAttemptsRef = useRef<number>(0);
+  const cloudConnectionStatusRef = useRef<'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error'>('idle');
+  cloudConnectionStatusRef.current = cloudConnectionStatus;
   const [cloudGuardianBindingState, setCloudGuardianBindingState] = useState<{
     status: 'idle' | 'binding' | 'bound' | 'needs_official_init' | 'error';
     studentId?: string;
@@ -713,12 +722,15 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setCloudUser(user);
+      cloudReconnectAttemptsRef.current = 0;
       if (user) {
         setCloudSyncError(null);
         setCloudUnauthorizedDomain(null);
+        setCloudConnectionStatus(user.emailVerified ? 'connecting' : 'idle');
       } else {
         hasAutoSyncedCloudSessionRef.current = null;
         setCloudPushAuthorized(null);
+        setCloudConnectionStatus('idle');
         setCloudGuardianBindingState({ status: 'idle' });
       }
     });
@@ -895,57 +907,125 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return syncAllPhotosToCloudWithUser(cloudUser);
   }, [cloudUser, syncAllPhotosToCloudWithUser]);
 
+  const mergeCloudSecurityLogsIntoState = useCallback((cloudLogs: SecurityGatepassLog[]) => {
+    if (!cloudLogs || cloudLogs.length === 0) return;
+    setSecurityLogs((prev) => {
+      const mergedMap = new Map<string, SecurityGatepassLog>();
+      for (const item of prev) {
+        if (item && item.id) mergedMap.set(item.id, item);
+      }
+      for (const item of cloudLogs) {
+        if (item && item.id) {
+          const existing = mergedMap.get(item.id);
+          if (existing) {
+            mergedMap.set(item.id, {
+              ...existing,
+              ...item,
+              portalUserId: item.portalUserId || existing.portalUserId,
+              classId: item.classId || existing.classId,
+              guardianPhone: existing.guardianPhone || item.guardianPhone,
+              guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
+              acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
+              guardianResponse: item.guardianResponse || existing.guardianResponse,
+              acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
+            });
+          } else {
+            mergedMap.set(item.id, item);
+          }
+        }
+      }
+      return Array.from(mergedMap.values())
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 1000);
+    });
+  }, []);
+
   useEffect(() => {
     if (!cloudUser || !cloudUser.emailVerified) return;
     let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    checkCloudScannerAuthorization(cloudUser)
-      .then((authStatus) => {
-        if (cancelled) return;
-        setCloudPushAuthorized(authStatus.authorized);
-        if (authStatus.authorized) {
-          ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
-          if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
-            hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
-            syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
-            pullLibraryMaterialsFromFirestore(cloudUser)
-              .then((cloudMats) => {
-                if (cloudMats.length === 0) return;
-                setLibraryMaterials((prev) => {
-                  const merged = new Map<string, LibraryMaterial>();
-                  for (const item of prev) merged.set(item.id, item);
-                  for (const cm of cloudMats) {
-                    const ex = merged.get(cm.id);
-                    if (!ex || new Date(cm.updatedAt).getTime() > new Date(ex.updatedAt).getTime()) {
-                      merged.set(cm.id, {
-                        ...cm,
-                        downloadsCount: Math.max(cm.downloadsCount || 0, ex?.downloadsCount || 0),
-                      });
-                    }
-                  }
-                  return Array.from(merged.values()).sort(
-                    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-                  );
-                });
-              })
-              .catch(() => {});
-          }
+    setCloudConnectionStatus(cloudReconnectAttemptsRef.current > 0 ? 'reconnecting' : 'connecting');
+
+    const scheduleCloudReconnect = () => {
+      if (cancelled || reconnectTimer) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setCloudConnectionStatus('reconnecting');
+        return;
+      }
+      cloudReconnectAttemptsRef.current += 1;
+      const attempt = cloudReconnectAttemptsRef.current;
+      const backoffScheduleMs = [2000, 4000, 8000, 15000, 30000];
+      const delayMs = backoffScheduleMs[Math.min(attempt - 1, backoffScheduleMs.length - 1)];
+      setCloudConnectionStatus('reconnecting');
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!cancelled) {
+          setCloudReconnectNonce((n) => n + 1);
         }
-      })
-      .catch(() => {
-        if (!cancelled) setCloudPushAuthorized(false);
-      });
+      }, delayMs);
+    };
 
-    const unsubMirror = subscribeBootstrapGuardianSubscribersMirror(cloudUser, () =>
-      latestStateRef.current.students.map((s) => ({
-        ...s,
-        portalUserId: getStudentPortalId(s),
-      }))
+    const runAuthorizationAndSync = () => {
+      checkCloudScannerAuthorization(cloudUser)
+        .then((authStatus) => {
+          if (cancelled) return;
+          setCloudPushAuthorized(authStatus.authorized);
+          if (authStatus.authorized) {
+            ensureSchoolDocument(cloudUser, latestStateRef.current.schoolInfo).catch(() => {});
+            if (hasAutoSyncedCloudSessionRef.current !== cloudUser.uid) {
+              hasAutoSyncedCloudSessionRef.current = cloudUser.uid;
+              syncAllPhotosToCloudWithUser(cloudUser).catch(() => {});
+              pullLibraryMaterialsFromFirestore(cloudUser)
+                .then((cloudMats) => {
+                  if (cloudMats.length === 0) return;
+                  setLibraryMaterials((prev) => {
+                    const merged = new Map<string, LibraryMaterial>();
+                    for (const item of prev) merged.set(item.id, item);
+                    for (const cm of cloudMats) {
+                      const ex = merged.get(cm.id);
+                      if (!ex || new Date(cm.updatedAt).getTime() > new Date(ex.updatedAt).getTime()) {
+                        merged.set(cm.id, {
+                          ...cm,
+                          downloadsCount: Math.max(cm.downloadsCount || 0, ex?.downloadsCount || 0),
+                        });
+                      }
+                    }
+                    return Array.from(merged.values()).sort(
+                      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                    );
+                  });
+                })
+                .catch(() => {});
+            }
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setCloudPushAuthorized(false);
+        });
+    };
+
+    runAuthorizationAndSync();
+
+    const unsubMirror = subscribeBootstrapGuardianSubscribersMirror(
+      cloudUser,
+      () =>
+        latestStateRef.current.students.map((s) => ({
+          ...s,
+          portalUserId: getStudentPortalId(s),
+        })),
+      () => {
+        scheduleCloudReconnect();
+      }
     );
 
     const unsub = subscribeCloudSecurityLogs(
       cloudUser,
       (cloudLogs) => {
+        if (cancelled) return;
+        cloudReconnectAttemptsRef.current = 0;
+        setCloudSyncError(null);
+        setCloudConnectionStatus('connected');
         setServerSyncStatus('synced');
         setLastSyncedTime(
           new Date().toLocaleTimeString('bn-BD', {
@@ -954,52 +1034,94 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             second: '2-digit',
           })
         );
-        if (cloudLogs.length === 0) return;
-        setSecurityLogs((prev) => {
-          const mergedMap = new Map<string, SecurityGatepassLog>();
-          for (const item of prev) {
-            if (item && item.id) mergedMap.set(item.id, item);
-          }
-          for (const item of cloudLogs) {
-            if (item && item.id) {
-              const existing = mergedMap.get(item.id);
-              if (existing) {
-                mergedMap.set(item.id, {
-                  ...existing,
-                  ...item,
-                  portalUserId: item.portalUserId || existing.portalUserId,
-                  classId: item.classId || existing.classId,
-                  guardianPhone: existing.guardianPhone || item.guardianPhone,
-                  guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
-                  acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
-                  guardianResponse: item.guardianResponse || existing.guardianResponse,
-                  acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
-                });
-              } else {
-                mergedMap.set(item.id, item);
-              }
-            }
-          }
-          return Array.from(mergedMap.values())
-            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-            .slice(0, 1000);
-        });
+        mergeCloudSecurityLogsIntoState(cloudLogs);
       },
       (err) => {
+        if (cancelled) return;
         const msg = err?.message || '';
         if (msg.includes('permission-denied') || msg.includes('Missing or insufficient permissions')) {
-          setCloudSyncError('ক্লাউড সিঙ্ক পাঠ/শুনতে অনুমতি সমস্যা হয়েছে।');
+          setCloudSyncError('ক্লাউড সিঙ্ক পাঠ/শুনতে অনুমতি সমস্যা হয়েছে — স্বয়ংক্রিয়ভাবে পুনরায় চেষ্টা চলছে।');
         } else {
-          setCloudSyncError('Google ক্লাউড সিঙ্ক সংযোগে সমস্যা হয়েছে।');
+          setCloudSyncError('Google ক্লাউড সংযোগ সাময়িক বিচ্ছিন্ন — স্বয়ংক্রিয়ভাবে পুনরায় যুক্ত হচ্ছে...');
         }
+        scheduleCloudReconnect();
       }
     );
+
+    // Immediate catch-up pull in case scans occurred while offline or waking from sleep
+    pullLatestCloudSecurityLogs(cloudUser)
+      .then((logs) => {
+        if (cancelled) return;
+        mergeCloudSecurityLogsIntoState(logs);
+      })
+      .catch(() => {});
+
+    const handleCloudOnline = () => {
+      if (cancelled) return;
+      cloudReconnectAttemptsRef.current = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      setCloudSyncError(null);
+      setCloudConnectionStatus('reconnecting');
+      setCloudReconnectNonce((n) => n + 1);
+    };
+
+    const handleCloudOffline = () => {
+      if (cancelled) return;
+      setCloudConnectionStatus('reconnecting');
+      setCloudSyncError('ইন্টারনেট বিচ্ছিন্ন — সংযোগ ফিরলেই স্বয়ংক্রিয়ভাবে যুক্ত হবে...');
+    };
+
+    const handleCloudWake = () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (
+        cloudConnectionStatusRef.current === 'reconnecting' ||
+        cloudConnectionStatusRef.current === 'error'
+      ) {
+        cloudReconnectAttemptsRef.current = 0;
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        setCloudReconnectNonce((n) => n + 1);
+      } else {
+        pullLatestCloudSecurityLogs(cloudUser)
+          .then((logs) => {
+            if (!cancelled) {
+              setCloudConnectionStatus('connected');
+              setCloudSyncError(null);
+              mergeCloudSecurityLogsIntoState(logs);
+            }
+          })
+          .catch(() => {
+            scheduleCloudReconnect();
+          });
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleCloudOnline);
+      window.addEventListener('offline', handleCloudOffline);
+      window.addEventListener('focus', handleCloudWake);
+      document.addEventListener('visibilitychange', handleCloudWake);
+    }
+
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleCloudOnline);
+        window.removeEventListener('offline', handleCloudOffline);
+        window.removeEventListener('focus', handleCloudWake);
+        document.removeEventListener('visibilitychange', handleCloudWake);
+      }
       unsub();
       unsubMirror();
     };
-  }, [cloudUser, syncAllPhotosToCloudWithUser]);
+  }, [cloudUser, cloudReconnectNonce, syncAllPhotosToCloudWithUser, mergeCloudSecurityLogsIntoState]);
 
   const registerGuardianCloudSubscription = useCallback(
     async (
@@ -1012,9 +1134,10 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         await registerGuardianSubscription(student, getStudentPortalId(student), cloudUser);
         setCloudGuardianBindingState({ status: 'bound', studentId: student.id });
+        setCloudSyncError(null);
         return { ok: true, status: 'bound' };
       } catch (err: any) {
-        const msg = err?.message || '';
+        const msg = String(err?.message || '');
         if (msg.includes('permission-denied') || msg.includes('Missing or insufficient permissions')) {
           const reason =
             'স্কুলের অফিস স্ক্যানার ফোন থেকে প্রথমবার "Google ক্লাউড পুশ" চালু করলেই এই অভিভাবক ডিভাইস স্বয়ংক্রিয়ভাবে যুক্ত হবে।';
@@ -1025,7 +1148,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
           return { ok: false, status: 'needs_official_init', error: reason };
         }
-        const errText = 'অভিভাবক ডিভাইস ক্লাউডে যুক্ত করতে সমস্যা হয়েছে।';
+        const isOfflineErr =
+          msg.includes('offline') ||
+          msg.includes('unavailable') ||
+          msg.includes('network') ||
+          (typeof navigator !== 'undefined' && navigator.onLine === false);
+        const errText = isOfflineErr
+          ? 'ইন্টারনেট সংযোগ বিচ্ছিন্ন — নেটওয়ার্ক ফিরলেই ডিভাইসটি স্বয়ংক্রিয়ভাবে যুক্ত হবে।'
+          : 'অভিভাবক ডিভাইস ক্লাউডে যুক্ত করতে সমস্যা হয়েছে — স্বয়ংক্রিয়ভাবে পুনরায় চেষ্টা চলছে।';
         setCloudGuardianBindingState({
           status: 'error',
           studentId: student.id,
@@ -1036,6 +1166,25 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     },
     [cloudUser]
   );
+
+  const reconnectCloudSync = useCallback(async (): Promise<void> => {
+    cloudReconnectAttemptsRef.current = 0;
+    setCloudSyncError(null);
+    if (!cloudUser || !cloudUser.emailVerified) {
+      setCloudConnectionStatus('idle');
+      return;
+    }
+    setCloudConnectionStatus('reconnecting');
+    setCloudReconnectNonce((n) => n + 1);
+    try {
+      const logs = await pullLatestCloudSecurityLogs(cloudUser);
+      mergeCloudSecurityLogsIntoState(logs);
+      setCloudConnectionStatus('connected');
+      setCloudSyncError(null);
+    } catch {
+      // Auto-retry effect will handle reconnect loop
+    }
+  }, [cloudUser, mergeCloudSecurityLogsIntoState]);
 
   const authorizeScannerUid = useCallback(
     async (scannerUid: string, scannerEmail?: string): Promise<{ ok: boolean; message: string }> => {
@@ -2509,42 +2658,14 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!cloudUser || !cloudUser.emailVerified) return [];
     try {
       const cloudLogs = await pullLatestCloudSecurityLogs(cloudUser);
-      if (cloudLogs.length > 0) {
-        setSecurityLogs((prev) => {
-          const mergedMap = new Map<string, SecurityGatepassLog>();
-          for (const item of prev) {
-            if (item && item.id) mergedMap.set(item.id, item);
-          }
-          for (const item of cloudLogs) {
-            if (item && item.id) {
-              const existing = mergedMap.get(item.id);
-              if (existing) {
-                mergedMap.set(item.id, {
-                  ...existing,
-                  ...item,
-                  portalUserId: item.portalUserId || existing.portalUserId,
-                  classId: item.classId || existing.classId,
-                  guardianPhone: existing.guardianPhone || item.guardianPhone,
-                  guardianAcknowledged: Boolean(existing.guardianAcknowledged || item.guardianAcknowledged),
-                  acknowledgedAt: item.acknowledgedAt || existing.acknowledgedAt,
-                  guardianResponse: item.guardianResponse || existing.guardianResponse,
-                  acknowledgedBy: item.acknowledgedBy || existing.acknowledgedBy,
-                });
-              } else {
-                mergedMap.set(item.id, item);
-              }
-            }
-          }
-          return Array.from(mergedMap.values())
-            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-            .slice(0, 1000);
-        });
-      }
+      mergeCloudSecurityLogsIntoState(cloudLogs);
+      setCloudConnectionStatus('connected');
+      setCloudSyncError(null);
       return cloudLogs;
     } catch {
       return [];
     }
-  }, [cloudUser]);
+  }, [cloudUser, mergeCloudSecurityLogsIntoState]);
 
   const acknowledgeSecurityLog = useCallback(
     async (logId: string, guardianResponse: string, acknowledgedBy?: string) => {
@@ -4638,10 +4759,12 @@ export const SchoolProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         cloudSyncError,
         cloudUnauthorizedDomain,
         cloudPushAuthorized,
+        cloudConnectionStatus,
         cloudGuardianBindingState,
         isCloudPhotoSyncing,
         cloudPhotoSyncProgress,
         connectCloudSync,
+        reconnectCloudSync,
         disconnectCloudSync,
         syncAllPhotosToCloud,
         registerGuardianCloudSubscription,

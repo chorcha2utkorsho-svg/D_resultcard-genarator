@@ -219,8 +219,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     libraryMaterials,
     cloudUser,
     cloudSyncError,
+    cloudConnectionStatus,
     cloudGuardianBindingState,
     connectCloudSync,
+    reconnectCloudSync,
     registerGuardianCloudSubscription,
   } = useSchool();
   const [cloudConnecting, setCloudConnecting] = useState(false);
@@ -236,21 +238,56 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     if (
       !cloudUser?.emailVerified ||
       !student?.id ||
-      cloudGuardianBindingState.status !== 'needs_official_init'
+      (cloudGuardianBindingState.status !== 'needs_official_init' &&
+        cloudGuardianBindingState.status !== 'error')
     ) {
       return;
     }
-    const retry = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void registerGuardianCloudSubscription(student);
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNext = () => {
+      if (cancelled) return;
+      const delays = [8000, 15000, 30000];
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      attempt += 1;
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          scheduleNext();
+          return;
+        }
+        void registerGuardianCloudSubscription(student).finally(() => {
+          scheduleNext();
+        });
+      }, delay);
     };
-    const timer = setInterval(retry, 15000);
-    window.addEventListener('focus', retry);
-    document.addEventListener('visibilitychange', retry);
+
+    const retryNow = () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      attempt = 0;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      void registerGuardianCloudSubscription(student).finally(() => {
+        scheduleNext();
+      });
+    };
+
+    scheduleNext();
+    window.addEventListener('online', retryNow);
+    window.addEventListener('focus', retryNow);
+    document.addEventListener('visibilitychange', retryNow);
     return () => {
-      clearInterval(timer);
-      window.removeEventListener('focus', retry);
-      document.removeEventListener('visibilitychange', retry);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('online', retryNow);
+      window.removeEventListener('focus', retryNow);
+      document.removeEventListener('visibilitychange', retryNow);
     };
   }, [
     cloudUser?.uid,
@@ -327,8 +364,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
     isCloudSignedIn && cloudGuardianBindingState.status === 'needs_official_init';
   const isCloudBindingError =
     isCloudSignedIn && cloudGuardianBindingState.status === 'error';
+  const isCloudReconnecting =
+    isCloudSignedIn && (cloudConnectionStatus === 'reconnecting' || cloudConnectionStatus === 'error');
   const isCloudActive =
-    isCloudSignedIn && !isCloudNeedsOfficialInit && !isCloudBindingError;
+    isCloudSignedIn && !isCloudNeedsOfficialInit && !isCloudBindingError && !isCloudReconnecting;
 
   const isServerSyncConnected =
     realtimeSyncHealth === 'verified_ws' ||
@@ -826,6 +865,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 type="button"
                 onClick={() => {
                   onTestAudio(false);
+                  if (isCloudSignedIn && !isCloudActive) {
+                    void reconnectCloudSync();
+                    void registerGuardianCloudSubscription(student);
+                  }
                   if (isServerBlockedOrMissing && !isCloudActive) {
                     onReconnectRealtime?.();
                     void onForceCheckRealtime?.();
@@ -836,7 +879,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
                   isGuardianAlarmRinging
                     ? 'bg-rose-600 text-white'
-                    : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !isCloudActive
+                    : isHardwareAudioTrulyActive && (isCloudReconnecting || (isServerBlockedOrMissing && !isCloudActive))
                     ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
                     : isHardwareAudioTrulyActive
                     ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
@@ -847,6 +890,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 <span>
                   {isGuardianAlarmRinging
                     ? 'লাইভ এলার্ম বাজছে!'
+                    : isHardwareAudioTrulyActive && isCloudReconnecting
+                    ? 'পুনঃসংযোগ হচ্ছে...'
                     : isHardwareAudioTrulyActive && isServerBlockedOrMissing && !isCloudActive
                     ? 'অডিও চালু — সার্ভার সংযোগ বিচ্ছিন্ন!'
                     : isHardwareAudioTrulyActive
@@ -999,7 +1044,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
       </section>
 
       {/* Honest Server Sync Warning Banner (shown when server connection is auth-blocked/missing and Cloud Sync isn't bound yet) */}
-      {(isServerBlockedOrMissing || isCloudNeedsOfficialInit || isCloudBindingError) && !isCloudActive && (
+      {(isServerBlockedOrMissing || isCloudNeedsOfficialInit || isCloudBindingError || isCloudReconnecting) && !isCloudActive && (
         <div
           data-testid="guardian-sync-warning-banner"
           className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -1012,6 +1057,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   ? 'স্কুল অফিস থেকে এখনো প্রথমবার Google ক্লাউড পুশ চালু করা হয়নি!'
                   : isCloudBindingError
                   ? 'Google ক্লাউড সিঙ্কে অভিভাবক ডিভাইস যুক্ত করতে সমস্যা হয়েছে!'
+                  : isCloudReconnecting
+                  ? 'Google ক্লাউড সংযোগ বিচ্ছিন্ন — স্বয়ংক্রিয়ভাবে পুনরায় যুক্ত হচ্ছে...'
                   : realtimeSyncHealth === 'auth_redirect'
                   ? 'এই ফোনে লাইভ সার্ভার সেশন অনুমতি (কুকি) অনুপস্থিত — অফিসের স্ক্যান এখনো পৌঁছাচ্ছে না!'
                   : realtimeSyncHealth === 'static_host'
@@ -1023,6 +1070,8 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                   ? `আপনার Gmail (${cloudUser?.email}) প্রস্তুত আছে। স্কুলের স্ক্যানার ফোন থেকে অফিসের মূল Gmail দিয়ে একবার "Google ক্লাউড পুশ চালু করুন" চাপলেই এই ফোনে অ্যালার্ম যাবে।`
                   : isCloudBindingError
                   ? cloudGuardianBindingState.error || 'ইন্টারনেট যাচাই করে নিচের "আবার যুক্ত করুন" বাটনে চাপুন।'
+                  : isCloudReconnecting
+                  ? 'ডিভাইসের ইন্টারনেট স্থিতিশীল হলেই ক্লাউড রিয়েলটাইম সিঙ্ক স্বয়ংক্রিয়ভাবে আবার যুক্ত হবে।'
                   : realtimeSyncHealth === 'auth_redirect'
                   ? 'এই ব্রাউজারে সেশন চালু করতে "সেশন সক্রিয় করুন" চাপুন অথবা অফিস ও অভিভাবক উভয় ফোনে "Google ক্লাউড সিঙ্ক" যুক্ত করুন।'
                   : 'অন্য লিংক বা নেটওয়ার্ক থেকে তাৎক্ষণিক এলার্ম পেতে "Google ক্লাউড সিঙ্ক চালু করুন" অথবা পুনরায় সংযুক্ত করুন।'}
@@ -1036,7 +1085,10 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
             {isCloudSignedIn ? (
               <button
                 type="button"
-                onClick={() => void registerGuardianCloudSubscription(student)}
+                onClick={() => {
+                  void reconnectCloudSync();
+                  void registerGuardianCloudSubscription(student);
+                }}
                 className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 text-white font-bold text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -1071,10 +1123,14 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 সেশন সক্রিয় করুন
               </button>
             )}
-            {(onReconnectRealtime || onForceCheckRealtime) && (
+            {(onReconnectRealtime || onForceCheckRealtime || isCloudSignedIn) && (
               <button
                 type="button"
                 onClick={() => {
+                  if (isCloudSignedIn) {
+                    void reconnectCloudSync();
+                    void registerGuardianCloudSubscription(student);
+                  }
                   if (onReconnectRealtime) onReconnectRealtime();
                   else void onForceCheckRealtime?.();
                 }}
@@ -1301,7 +1357,7 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                 {isCloudSignedIn ? (
                   <span
                     className={`text-xs font-medium flex items-center gap-1.5 ${
-                      isCloudNeedsOfficialInit || isCloudBindingError
+                      isCloudNeedsOfficialInit || isCloudBindingError || isCloudReconnecting
                         ? 'text-amber-300'
                         : 'text-emerald-300'
                     }`}
@@ -1313,7 +1369,9 @@ export const StudentPersonalDashboard: React.FC<StudentPersonalDashboardProps> =
                         : isCloudNeedsOfficialInit
                         ? 'অফিস স্ক্যানারে ক্লাউড পুশ বাকি'
                         : isCloudBindingError
-                        ? 'ডিভাইস যুক্ত ত্রুটি'
+                        ? 'ডিভাইস যুক্ত ত্রুটি (পুনঃচেষ্টা চলছে)'
+                        : isCloudReconnecting
+                        ? 'ক্লাউড সিঙ্ক পুনঃসংযোগ চলছে...'
                         : 'ক্লাউড সিঙ্ক সচল (অভিভাবক ডিভাইস যুক্ত)'}
                     </span>
                   </span>
